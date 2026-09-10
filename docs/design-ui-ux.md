@@ -32,7 +32,7 @@
 --cbx-topbar-h: 56px;
 --cbx-read-w: 820px;   /* 阅读宽：聊天气泡/消息流/输入条 + 表单内的 textarea 与说明段落
                           （只管长文本行长，**勿用作表单列宽**，见 --cbx-form-w） */
---cbx-form-w: 1280px;  /* 表单内容列上限（.cbx-form-col，左对齐不居中） */
+--cbx-form-w: 100%;    /* 表单内容列宽（.cbx-form-col，左对齐不居中、跟随视口自适应不封顶） */
 --cbx-fieldw-num: 120px;  /* 数字 / 百分比 / 深度 / 轮数（自动兜底） */
 --cbx-fieldw-sm: 240px;   /* 短枚举 select / 人名 / 版本号 */
 --cbx-fieldw-md: 400px;   /* 模型名 / 标识符 / 组名 */
