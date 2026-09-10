@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -7,6 +7,8 @@ import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useGroupsStore } from '@/stores/groups'
 import { useToast } from '@/composables/useToast'
+import { useViewTransition } from '@/composables/useViewTransition'
+import { MORPH_VT_NAME } from '@/constants/app'
 import { readCharaFromPng } from '@/services/io/pngCard'
 import { normalizeCard } from '@/services/io/characterCard'
 import { blobsRepo } from '@/db/repositories'
@@ -22,6 +24,58 @@ onMounted(() => {
   if (!chars.loaded) void chars.load()
   if (!groups.loaded) void groups.load()
 })
+
+const vt = useViewTransition()
+
+/**
+ * 正在参与过渡的那一张卡的 id。只有它会被挂上 view-transition-name，
+ * 保证同一时刻只有一个同名元素（见 MORPH_VT_NAME 的说明）。
+ */
+const morphingId = ref<string | null>(null)
+/** 过渡进行中不接受新的点击：并发两次过渡会互相 skip，观感是「闪一下没动画」 */
+let morphing = false
+
+/**
+ * 预热编辑页的路由 chunk。
+ *
+ * 这是整条链路上**唯一真正剩下的异步**：vue-router 在导航 finalize 之前
+ * 就要下完懒加载 chunk，而 updateCallback 期间整页渲染是冻结的 ——
+ * 不预热的话，首次点击会把 chunk 下载整段框进冻结期，弱网下就是「点了没反应」。
+ * 提前 import 之后 Vite 的模块缓存让 router 那次 import() 同步命中。
+ *
+ * hover / 按下时就开始，等到 click 时通常已经就绪。
+ */
+function prewarm() {
+  void import('@/views/CharacterEditView.vue')
+}
+
+/**
+ * 进入编辑页。两个入口（点头像、点「编辑」按钮）都走这里 ——
+ * 原则是**morph 主体、不 morph 触发器**：被带到下一页的「物」是那张立绘，
+ * 按钮只是控件，所以源元素永远取同一张 .card__img。
+ */
+async function openEditor(id: string) {
+  if (morphing) return
+  const go = () => router.push(`/characters/${id}`)
+  if (!vt.supported) {
+    await go()
+    return
+  }
+  morphing = true
+  // 把 chunk 拉到过渡之外再开始，别让下载落进冻结期
+  await import('@/views/CharacterEditView.vue')
+  morphingId.value = id
+  // 命名是响应式绑定，要等它真正落到 DOM 之后再开始捕获旧状态
+  await nextTick()
+  try {
+    // run() 内部等的是 finished，所以这里的 finally 是在**动画真正结束后**
+    // 才清名字；挂在更早的时机会在动画进行中把名字摘掉
+    await vt.run(go)
+  } finally {
+    morphingId.value = null
+    morphing = false
+  }
+}
 
 async function create() {
   const c = await chars.create()
@@ -80,13 +134,22 @@ async function onImport(e: Event) {
     </div>
 
     <div v-else class="grid">
-      <div v-for="c in chars.items" :key="c.id" class="card">
+      <!-- hover / 按下就开始拉编辑页的 chunk，等真正点下去时通常已就绪，
+           这样 chunk 下载不会落进 updateCallback 的冻结期 -->
+      <div
+        v-for="c in chars.items"
+        :key="c.id"
+        class="card"
+        @pointerenter="prewarm"
+        @pointerdown="prewarm"
+      >
         <CbxAvatar
           class="card__img"
           :blob-id="c.avatarBlobId"
           :name="c.data.name"
           card
-          @click="router.push(`/characters/${c.id}`)"
+          :style="morphingId === c.id ? { viewTransitionName: MORPH_VT_NAME } : undefined"
+          @click="openEditor(c.id)"
         />
         <div class="card__name">{{ c.data.name }}</div>
         <div class="card__desc">{{ c.data.description || '（暂无简介）' }}</div>
@@ -94,9 +157,7 @@ async function onImport(e: Event) {
           <button class="cbx-btn cbx-btn--soft sm" @click="startChat(c.id, c.data.name)">
             开始聊天
           </button>
-          <button class="cbx-btn cbx-btn--ghost sm" @click="router.push(`/characters/${c.id}`)">
-            编辑
-          </button>
+          <button class="cbx-btn cbx-btn--ghost sm" @click="openEditor(c.id)">编辑</button>
         </div>
       </div>
     </div>

@@ -14,6 +14,7 @@ import { invalidateObjectUrl } from '@/composables/useObjectUrl'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
 import { downloadBlob, safeFileName } from '@/utils/download'
+import { MORPH_VT_NAME } from '@/constants/app'
 import { toPlain } from '@/utils/plain'
 import { DEPTH_PROMPT_DEPTH_DEFAULT, type Character } from '@/types/character'
 
@@ -188,7 +189,14 @@ async function remove() {
       <section v-show="tab === 'basic'" class="pane">
         <div class="head">
           <div class="avatar-col">
-            <CbxAvatar :blob-id="model.avatarBlobId" :name="model.data.name" card />
+            <!-- 与列表页卡片图共享同一个 view-transition-name，构成共享元素过渡。
+                 这一侧是常驻的：本页同一时刻只可能有一个头像，不存在撞名。 -->
+            <CbxAvatar
+              :blob-id="model.avatarBlobId"
+              :name="model.data.name"
+              card
+              :style="{ viewTransitionName: MORPH_VT_NAME }"
+            />
             <button class="cbx-btn cbx-btn--ghost full" @click="avatarInput?.click()">
               更换图片
             </button>

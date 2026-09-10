@@ -19,3 +19,23 @@ export const APP_LOGO_CHAR = '幕'
 
 /** 浏览器标签页标题 */
 export const APP_TITLE = `${APP_NAME} · ${APP_TAGLINE}`
+
+/**
+ * 「列表项 → 详情页」共享元素过渡用的 view-transition-name。
+ *
+ * 刻意是**一个通用固定名**，不是「每张卡一个名字」，也不叫 char-avatar：
+ *
+ * - **固定名**：同名元素在同一时刻出现两个，规范要求整个过渡被 skip 并让
+ *   `.ready` 以 InvalidStateError reject。固定名 + 只在「即将参与过渡的那
+ *   一个元素」上条件绑定，绑 `undefined` 时 Vue 直接移除该行内样式，
+ *   天然不会撞名、也不需要手动清理。
+ * - **通用名**：将来群聊有了封面图，加一行 `:style` 绑定就能复用同一套
+ *   composable 与 CSS，不用再造一个名字和一组 ::view-transition 规则。
+ *   （当前刻意不给群聊做 —— 列表侧只有一个 👥 emoji，编辑页那个是 32px
+ *   圆形成员头像，两端根本没有可配对的共享元素。）
+ *
+ * ⚠️ 取值是 CSS `<custom-ident>`：**不能以数字开头**。
+ * 所以别顺手拿记录的 UUID 当名字 —— 一半的 UUID 以数字开头属于非法标识符，
+ * 而且写错**不报错、只静默失效**。
+ */
+export const MORPH_VT_NAME = 'cbx-morph'

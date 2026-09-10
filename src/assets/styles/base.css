@@ -15,6 +15,26 @@ body,
   height: 100%;
 }
 
+/**
+ * 文档层禁止滚动 —— 本应用是固定外壳布局，**所有**滚动都发生在内层
+ * `.cbx-scroll` 容器里，文档本身根本不该能滚。
+ *
+ * 不写这条的后果不只是「多了一条没用的滚动条」：
+ * `.shell` 用的是 100dvh，而 dvh 取的是「浏览器 UI 收起后」的大视口高度，
+ * 会比当前实际视口高出几像素 → 文档溢出 → 出现文档级滚动条 →
+ * **innerWidth/innerHeight 随路由变化而抖动**（实测移动端在
+ * 376×814 与 375×812 之间跳）。
+ *
+ * 而视口尺寸一抖，View Transitions 就会按规范以 InvalidStateError
+ * 跳过整个过渡（"initial snapshot containing block size is not equal to
+ * the snapshot containing block size"）—— 症状是「移动端没有动画、
+ * 桌面却正常」，极难联想到根因是这里。
+ */
+html,
+body {
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   font-family: var(--cbx-font);
@@ -912,5 +932,53 @@ a:hover {
 @media (hover: none) {
   * {
     -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* —— 视图过渡（View Transitions API）——————————————————————————
+   目前只用于「角色卡 → 编辑页」的头像共享元素过渡。
+
+   源（列表卡片图）与目标（编辑页 160px 头像）**宽高比与圆角完全相同**
+   （两端都是 .cbx-avatar--card = 2:3 + --cbx-radius-md），所以这是一次
+   「卡片归位」——缩小 + 位移，不是 Material 那种戏剧性的容器展开。
+   因此：不回弹、不抬阴影、不缩放整页。全场只有那张头像在动，其余原地淡。
+
+   ⚠️ 不要照抄网上常见的 `object-fit: cover; height: 100%`：那是给两端
+      宽高比不同的场景兜底的，在这里纯属多余，反而会引入形变。 */
+
+/* 整页的默认淡入淡出压短一点：主角是头像，背景换页不该抢戏。
+   group 必须一起设 —— 只设 old/new 的话 group 会留在 UA 默认的 250ms，
+   与 180ms 的淡化错开，收尾时能看到一下轻微的错位。 */
+::view-transition-group(root),
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: var(--cbx-ease);
+}
+
+/* 头像本身：只做位置与尺寸的插值，两侧快照同时在场做交叉淡化。
+   240ms 比全局 --cbx-transition(150ms) 长一档 —— 位移最远可达 ~880px
+   （宽屏最右列卡片 → 编辑页左侧头像列），150ms 会显得是「闪现」而不是「移动」。 */
+::view-transition-group(cbx-morph) {
+  animation-duration: 240ms;
+  animation-timing-function: var(--cbx-ease);
+}
+/* 两端内容几乎一样（同一张图），交叉淡化只需要很短，
+   否则中途会看到两层半透明的图叠在一起发灰 */
+::view-transition-old(cbx-morph),
+::view-transition-new(cbx-morph) {
+  animation-duration: 120ms;
+  animation-timing-function: var(--cbx-ease);
+}
+
+/* 无障碍硬要求：请求减少动效时彻底关掉。
+   JS 那边（useViewTransition）已经会直接跳过 startViewTransition，
+   这里是第二道防线 —— 万一将来有别的入口忘了走 composable，
+   也不会有动画漏出来。 */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
