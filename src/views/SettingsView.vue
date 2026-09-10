@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -87,13 +87,77 @@ async function fetchModels() {
   try {
     const list = await listModels(await cfg())
     models.value = list.map((m) => m.id)
-    toast.success(`拉到 ${list.length} 个模型`)
+    if (list.length) {
+      // 拉完直接展开全部，省得用户还要再点一下才知道拉到了什么
+      typing.value = false
+      pickerOpen.value = true
+      toast.success(`拉到 ${list.length} 个模型`)
+    } else {
+      toast.warning('接口没有返回任何模型')
+    }
   } catch (e) {
     toast.error(e instanceof ProviderError ? e.message : String(e))
   } finally {
     loadingModels.value = false
   }
 }
+
+// ── 模型下拉 ──
+const pickerOpen = ref(false)
+const pickerEl = ref<HTMLElement | null>(null)
+
+/**
+ * 只在用户**正在输入**时才按文本筛选。
+ * 点 ▾ 展开时一律显示全部 —— 否则选定某个模型后再点开，
+ * 就只剩它自己一条，反而没法换成别的。
+ */
+const typing = ref(false)
+
+const filteredModels = computed(() => {
+  if (!typing.value) return models.value
+  const q = settings.settings.provider.model.trim().toLowerCase()
+  if (!q) return models.value
+  return models.value.filter((m) => m.toLowerCase().includes(q))
+})
+
+function togglePicker() {
+  typing.value = false
+  pickerOpen.value = !pickerOpen.value
+}
+function onModelFocus() {
+  if (models.value.length) pickerOpen.value = true
+}
+function onModelInput() {
+  typing.value = true
+  if (models.value.length) pickerOpen.value = true
+}
+function pickModel(m: string) {
+  settings.settings.provider.model = m
+  typing.value = false
+  pickerOpen.value = false
+  settings.touch()
+}
+/** 放弃筛选，显示全部候选 */
+function clearModelFilter() {
+  typing.value = false
+}
+
+function onDocPointerDown(e: PointerEvent) {
+  if (!pickerOpen.value) return
+  const el = pickerEl.value
+  if (el && !el.contains(e.target as Node)) pickerOpen.value = false
+}
+function onDocKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') pickerOpen.value = false
+}
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocPointerDown)
+  document.addEventListener('keydown', onDocKeydown)
+})
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', onDocPointerDown)
+  document.removeEventListener('keydown', onDocKeydown)
+})
 
 async function testConnection() {
   const p = settings.settings.provider
@@ -157,24 +221,60 @@ async function testConnection() {
           <span class="cbx-field__hint">仅保存在本机 IndexedDB，不会随配置导出</span>
         </label>
 
-        <label class="cbx-field">
+        <div class="cbx-field">
           <span class="cbx-field__label">模型</span>
           <div class="rowline">
-            <input
-              v-model="settings.settings.provider.model"
-              class="cbx-input"
-              placeholder="deepseek-chat"
-              list="model-list"
-              @change="settings.touch()"
-            />
+            <!--
+              这里刻意不用 <datalist>：浏览器会拿输入框现值去过滤候选，
+              现值与拉回来的模型名不匹配时下拉就一片空白，且没有可见的下拉入口。
+            -->
+            <div ref="pickerEl" class="picker">
+              <input
+                v-model="settings.settings.provider.model"
+                class="cbx-input"
+                placeholder="deepseek-chat"
+                @change="settings.touch()"
+                @focus="onModelFocus"
+                @input="onModelInput"
+              />
+              <button
+                v-if="models.length"
+                class="picker__toggle"
+                type="button"
+                :title="`共 ${models.length} 个模型`"
+                @click="togglePicker"
+              >
+                ▾
+              </button>
+
+              <div v-if="pickerOpen" class="picker__panel cbx-scroll">
+                <div v-if="!filteredModels.length" class="picker__empty">
+                  没有匹配「{{ settings.settings.provider.model }}」的模型
+                  <button class="cbx-btn cbx-btn--ghost xs" type="button" @click="clearModelFilter">
+                    显示全部 {{ models.length }} 个
+                  </button>
+                </div>
+                <button
+                  v-for="m in filteredModels"
+                  :key="m"
+                  class="picker__item"
+                  type="button"
+                  :class="{ 'picker__item--on': m === settings.settings.provider.model }"
+                  @click="pickModel(m)"
+                >
+                  {{ m }}
+                </button>
+              </div>
+            </div>
+
             <button class="cbx-btn cbx-btn--ghost" :disabled="loadingModels" @click="fetchModels">
               {{ loadingModels ? '拉取中…' : '拉取列表' }}
             </button>
           </div>
-          <datalist id="model-list">
-            <option v-for="m in models" :key="m" :value="m" />
-          </datalist>
-        </label>
+          <span v-if="models.length" class="cbx-field__hint">
+            已拉到 {{ models.length }} 个模型，点输入框右侧 ▾ 选择；也可以直接手输。
+          </span>
+        </div>
 
         <label class="cbx-field">
           <span class="cbx-field__label">代理地址（可选）</span>
@@ -532,6 +632,80 @@ async function testConnection() {
   color: var(--cbx-text-secondary);
   cursor: pointer;
 }
+.picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.picker__toggle {
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  bottom: 1px;
+  width: 32px;
+  border: none;
+  background: transparent;
+  color: var(--cbx-text-tertiary);
+  cursor: pointer;
+  border-radius: 0 var(--cbx-radius-md) var(--cbx-radius-md) 0;
+}
+.picker__toggle:hover {
+  background: var(--cbx-bg-hover);
+  color: var(--cbx-text);
+}
+.picker input {
+  padding-right: 36px;
+}
+.picker__panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  padding: var(--cbx-space-1);
+  background: var(--cbx-bg);
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-md);
+  box-shadow: var(--cbx-shadow-md);
+}
+.picker__item {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  border: none;
+  background: none;
+  font-family: var(--cbx-font-mono);
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text);
+  text-align: left;
+  border-radius: var(--cbx-radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker__item:hover {
+  background: var(--cbx-bg-hover);
+}
+.picker__item--on {
+  background: var(--cbx-brand-light);
+  color: var(--cbx-brand);
+  font-weight: var(--cbx-fw-medium);
+}
+.picker__empty {
+  padding: var(--cbx-space-3);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  text-align: center;
+}
+.xs {
+  height: 28px;
+  padding: 0 var(--cbx-space-3);
+  font-size: var(--cbx-fs-xs);
+  margin-top: var(--cbx-space-2);
+}
 .rowline {
   display: flex;
   gap: var(--cbx-space-2);
@@ -553,6 +727,18 @@ async function testConnection() {
 }
 
 @media (max-width: 767px) {
+  .picker__item {
+    min-height: var(--cbx-tap-min);
+  }
+  .picker__toggle {
+    /* 桌面留 1px 不盖住输入框边框；移动端优先保证 44px 触控区 */
+    width: var(--cbx-tap-min);
+    top: 0;
+    bottom: 0;
+  }
+  .picker input {
+    padding-right: calc(var(--cbx-tap-min) + 4px);
+  }
   .body {
     padding: var(--cbx-space-4) var(--cbx-space-3);
   }
