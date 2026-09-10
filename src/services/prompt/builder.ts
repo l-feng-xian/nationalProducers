@@ -44,6 +44,57 @@ import type { Group, GroupRelation } from '@/types/group'
 import type { Settings } from '@/types/settings'
 import type { GenerationTrigger } from '@/types/worldinfo'
 
+/**
+ * 系统块的分隔标签。
+ *
+ * `squashSystemMessages`（对齐 ST）会把相邻的 system 块合并成**一条**消息，
+ * 不加标签的话主提示词与角色设定表会直接首尾相连：
+ *
+ *   请以沉浸式角色扮演的方式续写对话。……输出自然、有细节的中文回应。
+ *   姓名：陆雪琪
+ *   别名：雪琪、陆师姐……
+ *
+ * 模型分不清哪里是「给你的指令」、哪里是「角色设定表」，设定权重被稀释。
+ * 加上标签后边界清晰，也让人在 DevTools 里一眼能认出各块。
+ *
+ * ⚠️ 标签必须在**组装块的时候**就写进 content，不能等 squashSystem 时才拼 ——
+ *    `fitWithinBudget` 跑在 squash **之前**，晚加的标签不会计入 token 预算。
+ *
+ * 世界书的标签是**有条件**的，见 `sectionLabels()`。
+ *
+ * main 不加：它是最顶层的指令，本身就是「开场白」，没有需要与之区分的前文。
+ */
+const SECTION_LABEL: Record<string, string> = {
+  charSystem: '【角色专属指令】',
+  charDescription: '【角色设定】',
+  charPersonality: '【性格】',
+  scenario: '【场景】',
+  personaDescription: '【用户设定】',
+}
+
+/** `prompt.wiFormat` 的默认值：裸占位，等于没有包裹 */
+const BARE_WI_FORMAT = '{0}'
+
+/**
+ * 世界书块要不要加标签，取决于用户有没有自定义 `prompt.wiFormat`：
+ *
+ * - 默认的裸 `{0}` → 世界书内容会直接贴在角色块后面，周围全是带标签的块，
+ *   只有它裸着，看起来像是上一块的续写。这里补上标签。
+ * - 用户自定义了包裹（如 `[世界观]\n{0}`）→ 他已经有自己的壳，
+ *   再加就成了两层，所以让位。
+ *
+ * 注：`wiFormat` 目前还没有暴露到设置页，所以实际总是走第一条分支；
+ * 这个判断是为将来暴露该设置时不出双层壳而准备的。
+ */
+function sectionLabels(wiFormat: string): Record<string, string> {
+  if (wiFormat.trim() !== BARE_WI_FORMAT) return SECTION_LABEL
+  return {
+    ...SECTION_LABEL,
+    worldInfoBefore: '【世界设定】',
+    worldInfoAfter: '【世界设定】',
+  }
+}
+
 /** 参与本轮生成的角色（1v1 即唯一角色；1vN 为当前发言者） */
 export interface SpeakerLite {
   id: string
@@ -257,8 +308,13 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   }
 
   // ── 4. 固定块（顺序即最终输出顺序） ──
-  const S = (content: string, source: string): PromptMessage[] =>
-    content.trim() ? [{ role: 'system', content: content.trim(), source }] : []
+  const labels = sectionLabels(s.prompt.wiFormat)
+  const S = (content: string, source: string): PromptMessage[] => {
+    const t = content.trim()
+    if (!t) return []
+    const label = labels[source]
+    return [{ role: 'system', content: label ? `${label}\n${t}` : t, source }]
+  }
 
   const fmtWI = (t: string) => (t && s.prompt.wiFormat ? s.prompt.wiFormat.replace('{0}', t) : t)
 
@@ -319,7 +375,9 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     ? [{ role: 'system', content: card.postHistory.trim(), source: 'jailbreak' }]
     : []
 
-  const budget = Math.max(512, s.provider.contextWindow - s.provider.maxTokens - 8)
+  // 余量 24 而非 8：squashSystem 在**预算算完之后**才把相邻 system 块用空行拼起来，
+  // 那些额外换行没进预算。典型 5~6 个合并点，几个 token，24 足够盖住。
+  const budget = Math.max(512, s.provider.contextWindow - s.provider.maxTokens - 24)
   const fit = fitWithinBudget({
     mandatory: [...mandatory, newChatMarker, ...groupNudge, ...phi],
     injected: injectedPreview,
@@ -441,7 +499,9 @@ function squashSystem(msgs: PromptMessage[]): PromptMessage[] {
       !KEEP.has(prev.source ?? '') &&
       !KEEP.has(m.source ?? '')
     ) {
-      prev.content = `${prev.content}\n${m.content}`
+      // 空行分隔（不是单个 \n）：配合 SECTION_LABEL，让合并后的块之间
+      // 有明确的视觉与语义边界。多出来的换行开销由 budget 的安全余量覆盖。
+      prev.content = `${prev.content}\n\n${m.content}`
       continue
     }
     out.push({ ...m })
