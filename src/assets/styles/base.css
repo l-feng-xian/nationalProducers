@@ -604,6 +604,82 @@ a:hover {
   color: var(--cbx-error);
 }
 
+/* —— 表单列 —— 表单页的内容列容器 ————————————————————————
+   给表单页的内容列加 .cbx-form-col，它做三件事：
+
+   ① 列宽上限 --cbx-form-w，且**左对齐、刻意不写 margin: 0 auto**。
+      左对齐后列的左缘 == 滚动区的 padding-left，而 AppTopbar 的 padding-left
+      同为 space-5（移动端同为 space-3），于是页面标题与卡片左缘严格对齐；
+      居中会造成 246px 的标题错位（820 居中时卡片左缘 506 vs h1 左缘 260）。
+
+   ② 按「档」给控件宽度上限。文本字段显式标 --sm/--md/--lg；
+      数字与 select 由下方两条自动兜底（这两类的内容长度由 type 本身封顶，
+      是唯一可以隐式的情况），忘记标档也不会被拉宽。
+      全部只写 max-width，没有一处固定 width。
+
+   ③ hint/error 补 display:block —— 模板里它们是 <span>，
+      行内元素吃不到上面给的 margin-top（既有静默失效）。
+
+   .cbx-field 本身保持 display:block 原样不动：WiEntryEditor 有 42 处引用，
+   CharacterEditView 31 处、GroupEditView 7 处，动它会一起变。 */
+.cbx-form-col {
+  max-width: var(--cbx-form-w);
+  min-width: 0;
+}
+
+/* 档位：定义在字段上，由控件消费 */
+.cbx-form-col .cbx-field {
+  --cbx-ctl-w: 100%;
+}
+.cbx-form-col .cbx-field--sm {
+  --cbx-ctl-w: var(--cbx-fieldw-sm);
+}
+.cbx-form-col .cbx-field--md {
+  --cbx-ctl-w: var(--cbx-fieldw-md);
+}
+.cbx-form-col .cbx-field--lg {
+  --cbx-ctl-w: var(--cbx-fieldw-lg);
+}
+.cbx-form-col .cbx-field > .cbx-input,
+.cbx-form-col .cbx-field > .cbx-ctl {
+  max-width: var(--cbx-ctl-w);
+}
+
+/* 控件行：输入框 + 紧邻的图标按钮，作为一个整体受档位约束
+   （否则给字段标档会把图标按钮也一起收窄）。 */
+.cbx-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+}
+.cbx-ctl > .cbx-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 自动兜底 —— 数字与短枚举永远不会被拉宽，即使没标档。
+   ⚠ 必须用 `> select.cbx-input` (0,3,1) / `> .cbx-input[type='number']` (0,4,0)，
+     它们要压过上面的 `.cbx-field > .cbx-input` (0,3,0)。
+   min() 取两者中更紧的一个：标了 --lg 的数字框依然是 num 宽。 */
+.cbx-form-col .cbx-field > select.cbx-input {
+  max-width: min(var(--cbx-ctl-w, 100%), var(--cbx-fieldw-sm));
+}
+.cbx-form-col .cbx-field > .cbx-input[type='number'] {
+  max-width: min(var(--cbx-ctl-w, 100%), var(--cbx-fieldw-num));
+}
+
+/* 多行文本是表单里唯一真正需要「阅读宽」的控件 —— 这是 --cbx-read-w
+   拆分后仍然成立的那一半职责（管长文本行长，不管容器）。
+   .cbx-input 是固定 36px 单行，多行只会是 .cbx-textarea，这里不会误伤。 */
+.cbx-form-col .cbx-textarea {
+  max-width: var(--cbx-read-w);
+}
+
+.cbx-form-col .cbx-field__hint,
+.cbx-form-col .cbx-field__error {
+  display: block;
+}
+
 /* —— 标签页 —— */
 .cbx-tabs {
   display: flex;
@@ -795,6 +871,25 @@ a:hover {
   .cbx-avatar--xl {
     width: 80px;
     height: 80px;
+  }
+
+  /* 表单列：< 768px 解除字段宽度上限，回到单列满宽。
+     ⚠ 选择器必须与桌面规则「逐字同形」——尤其 select 那条要带 `> select`，
+       否则 (0,3,1) 的桌面规则会压过 (0,3,0)，手机上留下 240px 的下拉框。
+       这类 bug 在桌面浏览器上永远复现不出来。 */
+  .cbx-form-col .cbx-field > .cbx-input,
+  .cbx-form-col .cbx-field > .cbx-ctl,
+  .cbx-form-col .cbx-field > select.cbx-input,
+  .cbx-form-col .cbx-textarea {
+    max-width: none;
+  }
+
+  /* 唯一保留的移动端上限：数字框。3 位数字不需要整屏宽，
+     且 120px ≫ 44px 触控下限（高度仍由 .cbx-input 的 tap-min 管，
+     字号仍是 fs-md 16px 防 iOS 缩放）。
+     必须排在上面的解除规则之后：(0,4,0) 本就更高，源码顺序再兜一层。 */
+  .cbx-form-col .cbx-field > .cbx-input[type='number'] {
+    max-width: var(--cbx-fieldw-num);
   }
 
   /* 模态框在移动端变底部 sheet */

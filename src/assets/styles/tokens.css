@@ -126,8 +126,33 @@
   --cbx-tap-min: 44px; /* 移动端最小可点区域 */
   --cbx-sidebar-w: 240px; /* 桌面侧栏宽度 */
   --cbx-topbar-h: 56px;
-  --cbx-read-w: 820px; /* 聊天/表单最大阅读宽 */
+
+  /* 阅读宽 —— 只管「长文本的行长」：聊天气泡 / 消息流 / 输入条，
+     以及表单里的多行 textarea 与说明段落。
+     ⚠ 表单的「列宽」不要再借用它，见 --cbx-form-w。 */
+  --cbx-read-w: 820px;
+
   --cbx-safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* ── 表单宽度体系 ──────────────────────────────────────
+     纯尺寸 token，无明暗差异 → 与上面几个一样**只在 :root 声明一次**。
+     下方两个暗色块（:root[data-theme='dark'] 与 @media prefers-color-scheme）
+     只放颜色/阴影，不要把这五个复制过去。
+
+     表单是 label/控件对，不是散文，行长可读性不适用；它需要的是
+     「装得下多列短字段」。配套的 .cbx-form-col 刻意左对齐、不居中。 */
+  --cbx-form-w: 1280px; /* 表单内容列上限（设置 / 角色编辑 / 群聊编辑） */
+
+  /* 控件宽度三档 + 数字档，一律作为 max-width 上限，绝不是固定宽。
+     文本字段显式标 .cbx-field--sm/md/lg；数字与 select 自动兜底。
+     ⚠ 命名是 fieldw- 不是 fw- —— fw- 已经是**字重**命名空间
+       （--cbx-fw-medium: 500，20+ 处在用）。两者混在一起会造出
+       `--cbx-fw-md: 400px` 与 `--cbx-fw-medium: 500` 并排的陷阱：
+       写错时 CSS 不报错，只会静默失效。 */
+  --cbx-fieldw-num: 120px; /* 数字 / 百分比 / 深度 / 轮数 */
+  --cbx-fieldw-sm: 240px; /* 短枚举 select / 人名 / 版本号 */
+  --cbx-fieldw-md: 400px; /* 模型名 / 标识符 / 组名 */
+  --cbx-fieldw-lg: 620px; /* URL / API Key / 路径 */
 
   /* ── 聊天气泡 ──────────────────────────────────────────── */
   --cbx-bubble-user-bg: var(--cbx-brand);

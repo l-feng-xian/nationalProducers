@@ -185,7 +185,7 @@ async function testConnection() {
 <template>
   <AppTopbar title="设置" />
   <div class="cbx-scroll body">
-    <div class="wrap">
+    <div class="cbx-form-col">
       <!-- ① 模型服务 -->
       <section class="cbx-card sec">
         <h3>模型服务</h3>
@@ -194,7 +194,7 @@ async function testConnection() {
           官方、Ollama 等需填写代理地址（开发期可填 <code>/llm</code>）。
         </p>
 
-        <label class="cbx-field">
+        <label class="cbx-field cbx-field--lg">
           <span class="cbx-field__label">baseURL</span>
           <input
             v-model="settings.settings.provider.baseUrl"
@@ -204,9 +204,10 @@ async function testConnection() {
           />
         </label>
 
-        <label class="cbx-field">
+        <label class="cbx-field cbx-field--lg">
           <span class="cbx-field__label">API Key</span>
-          <div class="rowline">
+          <!-- .cbx-ctl（不是 .rowline）：输入框 + 图标按钮作为一个整体受档位约束 -->
+          <div class="cbx-ctl">
             <input
               v-model="apiKey"
               class="cbx-input"
@@ -276,7 +277,7 @@ async function testConnection() {
           </span>
         </div>
 
-        <label class="cbx-field">
+        <label class="cbx-field cbx-field--lg">
           <span class="cbx-field__label">代理地址（可选）</span>
           <input
             v-model="settings.settings.provider.proxyPrefix"
@@ -321,16 +322,19 @@ async function testConnection() {
               @change="settings.touch()"
             />
           </label>
-          <label class="cbx-field">
-            <span class="cbx-field__label">流式输出</span>
-            <label class="cbx-switch">
-              <input
-                v-model="settings.settings.provider.stream"
-                type="checkbox"
-                @change="settings.touch()"
-              />
-              <span class="cbx-switch__track" />
-            </label>
+        </div>
+
+        <!-- 布尔值不占网格轨道；同时这里是单层 <label>，
+             修掉了原来 label 套 label 的非法结构 -->
+        <div class="switchrow">
+          <label class="cbx-switch swopt">
+            <input
+              v-model="settings.settings.provider.stream"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span class="cbx-switch__track" />
+            <span>流式输出</span>
           </label>
         </div>
 
@@ -387,7 +391,6 @@ async function testConnection() {
                   min="0"
                   @change="settings.touch()"
                 />
-                <DepthPreview :depth="settings.settings.constraint[mode].depth" />
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">角色</span>
@@ -402,6 +405,9 @@ async function testConnection() {
                 </select>
               </label>
             </div>
+            <!-- 深度可视化是「图示」不是控件：移出 <label> 后不再误触发聚焦，
+                 也不再把左格撑高、让右格下半空一片 -->
+            <DepthPreview class="depth-preview" :depth="settings.settings.constraint[mode].depth" />
           </div>
         </div>
       </section>
@@ -409,7 +415,7 @@ async function testConnection() {
       <!-- ③ 用户身份 -->
       <section class="cbx-card sec">
         <h3>用户身份</h3>
-        <label class="cbx-field">
+        <label class="cbx-field cbx-field--sm">
           <span class="cbx-field__label">你的名字（即 {{ USER_MACRO }} 的值）</span>
           <input
             v-model="settings.settings.persona.name"
@@ -546,28 +552,26 @@ async function testConnection() {
       <!-- ⑤ 外观 -->
       <section class="cbx-card sec">
         <h3>外观与聊天</h3>
-        <label class="cbx-field">
-          <span class="cbx-field__label">回车发送（移动端始终换行）</span>
-          <label class="cbx-switch">
+        <div class="switchrow">
+          <label class="cbx-switch swopt">
             <input
               v-model="settings.settings.chat.sendOnEnter"
               type="checkbox"
               @change="settings.touch()"
             />
             <span class="cbx-switch__track" />
+            <span>回车发送（移动端始终换行）</span>
           </label>
-        </label>
-        <label class="cbx-field">
-          <span class="cbx-field__label">顶栏显示 token 计数</span>
-          <label class="cbx-switch">
+          <label class="cbx-switch swopt">
             <input
               v-model="settings.settings.chat.showTokens"
               type="checkbox"
               @change="settings.touch()"
             />
             <span class="cbx-switch__track" />
+            <span>顶栏显示 token 计数</span>
           </label>
-        </label>
+        </div>
       </section>
 
       <!-- ⑥ 数据 -->
@@ -595,10 +599,11 @@ async function testConnection() {
   flex: 1;
   padding: var(--cbx-space-5);
 }
-.wrap {
-  max-width: var(--cbx-read-w);
-  margin: 0 auto;
-}
+/* 原 .wrap 规则已整条删除：宽度/对齐/字段上限统一由 base.css 的
+   .cbx-form-col 提供（max-width: var(--cbx-form-w) + 左对齐）。
+   关键一步是去掉 margin: 0 auto —— 居中时卡片左缘 506 与 AppTopbar
+   标题左缘 260 差 246px；左对齐后两者都等于 240(sidebar) + 20(.body padding) = 260。
+   移动端两边同为 space-3(12px)，同样严格对齐。 */
 .sec {
   margin-bottom: var(--cbx-space-4);
 }
@@ -606,6 +611,9 @@ async function testConnection() {
   margin-bottom: var(--cbx-space-3);
 }
 .note {
+  /* 说明性散文是全页唯一真正需要「阅读宽」的内容 —— 卡片加宽到 1280 后
+     必须显式封顶，否则 1238px 的行长完全不可读。 */
+  max-width: var(--cbx-read-w);
   font-size: var(--cbx-fs-sm);
   color: var(--cbx-text-secondary);
   margin-bottom: var(--cbx-space-4);
@@ -632,10 +640,13 @@ async function testConnection() {
   color: var(--cbx-text-secondary);
   cursor: pointer;
 }
+/* 模型名属于中等长度字段。档位下放到 .picker 本身而不是 .cbx-field：
+   同一行还有「拉取列表」按钮，标在字段上会把按钮一起收窄。 */
 .picker {
   position: relative;
   flex: 1;
   min-width: 0;
+  max-width: var(--cbx-fieldw-md);
 }
 .picker__toggle {
   position: absolute;
@@ -656,12 +667,19 @@ async function testConnection() {
 .picker input {
   padding-right: 36px;
 }
+/* 输入框收窄到 400 了，候选面板不能跟着收窄（模型 ID 很长且是 mono 字体）：
+   以输入框左缘为基准按内容向右生长，lg 封顶。
+   .cbx-card 无 overflow:hidden，面板右缘 ≈900 < 卡片右缘 1540，不会溢出；
+   100vw 那一项是移动端兜底。 */
 .picker__panel {
   position: absolute;
   z-index: 20;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  right: auto;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(var(--cbx-fieldw-lg), calc(100vw - 2 * var(--cbx-space-5)));
   max-height: 260px;
   padding: var(--cbx-space-1);
   background: var(--cbx-bg);
@@ -711,10 +729,39 @@ async function testConnection() {
   gap: var(--cbx-space-2);
   align-items: center;
 }
+/* 字段收窄之后，多出来的横向空间要变成「更多列 / 更少行」，
+   否则只是把空白从卡片外挪进卡片内。
+   ⚠ 用 auto-fill 不用 auto-fit：auto-fit 会折叠空轨道，让只有 2 个字段的
+     网格把两格各拉到约 400px。
+   260px 下限按最长 label「扫描深度（往回看几条消息）」量的，保证不换行。 */
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--cbx-space-3);
+}
+/* 开关行：布尔值的「内容宽度」就是 40×22 的 track + 一行字 */
+.switchrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cbx-space-3) var(--cbx-space-6);
+  margin-bottom: var(--cbx-space-4);
+}
+.switchrow:last-child {
+  margin-bottom: 0;
+}
+/* 与 .cbx-switch 同挂一个 <label>：单层 label，点文字也能切换（HTML 合法）。
+   <768px 时 base.css 的 .cbx-switch{min-height:44px} 会顶起整行。 */
+.swopt {
+  gap: var(--cbx-space-3);
+  min-height: 36px;
+  font-size: var(--cbx-fs-sm);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-secondary);
+}
+/* 深度可视化是「图示」不是控件，给它内容宽度上限，
+   别让它在 1238px 的卡片里被拉成一条空条 */
+.depth-preview {
+  max-width: var(--cbx-fieldw-md);
 }
 .mt {
   margin-top: var(--cbx-space-3);
@@ -739,11 +786,32 @@ async function testConnection() {
   .picker input {
     padding-right: calc(var(--cbx-tap-min) + 4px);
   }
+  /* 页面级私有规则，base.css 的解除块管不到它：漏了这条手机上模型框卡在 400px */
+  .picker {
+    max-width: none;
+  }
   .body {
     padding: var(--cbx-space-4) var(--cbx-space-3);
   }
   .grid2 {
+    /* auto-fill 在 317px 卡片里本就只有 1 列，这里显式声明是为了
+       符合设计规范「内容多列网格在移动端降为单列」 */
     grid-template-columns: 1fr;
+  }
+  /* ⚠ 必须显式写：base.css 移动端块里的 .cbx-switch{min-height:44px} 是 (0,1,0)，
+     压不过本文件 scoped 后变成 (0,2,0) 的 .swopt，会把开关按在 36px。
+     桌面完全正常，只有手机上触控区不达标 —— 实测抓到的。 */
+  .swopt {
+    min-height: var(--cbx-tap-min);
+  }
+  /* 世界书那 5 个裸 checkbox 从来没被放大过（约 13px），补足 44px 触控区 */
+  .sw {
+    min-height: var(--cbx-tap-min);
+  }
+  .sw input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
   }
 }
 </style>

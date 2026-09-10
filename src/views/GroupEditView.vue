@@ -180,8 +180,8 @@ async function removeGroup() {
   </AppTopbar>
 
   <div v-if="model" class="cbx-scroll body">
-    <div class="wrap">
-      <label class="cbx-field">
+    <div class="cbx-form-col">
+      <label class="cbx-field cbx-field--md">
         <span class="cbx-field__label">群聊名</span>
         <input v-model="model.name" class="cbx-input" @change="save" />
       </label>
@@ -417,10 +417,8 @@ async function removeGroup() {
   flex: 1;
   padding: var(--cbx-space-5);
 }
-.wrap {
-  max-width: var(--cbx-read-w);
-  margin: 0 auto;
-}
+/* 与设置页统一：模板里 class="wrap" → class="cbx-form-col"，本规则整条删除。
+   「群聊名」原本是全项目最宽的短字段（满 820px），标 --md 后收到 400px。 */
 .pane {
   padding-top: var(--cbx-space-5);
 }

@@ -148,7 +148,7 @@ async function remove() {
   </AppTopbar>
 
   <div v-if="model" class="cbx-scroll body">
-    <div class="wrap">
+    <div class="cbx-form-col">
       <div class="cbx-tabs">
         <button
           v-for="t in TABS"
@@ -178,7 +178,7 @@ async function remove() {
             <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatar" />
           </div>
           <div class="fields">
-            <label class="cbx-field">
+            <label class="cbx-field cbx-field--md">
               <span class="cbx-field__label">角色名</span>
               <input v-model="model.data.name" class="cbx-input" placeholder="例：铃" />
             </label>
@@ -257,7 +257,7 @@ async function remove() {
             />
             <span class="cbx-field__hint">1vN「自然顺序」策略下的发言概率，0~1</span>
           </label>
-          <label class="cbx-field">
+          <label class="cbx-field cbx-field--sm">
             <span class="cbx-field__label">角色版本</span>
             <input v-model="model.data.character_version" class="cbx-input" />
           </label>
@@ -332,10 +332,10 @@ async function remove() {
   flex: 1;
   padding: var(--cbx-space-5);
 }
-.wrap {
-  max-width: var(--cbx-read-w);
-  margin: 0 auto;
-}
+/* 与设置页统一：宽度/对齐/字段上限由 base.css 的 .cbx-form-col 提供
+   （模板里 class="wrap" → class="cbx-form-col"，本规则整条删除）。
+   本页 .pane 没有 .cbx-card 底色，820 的边界本来就不可见，
+   左对齐 + 字段收窄后视觉锚点反而更清楚。 */
 .pane {
   padding-top: var(--cbx-space-5);
 }
@@ -360,7 +360,8 @@ async function remove() {
 }
 .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* auto-fill 而非 auto-fit：auto-fit 会折叠空轨道，把 2 项的网格各拉到约 400px */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--cbx-space-3);
 }
 .mt {

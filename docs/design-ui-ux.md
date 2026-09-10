@@ -8,7 +8,10 @@
 
 ## 0. 需要先补的设计系统底座（tokens.css / base.css）
 
-### 0.1 新增 token（**必须写 3 处**：`:root`、`:root[data-theme="dark"]`、`@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`）
+### 0.1 新增 token
+
+- 新增 **颜色 / 阴影** token **必须写 3 处**：`:root`、`:root[data-theme="dark"]`、`@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`
+- 新增 **纯尺寸** token（宽度 / 间距 / 圆角 / 字号）**只写 `:root` 一处** —— 两个暗色块内不含任何尺寸 token，照抄会引入一堆主题无关的重复声明
 
 ```css
 /* 气泡 */
@@ -27,7 +30,14 @@
 
 /* 布局 */
 --cbx-topbar-h: 56px;
---cbx-read-w: 820px;                       /* 聊天/表单最大阅读宽 */
+--cbx-read-w: 820px;   /* 阅读宽：聊天气泡/消息流/输入条 + 表单内的 textarea 与说明段落
+                          （只管长文本行长，**勿用作表单列宽**，见 --cbx-form-w） */
+--cbx-form-w: 1280px;  /* 表单内容列上限（.cbx-form-col，左对齐不居中） */
+--cbx-fieldw-num: 120px;  /* 数字 / 百分比 / 深度 / 轮数（自动兜底） */
+--cbx-fieldw-sm: 240px;   /* 短枚举 select / 人名 / 版本号 */
+--cbx-fieldw-md: 400px;   /* 模型名 / 标识符 / 组名 */
+--cbx-fieldw-lg: 620px;   /* URL / API Key / 路径 */
+/* ⚠ 是 fieldw- 不是 fw-：--cbx-fw-* 已是字重命名空间（--cbx-fw-medium: 500） */
 --cbx-safe-b: env(safe-area-inset-bottom, 0px);
 ```
 
@@ -1534,7 +1544,10 @@ export function useBreakpoint() {
 尤其移动端。规避：严格执行「基础区 7 项常驻 + 8 个折叠区」的分层；折叠 head 带「已修改」圆点，否则用户会忘记自己改过 `preventRecursion` 之类的隐藏开关而调试半天。三态字段一律用 `CbxTriState` 显式展示「继承」，绝不用 checkbox 冒充（checkbox 无法表达 null，会把 null 静默写成 false，破坏「继承全局」语义并污染导出的 ST 世界书）。
 
 **8. 新增 token 只写了一处 dark 块**
-tokens.css 的暗色声明**重复了两份**（`[data-theme="dark"]` 与 `prefers-color-scheme` 媒体查询）。只改一处的结果是「手动切暗色正常、跟随系统暗色错乱」，测试时极易漏。规避：每次加 token 都 3 处同步；长期建议把两块合并为一个 `@mixin` 式的共享类，但那属于重构，不在本期范围。
+tokens.css 的暗色声明**重复了两份**（`[data-theme="dark"]` 与 `prefers-color-scheme` 媒体查询）。只改一处的结果是「手动切暗色正常、跟随系统暗色错乱」，测试时极易漏。规避：每次加**颜色/阴影** token 都 3 处同步；长期建议把两块合并为一个 `@mixin` 式的共享类，但那属于重构，不在本期范围。
+
+> 已核实的边界：这条**只约束有明暗变体的颜色/阴影 token**。两个暗色块内不含任何尺寸/间距/字号/圆角 token，
+> 因此**纯尺寸 token 只写 `:root` 一处**；把它们复制进暗色块只会产生一堆主题无关的重复声明。
 
 **次要但会返工的**：`noUncheckedIndexedAccess` 下 `nodes.value.find(...)` 返回 `T|undefined`、`pointers` 取 `[...map.values()][0]` 也是 `undefined`，图谱代码里到处需要早返回守卫；`CbxModal` 打开时锁 `body.overflow` 必须在 `onUnmounted` 还原，多层模态叠加时要用计数器而非布尔，否则关掉内层模态会解锁整页滚动。
 
