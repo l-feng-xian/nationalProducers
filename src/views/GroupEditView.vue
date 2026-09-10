@@ -26,7 +26,6 @@ const toast = useToast()
 const model = ref<Group | null>(null)
 const tab = ref<'members' | 'relations' | 'strategy'>('members')
 const relView = ref<'list' | 'graph'>('list')
-const editing = ref<GroupRelation | null>(null)
 
 const STRATEGIES = [
   {
@@ -57,7 +56,6 @@ const memberChars = computed(() =>
 const candidates = computed(() =>
   chars.items.filter((c) => !(model.value?.members ?? []).includes(c.id)),
 )
-const nameOf = computed(() => new Map(memberChars.value.map((c) => [c.id, c.data.name])))
 
 onMounted(async () => {
   if (!chars.loaded) await chars.load()
@@ -132,18 +130,23 @@ function addRelation(from?: string, to?: string) {
   if (!f || !t) return
   const r: GroupRelation = { id: crypto.randomUUID(), from: f, to: t, label: '' }
   m.relations.push(r)
-  editing.value = r
   // ⚠️ 必须落盘。model 是 toPlain() 出来的**编辑草稿**，不是 store 里的对象 ——
   // 只 push 不 save 的话，画布上确实会多一条边、编辑框也会弹出，
   // 但一离开本页草稿就没了，用户体感就是「按钮点了没用」。
   // 同目录的 removeRelation / addMember / toggleMove 都有 save()，唯独这里漏了。
   void save()
 }
+/** 画布拖完节点后回传坐标 */
+function onLayout(layout: Group['layout']) {
+  const m = model.value
+  if (!m) return
+  m.layout = layout
+  void save()
+}
 function removeRelation(id: string) {
   const m = model.value
   if (!m) return
   m.relations = m.relations.filter((r) => r.id !== id)
-  if (editing.value?.id === id) editing.value = null
   void save()
 }
 function swapDirection(r: GroupRelation) {
@@ -295,8 +298,11 @@ async function removeGroup() {
               画布
             </button>
           </div>
+          <!-- 画布视图不放这个按钮：在画布上从节点的 ＋ 拉一条线到另一个节点
+               就是添加关系，再摆个按钮反而多余。
+               列表视图没有连线这个动作，必须保留，否则列表用户根本没法新增。 -->
           <button
-            v-if="memberChars.length >= 2"
+            v-if="relView === 'list' && memberChars.length >= 2"
             class="cbx-btn cbx-btn--soft"
             @click="addRelation()"
           >
@@ -314,9 +320,11 @@ async function removeGroup() {
             :members="memberChars.map((c) => ({ id: c.id, name: c.data.name }))"
             :relations="model.relations"
             :layout="model.layout"
-            @update:layout="((model.layout = $event), save())"
-            @edit-relation="editing = $event"
+            @update:layout="onLayout"
             @create-relation="addRelation"
+            @change="save"
+            @remove-relation="removeRelation"
+            @swap-relation="swapDirection"
           />
 
           <div v-else class="rel-list">
@@ -345,35 +353,6 @@ async function removeGroup() {
               />
               <button class="cbx-icon-btn tiny" title="删除" @click="removeRelation(r.id)">
                 ✕
-              </button>
-            </div>
-          </div>
-
-          <!-- 画布点边后的编辑框 -->
-          <div v-if="editing" class="cbx-card editbox">
-            <div class="editbox__head">
-              {{ nameOf.get(editing.from) }} → {{ nameOf.get(editing.to) }}
-              <button class="cbx-icon-btn tiny" @click="editing = null">✕</button>
-            </div>
-            <input
-              v-model="editing.label"
-              class="cbx-input"
-              placeholder="关系，如：宿敌"
-              @change="save"
-            />
-            <textarea
-              v-model="editing.desc"
-              class="cbx-textarea mt"
-              rows="2"
-              placeholder="补充描述（可选）"
-              @change="save"
-            />
-            <div class="editbox__ops">
-              <button class="cbx-btn cbx-btn--ghost sm" @click="swapDirection(editing)">
-                ⇄ 交换方向
-              </button>
-              <button class="cbx-btn cbx-btn--ghost sm del" @click="removeRelation(editing.id)">
-                删除
               </button>
             </div>
           </div>
@@ -503,21 +482,6 @@ async function removeGroup() {
   flex: 1;
 }
 .mt {
-  margin-top: var(--cbx-space-3);
-}
-.editbox {
-  margin-top: var(--cbx-space-4);
-}
-.editbox__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-weight: var(--cbx-fw-medium);
-  margin-bottom: var(--cbx-space-3);
-}
-.editbox__ops {
-  display: flex;
-  gap: var(--cbx-space-2);
   margin-top: var(--cbx-space-3);
 }
 .sm {
