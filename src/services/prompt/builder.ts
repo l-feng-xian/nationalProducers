@@ -26,6 +26,7 @@ import { injectAtDepths, materializeInjections } from './depth'
 import { fitWithinBudget } from './budget'
 import { exampleBlockToMessages, parseMesExamples, type ExampleNames } from './examples'
 import { renderRelations } from './relations'
+import { joinGroupCards } from '../group/cards'
 import { checkWorldInfo } from '../worldinfo/engine'
 import { resolveSortedEntries, type LoreSources } from '../worldinfo/sources'
 import type { WIScanResult } from '../worldinfo/engine'
@@ -39,7 +40,7 @@ import {
 } from '@/types/prompt'
 import type { Character } from '@/types/character'
 import type { ChatMessage, TimedWorldInfo } from '@/types/chat'
-import type { GroupRelation } from '@/types/group'
+import type { Group, GroupRelation } from '@/types/group'
 import type { Settings } from '@/types/settings'
 import type { GenerationTrigger } from '@/types/worldinfo'
 
@@ -63,6 +64,8 @@ export interface BuildPromptInput {
   chatIdHash: number
   /** 会话级变量，会被 {{setvar}} 就地修改 */
   variables: Record<string, string>
+  /** 1vN 群组配置，决定卡片拼接模式与 nudge */
+  group?: Group
   relations?: GroupRelation[]
   relationTemplate?: string
   isContinue?: boolean
@@ -165,13 +168,26 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const sub = (t: string) => evaluateMacros(t, { ...env, contentHash: fnv1a(t) })
   const base = (t: string) => baseChatReplace(t, { ...env, contentHash: fnv1a(t) })
 
-  // ── 2. 卡片字段（1vN SWAP 语义：只用当前发言者的卡） ──
+  // ── 2. 卡片字段 ──
+  // 1vN 的 SWAP 模式只用当前发言者的卡；APPEND 模式拼接全体成员的卡。
+  // 无论哪种模式，system_prompt / post_history / depth_prompt 都只取当前发言者的。
   const c = input.speaker.char
+  const joined =
+    input.isGroup && input.group
+      ? joinGroupCards(
+          input.group,
+          input.members.map((m) => m.char),
+          input.speaker.id,
+          (text, charName) =>
+            baseChatReplace(text, { ...env, char: charName, contentHash: fnv1a(text) }),
+        )
+      : null
+
   const card = {
-    description: base(c.data.description),
-    personality: base(c.data.personality),
-    scenario: base(c.data.scenario),
-    mesExample: base(c.data.mes_example),
+    description: joined ? joined.description : base(c.data.description),
+    personality: joined ? joined.personality : base(c.data.personality),
+    scenario: joined ? joined.scenario : base(c.data.scenario),
+    mesExample: joined ? joined.mesExample : base(c.data.mes_example),
     persona: base(s.persona.description),
     systemPrompt: base(c.data.system_prompt),
     postHistory: base(c.data.post_history_instructions),

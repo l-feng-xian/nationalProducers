@@ -6,6 +6,8 @@ import { fnv1a } from '@/services/hash'
 import { buildMacroEnv, pickGreeting } from '@/services/prompt/builder'
 import { useCharactersStore, defaultAssistantCharacter } from './characters'
 import { useSettingsStore } from './settings'
+import { useGroupsStore } from './groups'
+import { toPlain } from '@/utils/plain'
 
 export const useChatsStore = defineStore('chats', () => {
   const list = ref<ChatMeta[]>([])
@@ -43,6 +45,66 @@ export const useChatsStore = defineStore('chats', () => {
     list.value = [meta, ...list.value]
 
     await seedGreeting(meta, characterId)
+    return meta
+  }
+
+  /**
+   * 新建 1vN 群聊会话。
+   * 开场白播种：**每个成员各随机一条**（对齐 ST 群聊；不生成 swipes）。
+   */
+  async function createGroup(groupId: string, title: string): Promise<ChatMeta> {
+    const groups = useGroupsStore()
+    const chars = useCharactersStore()
+    const settings = useSettingsStore()
+    const g = groups.byId(groupId)
+
+    const meta = await chatsRepo.create({ kind: 'group', title, groupId })
+    meta.chat_metadata.chat_id_hash = fnv1a(meta.id)
+    // 关系图谱快照到会话，允许单会话微调而不影响群组模板
+    if (g) {
+      meta.chat_metadata.relationGraph = {
+        relations: toPlain(g.relations),
+        layout: toPlain(g.layout),
+        relationTemplate: g.relationTemplate,
+      }
+    }
+    await chatsRepo.save(meta)
+    list.value = [meta, ...list.value]
+
+    if (g && !meta.chat_metadata.tainted) {
+      const rows: Omit<ChatMessage, 'seq'>[] = []
+      for (const id of g.members) {
+        const char = chars.byId(id)
+        if (!char) continue
+        const env = buildMacroEnv(
+          {
+            isGroup: true,
+            speaker: { id: char.id, name: char.data.name, char },
+            members: g.members
+              .map((m) => chars.byId(m))
+              .filter((c): c is NonNullable<typeof c> => !!c)
+              .map((c) => ({ id: c.id, name: c.data.name, char: c })),
+            mutedIds: g.disabled_members,
+            settings: settings.settings,
+            history: [],
+            chatId: meta.id,
+            chatIdHash: meta.chat_metadata.chat_id_hash ?? 0,
+            variables: meta.chat_metadata.variables,
+          },
+          '',
+        )
+        const { picked } = pickGreeting(char, env)
+        if (!picked) continue
+        const msg = newAiMessage(meta.id, char.data.name, picked, { characterId: char.id })
+        msg.original_avatar = char.id
+        rows.push(msg)
+      }
+      if (rows.length) {
+        const saved = await messagesRepo.appendMany(meta.id, rows)
+        messages.value = saved
+        await refreshMeta(meta.id)
+      }
+    }
     return meta
   }
 
@@ -167,6 +229,7 @@ export const useChatsStore = defineStore('chats', () => {
     open,
     close,
     createSolo,
+    createGroup,
     appendUser,
     appendAi,
     patchLocal,

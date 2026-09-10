@@ -11,6 +11,8 @@ const props = defineProps<{
   showName?: boolean
   /** 发言角色的头像 blob id */
   avatarBlobId?: string | undefined
+  /** 1vN 角色区分色索引 1..8 */
+  accent?: number | undefined
 }>()
 
 const emit = defineEmits<{
@@ -40,7 +42,11 @@ function copy() {
     <div class="col">
       <div v-if="showName && !isUser" class="who">{{ msg.name }}</div>
 
-      <div class="cbx-bubble" :class="isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai'">
+      <div
+        class="cbx-bubble"
+        :class="isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai'"
+        :style="accent ? { borderLeft: `3px solid var(--cbx-char-${accent})` } : undefined"
+      >
         <div v-if="msg.mes" class="cbx-md" v-html="html" />
         <div v-else-if="streaming" class="cbx-typing">
           <span class="cbx-typing__dot" />

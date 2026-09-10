@@ -6,16 +6,19 @@ import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatComposer from '@/components/chat/ChatComposer.vue'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
+import { useGroupsStore } from '@/stores/groups'
 import { useSettingsStore } from '@/stores/settings'
 import { useGenerationStore } from '@/stores/generation'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import { useToast } from '@/composables/useToast'
 import { messagesRepo } from '@/db/repositories'
+import { accentOf } from '@/utils/charAccent'
 
 const route = useRoute()
 const router = useRouter()
 const chats = useChatsStore()
 const chars = useCharactersStore()
+const groups = useGroupsStore()
 const settings = useSettingsStore()
 const gen = useGenerationStore()
 const toast = useToast()
@@ -25,6 +28,15 @@ const { scrollToBottom, follow } = useAutoScroll(scroller)
 
 const title = computed(() => chats.current?.title ?? '聊天')
 const hasChat = computed(() => !!chats.current)
+const isGroup = computed(() => chats.current?.kind === 'group')
+const group = computed(() => groups.byId(chats.current?.groupId))
+const groupMembers = computed(() =>
+  (group.value?.members ?? [])
+    .map((id) => chars.byId(id))
+    .filter((c): c is NonNullable<typeof c> => !!c),
+)
+/** 手动策略时显示点名条 */
+const showSpeakerTray = computed(() => isGroup.value && group.value?.activation_strategy === 2)
 const streamingId = computed(() =>
   gen.busy ? chats.messages[chats.messages.length - 1]?.id : undefined,
 )
@@ -69,7 +81,13 @@ async function onSend(text: string) {
   await chats.appendUser(text)
   await nextTick()
   scrollToBottom()
-  await gen.send()
+  if (isGroup.value) await gen.sendGroup({ isUserInput: true })
+  else await gen.send()
+}
+
+/** 1vN 手动点名 */
+async function speakAs(id: string) {
+  await gen.sendGroup({ forceId: id, isUserInput: false })
 }
 
 async function onSwipe(msgId: string, dir: -1 | 1) {
@@ -118,11 +136,26 @@ async function newChat() {
         :streaming="m.id === streamingId"
         :show-name="!m.is_user"
         :avatar-blob-id="chars.byId(m.original_avatar)?.avatarBlobId"
+        :accent="isGroup ? accentOf(m.original_avatar) : undefined"
         @regenerate="gen.regenerate()"
         @swipe="(d) => onSwipe(m.id, d)"
         @copy="toast.success('已复制')"
       />
     </div>
+  </div>
+
+  <!-- 1vN 手动策略：点名条 -->
+  <div v-if="showSpeakerTray" class="tray">
+    <span class="tray__hint">点名发言：</span>
+    <button
+      v-for="c in groupMembers"
+      :key="c.id"
+      class="cbx-chip tray__item"
+      :disabled="gen.busy"
+      @click="speakAs(c.id)"
+    >
+      {{ c.data.name }}
+    </button>
   </div>
 
   <ChatComposer
@@ -143,7 +176,29 @@ async function newChat() {
   margin: 0 auto;
 }
 
+.tray {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  flex-shrink: 0;
+  padding: var(--cbx-space-2) var(--cbx-space-5);
+  border-top: 1px solid var(--cbx-border);
+  overflow-x: auto;
+}
+.tray__hint {
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  flex-shrink: 0;
+}
+.tray__item {
+  flex-shrink: 0;
+}
+
 @media (max-width: 767px) {
+  .tray {
+    padding-left: var(--cbx-space-3);
+    padding-right: var(--cbx-space-3);
+  }
   .body {
     padding: var(--cbx-space-4) var(--cbx-space-3);
   }

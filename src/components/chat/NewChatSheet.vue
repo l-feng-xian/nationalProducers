@@ -4,16 +4,30 @@ import { useRouter } from 'vue-router'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
+import { useGroupsStore } from '@/stores/groups'
 import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 const chars = useCharactersStore()
 const chats = useChatsStore()
+const groups = useGroupsStore()
 const ui = useUiStore()
 
 onMounted(() => {
   if (!chars.loaded) void chars.load()
+  if (!groups.loaded) void groups.load()
 })
+
+async function pickGroup(groupId: string, title: string) {
+  close()
+  const meta = await chats.createGroup(groupId, title)
+  await router.push(`/chat/${meta.id}`)
+}
+
+function goNewGroup() {
+  close()
+  void router.push('/groups/new')
+}
 
 function close() {
   ui.newChatOpen = false
@@ -58,6 +72,23 @@ async function pick(characterId: string | undefined, title: string) {
             <div class="row__text">
               <div class="row__name">{{ c.data.name }}</div>
               <div class="row__desc">{{ c.data.description || '（暂无简介）' }}</div>
+            </div>
+          </div>
+
+          <hr class="cbx-divider" />
+          <div class="cbx-group-label">群聊（1vN）</div>
+          <div v-for="g in groups.items" :key="g.id" class="row" @click="pickGroup(g.id, g.name)">
+            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">👥</div>
+            <div class="row__text">
+              <div class="row__name">{{ g.name }}</div>
+              <div class="row__desc">{{ g.members.length }} 位成员</div>
+            </div>
+          </div>
+          <div class="row row--plain" @click="goNewGroup">
+            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">＋</div>
+            <div class="row__text">
+              <div class="row__name">新建群聊</div>
+              <div class="row__desc">选多个角色，配置他们之间的关系</div>
             </div>
           </div>
 
