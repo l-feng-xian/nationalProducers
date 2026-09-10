@@ -1,16 +1,60 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
+import DepthPreview from '@/components/settings/DepthPreview.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { listModels, chatOnce } from '@/services/provider/openaiCompatible'
 import { ProviderError } from '@/types/provider'
+import { exportAll, importAll, storageEstimate, formatBytes } from '@/services/io/backup'
 
 const settings = useSettingsStore()
 const toast = useToast()
 
 /** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const USER_MACRO = '{{user}}'
+
+const wi = computed(() => settings.settings.worldInfo)
+const budgetTokens = computed(() => {
+  const cap = wi.value.world_info_budget_cap
+  const raw = Math.round(
+    (wi.value.world_info_budget * settings.settings.provider.contextWindow) / 100,
+  )
+  return cap > 0 ? Math.min(raw, cap) : raw
+})
+
+const usage = ref<{ usage: number; quota: number } | null>(null)
+const backupInput = ref<HTMLInputElement | null>(null)
+
+async function doExport() {
+  const blob = await exportAll()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `nationalproducers-backup-${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  toast.success('已导出（不含 API Key）')
+}
+
+async function doImport(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  try {
+    const r = await importAll(await file.text())
+    toast.success(
+      `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}`,
+    )
+    // 内存里的 store 已与库不一致，直接重载最省事
+    setTimeout(() => location.reload(), 800)
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : String(err))
+  }
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+function openBackup() {
+  backupInput.value?.click()
+}
 
 const apiKey = ref('')
 const showKey = ref(false)
@@ -21,6 +65,7 @@ const loadingModels = ref(false)
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
   apiKey.value = await settings.getApiKey()
+  usage.value = await storageEstimate()
 })
 
 async function saveKey() {
@@ -242,6 +287,7 @@ async function testConnection() {
                   min="0"
                   @change="settings.touch()"
                 />
+                <DepthPreview :depth="settings.settings.constraint[mode].depth" />
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">角色</span>
@@ -282,7 +328,122 @@ async function testConnection() {
         </label>
       </section>
 
-      <!-- ④ 外观 -->
+      <!-- ④ 世界书全局参数 -->
+      <section class="cbx-card sec">
+        <h3>世界书</h3>
+        <p class="note">
+          这些是**全局**扫描参数，对所有世界书生效；单条条目里留「继承全局」的字段就用这里的值。
+          具体哪几本书全局启用，在「世界书」页面用书名右侧的徽标切换。
+        </p>
+        <div class="grid2">
+          <label class="cbx-field">
+            <span class="cbx-field__label">扫描深度（往回看几条消息）</span>
+            <input
+              v-model.number="wi.world_info_depth"
+              class="cbx-input"
+              type="number"
+              min="0"
+              @change="settings.touch()"
+            />
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">预算（占上下文 %）</span>
+            <input
+              v-model.number="wi.world_info_budget"
+              class="cbx-input"
+              type="number"
+              min="1"
+              max="100"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint">约 {{ budgetTokens }} tok</span>
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">预算硬上限（0 = 不限）</span>
+            <input
+              v-model.number="wi.world_info_budget_cap"
+              class="cbx-input"
+              type="number"
+              min="0"
+              @change="settings.touch()"
+            />
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">插入策略</span>
+            <select
+              v-model.number="wi.world_info_character_strategy"
+              class="cbx-input"
+              @change="settings.touch()"
+            >
+              <option :value="0">均匀混排</option>
+              <option :value="1">角色书优先</option>
+              <option :value="2">全局书优先</option>
+            </select>
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">最少激活条数（0 = 不强制）</span>
+            <input
+              v-model.number="wi.world_info_min_activations"
+              class="cbx-input"
+              type="number"
+              min="0"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint">不足时自动扩大扫描窗口</span>
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">最大递归轮数（0 = 不限）</span>
+            <input
+              v-model.number="wi.world_info_max_recursion_steps"
+              class="cbx-input"
+              type="number"
+              min="0"
+              @change="settings.touch()"
+            />
+          </label>
+        </div>
+
+        <div class="switches">
+          <label class="sw">
+            <input v-model="wi.world_info_recursive" type="checkbox" @change="settings.touch()" />
+            <span>递归激活（条目内容可再触发别的条目）</span>
+          </label>
+          <label class="sw">
+            <input
+              v-model="wi.world_info_include_names"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span>扫描时带上发言者名字</span>
+          </label>
+          <label class="sw">
+            <input
+              v-model="wi.world_info_case_sensitive"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span>区分大小写</span>
+          </label>
+          <label class="sw">
+            <input
+              v-model="wi.world_info_match_whole_words"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span>整词匹配</span>
+          </label>
+          <label class="sw">
+            <input
+              v-model="wi.world_info_use_group_scoring"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span>包含组内按命中数评分</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ⑤ 外观 -->
       <section class="cbx-card sec">
         <h3>外观与聊天</h3>
         <label class="cbx-field">
@@ -307,6 +468,23 @@ async function testConnection() {
             <span class="cbx-switch__track" />
           </label>
         </label>
+      </section>
+
+      <!-- ⑥ 数据 -->
+      <section class="cbx-card sec">
+        <h3>数据</h3>
+        <p v-if="usage" class="note">
+          已占用 {{ formatBytes(usage.usage) }} / 可用约 {{ formatBytes(usage.quota) }}
+        </p>
+        <p class="note">
+          所有数据都存在这台设备的浏览器里。清除站点数据或换浏览器都会丢，重要内容请导出备份。
+          <strong>备份不含 API Key</strong>，可以放心分享。
+        </p>
+        <div class="rowline">
+          <button class="cbx-btn cbx-btn--ghost" @click="doExport">导出全部数据</button>
+          <button class="cbx-btn cbx-btn--ghost" @click="openBackup">导入备份</button>
+          <input ref="backupInput" type="file" accept=".json" hidden @change="doImport" />
+        </div>
       </section>
     </div>
   </div>
@@ -339,6 +517,20 @@ async function testConnection() {
   padding: 1px 4px;
   border-radius: var(--cbx-radius-sm);
   background: var(--cbx-code-bg);
+}
+.switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cbx-space-3) var(--cbx-space-5);
+  margin-top: var(--cbx-space-3);
+}
+.sw {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+  cursor: pointer;
 }
 .rowline {
   display: flex;

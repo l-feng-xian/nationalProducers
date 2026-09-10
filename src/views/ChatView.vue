@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatComposer from '@/components/chat/ChatComposer.vue'
+import PromptPreview from '@/components/chat/PromptPreview.vue'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useGroupsStore } from '@/stores/groups'
@@ -102,6 +103,24 @@ async function onSwipe(msgId: string, dir: -1 | 1) {
   if (row) await messagesRepo.update(row)
 }
 
+const previewOpen = ref(false)
+
+async function onEdit(id: string, text: string) {
+  await chats.editMessage(id, text)
+}
+async function onRemove(id: string) {
+  await chats.deleteMessage(id)
+}
+async function onRemoveFrom(id: string) {
+  await chats.deleteFrom(id)
+}
+async function onBranch(id: string) {
+  const meta = await chats.branchFrom(id)
+  if (!meta) return
+  toast.success('已分支出新对话')
+  await router.push(`/chat/${meta.id}`)
+}
+
 async function newChat() {
   const meta = await chats.createSolo(undefined, '新对话')
   await router.push(`/chat/${meta.id}`)
@@ -117,6 +136,14 @@ async function newChat() {
       >
         {{ gen.lastPrompt.debug.tokens }} tok
       </span>
+      <button
+        v-if="hasChat"
+        class="cbx-btn cbx-btn--ghost"
+        title="看看到底发了什么给模型"
+        @click="previewOpen = true"
+      >
+        预览提示词
+      </button>
       <button class="cbx-btn cbx-btn--soft" @click="newChat">＋ 新对话</button>
     </template>
   </AppTopbar>
@@ -140,6 +167,10 @@ async function newChat() {
         @regenerate="gen.regenerate()"
         @swipe="(d) => onSwipe(m.id, d)"
         @copy="toast.success('已复制')"
+        @edit="(t) => onEdit(m.id, t)"
+        @remove="onRemove(m.id)"
+        @remove-from="onRemoveFrom(m.id)"
+        @branch="onBranch(m.id)"
       />
     </div>
   </div>
@@ -157,6 +188,8 @@ async function newChat() {
       {{ c.data.name }}
     </button>
   </div>
+
+  <PromptPreview v-if="previewOpen" @close="previewOpen = false" />
 
   <ChatComposer
     :busy="gen.busy"

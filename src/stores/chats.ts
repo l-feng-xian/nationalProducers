@@ -214,6 +214,71 @@ export const useChatsStore = defineStore('chats', () => {
     await refreshMeta(meta.id)
   }
 
+  /** 编辑某条消息的正文；若它有 swipes，同步更新当前那一条 */
+  async function editMessage(id: string, text: string) {
+    const row = messages.value.find((m) => m.id === id)
+    if (!row) return
+    const patch: Partial<ChatMessage> = { mes: text }
+    if (row.swipes?.length) {
+      const swipes = [...row.swipes]
+      swipes[row.swipe_id ?? 0] = text
+      patch.swipes = swipes
+    }
+    patchLocal(id, patch)
+    await persist(id)
+  }
+
+  /** 删除单条消息 */
+  async function deleteMessage(id: string) {
+    const meta = current.value
+    const row = messages.value.find((m) => m.id === id)
+    if (!meta || !row) return
+    await messagesRepo.remove(meta.id, row.seq)
+    messages.value = messages.value.filter((m) => m.id !== id)
+    await refreshMeta(meta.id)
+  }
+
+  /** 删除该条及其之后的全部消息 */
+  async function deleteFrom(id: string) {
+    const meta = current.value
+    const row = messages.value.find((m) => m.id === id)
+    if (!meta || !row) return
+    await messagesRepo.removeFrom(meta.id, row.seq)
+    const i = messages.value.findIndex((m) => m.id === id)
+    if (i >= 0) messages.value = messages.value.slice(0, i)
+    await refreshMeta(meta.id)
+  }
+
+  /**
+   * 从某条消息处分支出一个新会话：复制到该条为止的历史。
+   * 定时效果与变量一并带过去，否则新分支的世界书状态会莫名重置。
+   */
+  async function branchFrom(id: string): Promise<ChatMeta | null> {
+    const meta = current.value
+    const row = messages.value.find((m) => m.id === id)
+    if (!meta || !row) return null
+
+    const init: Parameters<typeof chatsRepo.create>[0] = {
+      kind: meta.kind,
+      title: `${meta.title}（分支）`,
+    }
+    if (meta.characterId !== undefined) init.characterId = meta.characterId
+    if (meta.groupId !== undefined) init.groupId = meta.groupId
+    const next = await chatsRepo.create(init)
+
+    next.parentChatId = meta.id
+    next.branchFromSeq = row.seq
+    next.chat_metadata = toPlain(meta.chat_metadata)
+    // {{pick}} 种子继承，分支里的随机选择保持一致
+    next.chat_metadata.chat_id_hash = meta.chat_metadata.chat_id_hash ?? fnv1a(meta.id)
+    await chatsRepo.save(next)
+
+    await messagesRepo.copyUpTo(meta.id, next.id, row.seq)
+    const saved = await chatsRepo.get(next.id)
+    if (saved) list.value = [saved, ...list.value]
+    return saved ?? next
+  }
+
   async function rename(id: string, title: string) {
     await chatsRepo.rename(id, title)
     await refreshMeta(id)
@@ -237,6 +302,10 @@ export const useChatsStore = defineStore('chats', () => {
     markTainted,
     removeChat,
     removeTail,
+    editMessage,
+    deleteMessage,
+    deleteFrom,
+    branchFrom,
     rename,
     refreshMeta,
   }
