@@ -11,7 +11,9 @@ import { useWorldsStore } from '@/stores/worlds'
 import { useToast } from '@/composables/useToast'
 import { blobsRepo } from '@/db/repositories'
 import { invalidateObjectUrl } from '@/composables/useObjectUrl'
-import { characterToCardJson } from '@/services/io/characterCard'
+import { exportCharacterJson } from '@/services/io/characterCard'
+import { exportCharacterPng } from '@/services/io/characterPng'
+import { downloadBlob, safeFileName } from '@/utils/download'
 import { toPlain } from '@/utils/plain'
 import { DEPTH_PROMPT_DEPTH_DEFAULT, type Character } from '@/types/character'
 
@@ -29,6 +31,8 @@ const model = ref<Character | null>(null)
 const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced'>('basic')
 const avatarInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
+/** PNG 导出要转码 + 编码，可能几百毫秒；连点会并发跑两遍、下两个文件、内存峰值翻倍 */
+const exporting = ref(false)
 let dirty = false
 
 const TABS = [
@@ -109,14 +113,27 @@ async function startChat() {
   await router.push(`/chat/${meta.id}`)
 }
 
-function exportJson() {
-  if (!model.value) return
-  const blob = new Blob([characterToCardJson(model.value)], { type: 'application/json' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${model.value.data.name || 'character'}.json`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+async function exportJson() {
+  const m = model.value
+  if (!m) return
+  downloadBlob(await exportCharacterJson(m), safeFileName(m.data.name, 'json'))
+}
+
+async function exportPng() {
+  const m = model.value
+  if (!m || exporting.value) return
+  exporting.value = true
+  try {
+    // 导出的是库里的角色，未保存的改动不会进卡里 —— 先落盘再导
+    if (dirty) await save()
+    const { blob, notice } = await exportCharacterPng(m)
+    downloadBlob(blob, safeFileName(m.data.name, 'png'))
+    if (notice) toast.warning(notice)
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    exporting.value = false
+  }
 }
 
 function toggleBook(id: string) {
@@ -318,8 +335,15 @@ async function remove() {
           <textarea v-model="model.data.creator_notes" class="cbx-textarea" rows="2" />
         </label>
 
-        <div class="danger">
-          <button class="cbx-btn cbx-btn--ghost" @click="exportJson">导出角色卡 JSON</button>
+        <div class="ops">
+          <!-- PNG 在先：社区（SillyTavern / 各卡站）互相分享角色卡用的都是 PNG，
+               JSON 主要用于自己排查或程序处理 -->
+          <button class="cbx-btn cbx-btn--soft" :disabled="exporting" @click="exportPng">
+            {{ exporting ? '导出中…' : '导出角色卡 PNG' }}
+          </button>
+          <button class="cbx-btn cbx-btn--ghost" :disabled="exporting" @click="exportJson">
+            导出 JSON
+          </button>
           <button class="cbx-btn cbx-btn--ghost del" @click="remove">删除角色</button>
         </div>
       </section>
@@ -372,12 +396,17 @@ async function remove() {
   flex-wrap: wrap;
   gap: var(--cbx-space-2);
 }
-.danger {
+.ops {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--cbx-space-2);
   margin-top: var(--cbx-space-6);
   padding-top: var(--cbx-space-4);
   border-top: 1px solid var(--cbx-border);
+}
+/* 删除推到最右，跟两个导出按钮拉开距离，避免误点 */
+.ops .del {
+  margin-left: auto;
 }
 .del {
   color: var(--cbx-error);
@@ -393,6 +422,13 @@ async function remove() {
   .avatar-col {
     width: 140px;
     align-self: center;
+  }
+  /* 三个按钮在 375px 下并排会被压成两三个字，各占一整行更好点 */
+  .ops .cbx-btn {
+    width: 100%;
+  }
+  .ops .del {
+    margin-left: 0;
   }
   .grid2 {
     grid-template-columns: 1fr;

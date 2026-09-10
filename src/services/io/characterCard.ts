@@ -76,8 +76,9 @@ export function normalizeCard(raw: unknown, id: string): Character {
   return c
 }
 
-/** 导出为 v2 规范 JSON（同时写 v1 顶层镜像，最大化兼容性） */
-export function characterToCardJson(c: Character): string {
+/** 导出为 v2 规范 JSON（同时写 v1 顶层镜像，最大化兼容性）。
+ *  pretty=false 用于塞进 PNG —— 缩进会让 base64 载荷胖 30%~40%，ST 用的是紧凑序列化。 */
+export function characterToCardJson(c: Character, pretty = true): string {
   const d = c.data
   const card = {
     // v1 顶层镜像
@@ -96,7 +97,7 @@ export function characterToCardJson(c: Character): string {
     spec_version: '2.0',
     data: d,
   }
-  return JSON.stringify(card, null, 2)
+  return JSON.stringify(card, null, pretty ? 2 : undefined)
 }
 
 export async function exportCharacterJson(c: Character): Promise<Blob> {
