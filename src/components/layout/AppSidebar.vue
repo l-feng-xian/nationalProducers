@@ -3,7 +3,9 @@ import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useChatsStore } from '@/stores/chats'
-import { APP_LOGO_CHAR, APP_NAME } from '@/constants/app'
+import { APP_NAME } from '@/constants/app'
+
+const BASE_URL = import.meta.env.BASE_URL
 import type { ChatMeta } from '@/types/chat'
 
 defineProps<{ open: boolean }>()
@@ -50,7 +52,8 @@ function newChat() {
 <template>
   <aside class="sidebar" :class="{ 'sidebar--open': open }">
     <div class="brand">
-      <span class="brand__logo">{{ APP_LOGO_CHAR }}</span>
+      <!-- public/ 下的资源走 BASE_URL 拼接，部署到子路径时才不会 404 -->
+      <img class="brand__logo" :src="`${BASE_URL}logo.jpg`" :alt="APP_NAME" />
       <span class="brand__name">{{ APP_NAME }}</span>
     </div>
 
@@ -125,15 +128,15 @@ function newChat() {
   margin-bottom: var(--cbx-space-2);
 }
 .brand__logo {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  background: var(--cbx-brand);
-  color: var(--cbx-text-on-brand);
+  display: block;
+  flex-shrink: 0;
+  /* 32 而非原来那个字符贴片的 28：logo 是有细节的几何图案（圆环/山形/星座线），
+     28px 下糊成一块蓝斑；36px 又开始压过「幕间」字样。三档实际比过，32 最清楚。 */
+  width: 32px;
+  height: 32px;
+  /* 图是近正方形且自带浅色底（非透明），cover 保证任何比例都不留边、不变形 */
+  object-fit: cover;
   border-radius: var(--cbx-radius-md);
-  font-weight: var(--cbx-fw-bold);
-  font-size: var(--cbx-fs-sm);
 }
 .brand__name {
   font-weight: var(--cbx-fw-bold);

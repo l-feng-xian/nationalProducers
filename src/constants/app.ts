@@ -14,8 +14,11 @@ export const APP_NAME = '幕间'
 /** 一句话定位，用于标签页标题与 README */
 export const APP_TAGLINE = 'AI 沉浸式角色扮演聊天'
 
-/** 侧栏品牌图标里的字 */
-export const APP_LOGO_CHAR = '幕'
+/**
+ * 侧栏品牌图标现在用的是 `public/logo.jpg`（见 AppSidebar.vue），
+ * 原来那个「幕」字贴片已不再使用，故不保留 APP_LOGO_CHAR 常量。
+ * 换图只需替换 public/logo.jpg。
+ */
 
 /** 浏览器标签页标题 */
 export const APP_TITLE = `${APP_NAME} · ${APP_TAGLINE}`
