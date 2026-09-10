@@ -41,9 +41,8 @@ async function remove(id: string) {
   if (route.params['id'] === id) await router.push('/chat')
 }
 
-async function newChat() {
-  const meta = await chats.createSolo(undefined, '新对话')
-  await router.push(`/chat/${meta.id}`)
+function newChat() {
+  ui.newChatOpen = true
 }
 </script>
 

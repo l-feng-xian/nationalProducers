@@ -117,6 +117,7 @@ async function newChat() {
         :msg="m"
         :streaming="m.id === streamingId"
         :show-name="!m.is_user"
+        :avatar-blob-id="chars.byId(m.original_avatar)?.avatarBlobId"
         @regenerate="gen.regenerate()"
         @swipe="(d) => onSwipe(m.id, d)"
         @copy="toast.success('已复制')"

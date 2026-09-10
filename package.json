@@ -8,7 +8,8 @@
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "build-only": "vite build",
-    "type-check": "vue-tsc --build",
+    "check-templates": "node scripts/check-templates.mjs",
+    "type-check": "vue-tsc --build && node scripts/check-templates.mjs",
     "format": "oxfmt src/"
   },
   "dependencies": {

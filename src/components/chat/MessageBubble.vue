@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
+import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import type { ChatMessage } from '@/types/chat'
 
 const props = defineProps<{
@@ -8,6 +9,8 @@ const props = defineProps<{
   /** 正在流式输出的那一条 */
   streaming?: boolean
   showName?: boolean
+  /** 发言角色的头像 blob id */
+  avatarBlobId?: string | undefined
 }>()
 
 const emit = defineEmits<{
@@ -24,8 +27,6 @@ const swipeLabel = computed(() => {
   return n > 1 ? `${(props.msg.swipe_id ?? 0) + 1}/${n}` : ''
 })
 
-const initial = computed(() => (props.msg.name || '?').slice(0, 1))
-
 function copy() {
   void navigator.clipboard?.writeText(props.msg.mes)
   emit('copy')
@@ -34,7 +35,7 @@ function copy() {
 
 <template>
   <div class="row" :class="{ 'row--user': isUser }">
-    <div v-if="!isUser" class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">{{ initial }}</div>
+    <CbxAvatar v-if="!isUser" :blob-id="avatarBlobId" :name="msg.name" size="sm" />
 
     <div class="col">
       <div v-if="showName && !isUser" class="who">{{ msg.name }}</div>
