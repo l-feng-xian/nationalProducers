@@ -133,6 +133,11 @@ function addRelation(from?: string, to?: string) {
   const r: GroupRelation = { id: crypto.randomUUID(), from: f, to: t, label: '' }
   m.relations.push(r)
   editing.value = r
+  // ⚠️ 必须落盘。model 是 toPlain() 出来的**编辑草稿**，不是 store 里的对象 ——
+  // 只 push 不 save 的话，画布上确实会多一条边、编辑框也会弹出，
+  // 但一离开本页草稿就没了，用户体感就是「按钮点了没用」。
+  // 同目录的 removeRelation / addMember / toggleMove 都有 save()，唯独这里漏了。
+  void save()
 }
 function removeRelation(id: string) {
   const m = model.value
@@ -270,20 +275,32 @@ async function removeGroup() {
           A 暗恋 B，而 B 只把 A 当妹妹）。这些关系会拼进 1vN 的约束提示词。
         </p>
 
-        <div class="cbx-seg viewseg">
+        <!-- 「添加关系」与视图切换同排、放在内容**上方**：
+             原来它在画布/列表之后，420px 的画布把它顶到屏幕外，
+             用户经常找不到，看起来就像没有这个功能 -->
+        <div class="relbar">
+          <div class="cbx-seg viewseg">
+            <button
+              class="cbx-seg__btn"
+              :class="{ 'cbx-seg__btn--active': relView === 'list' }"
+              @click="relView = 'list'"
+            >
+              列表
+            </button>
+            <button
+              class="cbx-seg__btn"
+              :class="{ 'cbx-seg__btn--active': relView === 'graph' }"
+              @click="relView = 'graph'"
+            >
+              画布
+            </button>
+          </div>
           <button
-            class="cbx-seg__btn"
-            :class="{ 'cbx-seg__btn--active': relView === 'list' }"
-            @click="relView = 'list'"
+            v-if="memberChars.length >= 2"
+            class="cbx-btn cbx-btn--soft"
+            @click="addRelation()"
           >
-            列表
-          </button>
-          <button
-            class="cbx-seg__btn"
-            :class="{ 'cbx-seg__btn--active': relView === 'graph' }"
-            @click="relView = 'graph'"
-          >
-            画布
+            ＋ 添加关系
           </button>
         </div>
 
@@ -331,8 +348,6 @@ async function removeGroup() {
               </button>
             </div>
           </div>
-
-          <button class="cbx-btn cbx-btn--soft mt" @click="addRelation()">＋ 添加关系</button>
 
           <!-- 画布点边后的编辑框 -->
           <div v-if="editing" class="cbx-card editbox">
@@ -460,8 +475,19 @@ async function removeGroup() {
   flex-wrap: wrap;
   gap: var(--cbx-space-2);
 }
-.viewseg {
+/* 视图切换 + 添加关系 同排，贴在内容上方 */
+.relbar {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-3);
+  flex-wrap: wrap;
   margin-bottom: var(--cbx-space-3);
+}
+.relbar .cbx-btn {
+  margin-left: auto;
+}
+.viewseg {
+  margin-bottom: 0;
 }
 .rel {
   display: flex;

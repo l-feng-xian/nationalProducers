@@ -84,17 +84,44 @@ const edges = computed(() =>
     .filter((e): e is NonNullable<typeof e> => !!e),
 )
 
+/**
+ * 拖拽钳制的边距。
+ *
+ * 节点的实际占位**比圆本身大**：右上角有 ＋ 连接柄
+ * （圆心 `x+NODE_R-3, y-NODE_R+3`，r=9 → 右缘 x+NODE_R+6、上缘 y-NODE_R-6），
+ * 圆下方还有名字标签（基线 `y+NODE_R+16`，再算字身下缘）。
+ *
+ * 只按 NODE_R 钳位的话圆是贴边了，但名字和 ＋ 会被 `.graph` 的 overflow:hidden
+ * 裁掉 —— 表现为「把节点拖到边角，名字没了、也没法再从它拉出关系」。
+ */
+const PAD_L = NODE_R
+const PAD_R = NODE_R + 6
+const PAD_T = NODE_R + 6
+const PAD_B = NODE_R + 22
+
 // ── pointer 状态机 ──
 type Mode = { kind: 'none' } | { kind: 'node'; id: string; dx: number; dy: number }
 let mode: Mode = { kind: 'none' }
 let rafId = 0
 
+/**
+ * 屏幕坐标 → viewBox 坐标。
+ *
+ * ⚠️ **不能**用「(clientX - rect.left) / rect.width * W」这种等比换算 ——
+ * 那只在 `preserveAspectRatio="none"` 时才成立。本 SVG 是 `xMidYMid meet`：
+ * 内容会等比缩放并**居中留白**，一旦元素宽高比与 viewBox(720:460) 不一致，
+ * 等比换算出来的坐标就整体偏移且被拉伸，表现为**节点跑离光标、怎么拖都拖不住**。
+ *
+ * `getScreenCTM()` 给的是浏览器真实的变换矩阵，viewBox / preserveAspectRatio /
+ * 外层 CSS transform 全部算在内，是唯一可靠的换算方式。
+ */
 function toLocal(ev: PointerEvent): Pt {
   const el = svgEl.value
   if (!el) return { x: 0, y: 0 }
-  const r = el.getBoundingClientRect()
-  // viewBox 与实际像素尺寸可能不同，按比例换算
-  return { x: ((ev.clientX - r.left) / r.width) * W, y: ((ev.clientY - r.top) / r.height) * H }
+  const ctm = el.getScreenCTM()
+  if (!ctm) return { x: 0, y: 0 }
+  const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse())
+  return { x: p.x, y: p.y }
 }
 
 function onPointerDown(ev: PointerEvent) {
@@ -127,8 +154,8 @@ function onPointerMove(ev: PointerEvent) {
     rafId = 0
     const next = { ...pos.value }
     next[m.id] = {
-      x: Math.max(NODE_R, Math.min(W - NODE_R, p.x - m.dx)),
-      y: Math.max(NODE_R, Math.min(H - NODE_R, p.y - m.dy)),
+      x: Math.max(PAD_L, Math.min(W - PAD_R, p.x - m.dx)),
+      y: Math.max(PAD_T, Math.min(H - PAD_B, p.y - m.dy)),
     }
     pos.value = next
   })
@@ -281,6 +308,9 @@ const ghost = computed(() => {
   border: 1px solid var(--cbx-border);
   border-radius: var(--cbx-radius-md);
   overflow: hidden;
+  /* 画布是固定 720×460 的逻辑坐标系，再宽也不会有更多信息，
+     反而让节点稀疏、拖拽距离变长。超宽屏封顶即可。 */
+  max-width: 720px;
 }
 .graph__bar {
   display: flex;
@@ -302,7 +332,11 @@ const ghost = computed(() => {
 .graph__svg {
   display: block;
   width: 100%;
-  height: 420px;
+  /* 与 viewBox(720:460) **同比**。
+     原来写死 height:420px + width:100%，容器一宽（表单列改自适应后可到 1400+px）
+     宽高比就与 viewBox 严重不符，xMidYMid meet 会把内容缩到中间一小条、
+     左右留出大片点不到的死区。同比之后没有留白，画布多宽就用多宽。 */
+  aspect-ratio: 720 / 460;
   /* 不写这条，移动端拖节点会变成页面滚动 */
   touch-action: none;
   overscroll-behavior: contain;
@@ -386,9 +420,11 @@ const ghost = computed(() => {
 }
 
 @media (max-width: 767px) {
-  .graph__svg {
-    height: 55vh;
-  }
+  /* ⚠️ 这里**刻意不再写 height**。原来是 height:55vh，
+     在 375×812 上算出 447px，而画布宽只有 342px → 元素宽高比 0.765
+     与 viewBox 的 1.565 严重不符，xMidYMid meet 会按宽度缩放并在
+     上下各留 114px 点不到的死区（内容其实只有 218px 高）。
+     交给 .graph__svg 的 aspect-ratio 自己算，各屏幕都同比、无死区。 */
   .graph__hint {
     display: none;
   }
