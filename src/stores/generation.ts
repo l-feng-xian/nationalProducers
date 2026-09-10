@@ -6,6 +6,8 @@ import { ProviderError, type ProviderConfig } from '@/types/provider'
 import { useChatsStore } from './chats'
 import { useCharactersStore, defaultAssistantCharacter } from './characters'
 import { useSettingsStore } from './settings'
+import { useWorldsStore } from './worlds'
+import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
 
@@ -32,15 +34,32 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   /** 组装本轮提示词（dryRun 也走这里，用于预览面板） */
-  function build(opts: { composerText?: string; isContinue?: boolean } = {}): BuiltPrompt | null {
+  function build(
+    opts: { composerText?: string; isContinue?: boolean; isDryRun?: boolean } = {},
+  ): BuiltPrompt | null {
     const chats = useChatsStore()
     const chars = useCharactersStore()
     const settings = useSettingsStore()
+    const worlds = useWorldsStore()
     const meta = chats.current
     if (!meta) return null
 
     const char = chars.byId(meta.characterId) ?? defaultAssistantCharacter()
     const speaker = { id: char.id, name: char.data.name, char }
+
+    // 需求 5：全局世界书只在全局配置启用；角色世界书随角色带入
+    const loreSources = worlds.resolveSources({
+      globalBookIds: settings.settings.worldInfo.globalBookIds,
+      characterBookIds: char.worldBookIds,
+      chatBookId: meta.chat_metadata.worldBookId,
+      personaBookId: settings.settings.persona.worldBookId,
+    })
+
+    // dryRun 必须克隆定时效果，否则每点一次预览就推进一格 sticky/cooldown
+    const isDryRun = opts.isDryRun ?? false
+    const timedStore = isDryRun
+      ? toPlain(meta.chat_metadata.timedWorldInfo)
+      : meta.chat_metadata.timedWorldInfo
 
     const built = buildChatPrompt({
       isGroup: false,
@@ -55,6 +74,9 @@ export const useGenerationStore = defineStore('generation', () => {
       isContinue: opts.isContinue ?? false,
       trigger: 'normal',
       composerText: opts.composerText ?? '',
+      loreSources,
+      timedStore,
+      isDryRun,
     })
     lastPrompt.value = built
     return built
@@ -154,9 +176,12 @@ export const useGenerationStore = defineStore('generation', () => {
     } finally {
       busy.value = false
       controller = null
+      // 会话变量可能被 {{setvar}} 改过；世界书定时效果（sticky/cooldown）也要落盘
+      await chatsRepo.patchMetadata(meta.id, {
+        variables: meta.chat_metadata.variables,
+        timedWorldInfo: meta.chat_metadata.timedWorldInfo,
+      })
       await chats.refreshMeta(meta.id)
-      // 会话变量可能被 {{setvar}} 改过
-      await chatsRepo.patchMetadata(meta.id, { variables: meta.chat_metadata.variables })
     }
   }
 

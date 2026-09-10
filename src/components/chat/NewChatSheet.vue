@@ -19,6 +19,15 @@ function close() {
   ui.newChatOpen = false
 }
 
+/**
+ * 注意：不要在模板里写多语句内联 handler。
+ * oxfmt 会把分号去掉并折行，Vue 的表达式解析器随即失败 —— 而 vue-tsc 不报。
+ */
+function goCreate() {
+  close()
+  void router.push('/characters')
+}
+
 async function pick(characterId: string | undefined, title: string) {
   close()
   const meta = await chats.createSolo(characterId, title)
@@ -41,15 +50,7 @@ async function pick(characterId: string | undefined, title: string) {
           <div v-if="!chars.items.length" class="cbx-empty">
             <span class="cbx-empty__icon">🎭</span>
             <span class="cbx-empty__desc">还没有角色</span>
-            <button
-              class="cbx-btn cbx-btn--soft"
-              @click="
-                close()
-                router.push('/characters')
-              "
-            >
-              去创建角色
-            </button>
+            <button class="cbx-btn cbx-btn--soft" @click="goCreate">去创建角色</button>
           </div>
 
           <div v-for="c in chars.items" :key="c.id" class="row" @click="pick(c.id, c.data.name)">

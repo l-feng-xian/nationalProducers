@@ -7,6 +7,7 @@ import GreetingsEditor from '@/components/character/GreetingsEditor.vue'
 import ExampleDialogueEditor from '@/components/character/ExampleDialogueEditor.vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
+import { useWorldsStore } from '@/stores/worlds'
 import { useToast } from '@/composables/useToast'
 import { blobsRepo } from '@/db/repositories'
 import { invalidateObjectUrl } from '@/composables/useObjectUrl'
@@ -18,6 +19,7 @@ const route = useRoute()
 const router = useRouter()
 const chars = useCharactersStore()
 const chats = useChatsStore()
+const worlds = useWorldsStore()
 const toast = useToast()
 
 /** 模板里要显示字面的宏，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
@@ -45,6 +47,7 @@ const greetingCount = computed(() => {
 
 onMounted(async () => {
   if (!chars.loaded) await chars.load()
+  if (!worlds.loaded) await worlds.load()
   const id = route.params['id']
   const cid = Array.isArray(id) ? id[0] : id
   const found = cid ? chars.byId(cid) : undefined
@@ -114,6 +117,14 @@ function exportJson() {
   a.download = `${model.value.data.name || 'character'}.json`
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
+function toggleBook(id: string) {
+  const m = model.value
+  if (!m) return
+  const i = m.worldBookIds.indexOf(id)
+  if (i >= 0) m.worldBookIds.splice(i, 1)
+  else m.worldBookIds.push(id)
 }
 
 async function remove() {
@@ -284,6 +295,24 @@ async function remove() {
           </div>
         </div>
 
+        <div class="cbx-field">
+          <span class="cbx-field__label">角色世界书（需求 5：与角色关联）</span>
+          <div v-if="!worlds.items.length" class="cbx-field__hint">
+            还没有世界书，先到「世界书」页创建
+          </div>
+          <div class="chips">
+            <button
+              v-for="b in worlds.items"
+              :key="b.id"
+              class="cbx-chip"
+              :class="{ 'cbx-chip--active': model.worldBookIds.includes(b.id) }"
+              @click="toggleBook(b.id)"
+            >
+              {{ b.name }}
+            </button>
+          </div>
+        </div>
+
         <label class="cbx-field">
           <span class="cbx-field__label">创作者备注（不发给模型）</span>
           <textarea v-model="model.data.creator_notes" class="cbx-textarea" rows="2" />
@@ -336,6 +365,11 @@ async function remove() {
 }
 .mt {
   margin-top: var(--cbx-space-3);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cbx-space-2);
 }
 .danger {
   display: flex;

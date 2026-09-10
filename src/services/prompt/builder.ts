@@ -26,6 +26,9 @@ import { injectAtDepths, materializeInjections } from './depth'
 import { fitWithinBudget } from './budget'
 import { exampleBlockToMessages, parseMesExamples, type ExampleNames } from './examples'
 import { renderRelations } from './relations'
+import { checkWorldInfo } from '../worldinfo/engine'
+import { resolveSortedEntries, type LoreSources } from '../worldinfo/sources'
+import type { WIScanResult } from '../worldinfo/engine'
 import {
   DEFAULT_ORDER,
   EXT_POSITION,
@@ -35,7 +38,7 @@ import {
   type PromptMessage,
 } from '@/types/prompt'
 import type { Character } from '@/types/character'
-import type { ChatMessage } from '@/types/chat'
+import type { ChatMessage, TimedWorldInfo } from '@/types/chat'
 import type { GroupRelation } from '@/types/group'
 import type { Settings } from '@/types/settings'
 import type { GenerationTrigger } from '@/types/worldinfo'
@@ -67,6 +70,13 @@ export interface BuildPromptInput {
   /** 输入框当前文本，供 {{input}} */
   composerText?: string
   count?: TokenCounter
+  // ── 世界书（需求 5） ──
+  /** 本轮生效的世界书来源；不传则跳过扫描 */
+  loreSources?: LoreSources
+  /** 定时效果状态，就地修改。dryRun 时调用方需传克隆副本 */
+  timedStore?: TimedWorldInfo
+  /** 提示词预览等场景置 true：不推进 sticky/cooldown */
+  isDryRun?: boolean
 }
 
 export interface BuiltPrompt {
@@ -78,8 +88,12 @@ export interface BuiltPrompt {
     reserved: number
     droppedHistory: number
     droppedExamples: number
+    worldInfo: WIScanResult
   }
 }
+
+/** wi_anchor_position.before */
+const WI_ANCHOR_BEFORE = 0
 
 function cardFieldsOf(c: Character) {
   const f = emptyCardFields()
@@ -164,8 +178,34 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     depthPrompt: base(c.data.extensions.depth_prompt?.prompt ?? ''),
   }
 
-  // ── 3. 注入注册表（每次生成重建，杜绝陈旧注入） ──
+  // ── 3. 世界书扫描（需求 5） ──
+  const wi = runWorldInfo(input, card, sub, count)
+  // outlet 桶回填进宏环境，{{outlet::key}} 此时才可用
+  for (const [k, v] of Object.entries(wi.outletEntries)) env.outlets[k] = v.join('\n')
+
+  // ── 4. 注入注册表（每次生成重建，杜绝陈旧注入） ──
   const injections: Injection[] = []
+
+  // 4a. 世界书 atDepth：一个 (depth, role) 一条
+  for (const e of wi.depthEntries) {
+    injections.push(
+      makeInjection({
+        key: `customDepthWI_${e.depth}_${e.role}`,
+        value: e.entries.join('\n'),
+        depth: e.depth,
+        role: e.role,
+        order: DEFAULT_ORDER,
+        scan: false, // 世界书不能再扫自己
+      }),
+    )
+  }
+  // 4b. 世界书 ANTop/ANBottom（本项目无独立作者注释功能，落在其默认深度 4）
+  const anText = [...wi.anTop, ...wi.anBottom].filter((s) => s.trim()).join('\n')
+  if (anText) {
+    injections.push(
+      makeInjection({ key: '2_authors_note', value: anText, depth: 4, order: DEFAULT_ORDER }),
+    )
+  }
 
   // 3a. 角色深度提示词（卡片 depth_prompt）
   if (card.depthPrompt.trim()) {
@@ -204,12 +244,16 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const S = (content: string, source: string): PromptMessage[] =>
     content.trim() ? [{ role: 'system', content: content.trim(), source }] : []
 
+  const fmtWI = (t: string) => (t && s.prompt.wiFormat ? s.prompt.wiFormat.replace('{0}', t) : t)
+
   const mandatory: PromptMessage[] = [
     ...S(sub(s.prompt.mainPrompt), 'main'),
     ...S(card.systemPrompt, 'charSystem'),
+    ...S(fmtWI(wi.worldInfoBefore), 'worldInfoBefore'),
     ...S(card.description, 'charDescription'),
     ...S(card.personality, 'charPersonality'),
     ...S(card.scenario, 'scenario'),
+    ...S(fmtWI(wi.worldInfoAfter), 'worldInfoAfter'),
     ...S(card.persona, 'personaDescription'),
   ]
 
@@ -221,12 +265,18 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     isGroup: input.isGroup,
   }
   const blocks: PromptMessage[][] = []
-  for (const b of parseMesExamples(card.mesExample)) {
-    blocks.push([
-      { role: 'system', content: sub(s.prompt.exampleChatMarker), source: 'dialogueExamples' },
-      ...exampleBlockToMessages(b, names),
-    ])
+  const pushBlocks = (raw: string) => {
+    for (const b of parseMesExamples(raw)) {
+      blocks.push([
+        { role: 'system', content: sub(s.prompt.exampleChatMarker), source: 'dialogueExamples' },
+        ...exampleBlockToMessages(b, names),
+      ])
+    }
   }
+  // 世界书 EMTop 夹在卡片示例之前，EMBottom 在之后
+  for (const em of wi.emEntries) if (em.position === WI_ANCHOR_BEFORE) pushBlocks(em.content)
+  pushBlocks(card.mesExample)
+  for (const em of wi.emEntries) if (em.position !== WI_ANCHOR_BEFORE) pushBlocks(em.content)
 
   // ── 6. 真实历史 ──
   const history: PromptMessage[] = input.history
@@ -292,8 +342,72 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
       reserved: fit.reserved,
       droppedHistory: fit.droppedHistory,
       droppedExamples: fit.droppedExamples,
+      worldInfo: wi,
     },
   }
+}
+
+/** 跑世界书扫描；未提供来源时返回空结果 */
+function runWorldInfo(
+  input: BuildPromptInput,
+  card: {
+    description: string
+    personality: string
+    scenario: string
+    persona: string
+    depthPrompt: string
+  },
+  sub: (t: string) => string,
+  count: TokenCounter,
+): WIScanResult {
+  const s = input.settings
+  const empty: WIScanResult = {
+    worldInfoBefore: '',
+    worldInfoAfter: '',
+    emEntries: [],
+    anTop: [],
+    anBottom: [],
+    depthEntries: [],
+    outletEntries: {},
+    allActivatedEntries: [],
+    budget: 0,
+    budgetOverflowed: false,
+  }
+  if (!input.loreSources) return empty
+
+  const sorted = resolveSortedEntries(input.loreSources, s.worldInfo.world_info_character_strategy)
+  if (!sorted.length) return empty
+
+  // 新→旧倒序；includeNames 时前缀发言者名
+  const scannable = input.history.filter((m) => !m.is_system && !m.exclude)
+  const chatForWI = scannable
+    .map((m) => (s.worldInfo.world_info_include_names ? `${m.name}: ${m.mes}` : m.mes))
+    .reverse()
+
+  return checkWorldInfo({
+    chat: chatForWI,
+    // 定时效果时钟：参与提示词的非系统消息条数
+    chatLength: scannable.length,
+    maxContext: s.provider.contextWindow,
+    isDryRun: input.isDryRun ?? false,
+    globalScanData: {
+      personaDescription: card.persona,
+      characterDescription: card.description,
+      characterPersonality: card.personality,
+      characterDepthPrompt: card.depthPrompt,
+      scenario: card.scenario,
+      creatorNotes: input.speaker.char.data.creator_notes,
+      trigger: input.trigger ?? 'normal',
+    },
+    sortedEntries: sorted,
+    settings: s.worldInfo,
+    timedStore: input.timedStore ?? { sticky: {}, cooldown: {} },
+    injects: [],
+    countTokens: count,
+    substitute: sub,
+    characterName: input.speaker.name,
+    characterTags: input.speaker.char.data.tags,
+  })
 }
 
 /** 合并相邻的、无 name 的 system 消息（对齐 ST squashSystemMessages） */

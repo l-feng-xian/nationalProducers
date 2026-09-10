@@ -1,16 +1,20 @@
 /**
- * 模板静态检查 —— 补 vue-tsc 看不见的那一类错误。
+ * SFC 模板编译检查 —— 补 vue-tsc 看不见的那一整类错误。
  *
- * 目前只查一条，但它已经咬过三次：
- *   在 Vue 模板里写字面量 `{{ '{{char}}' }}` 会被解析器在**内层 `}}`** 提前闭合插值，
- *   编译直接失败（Unterminated string constant），而 `npm run type-check` 完全不报。
- *   正确做法：在 <script setup> 里定义常量 `const CHAR_MACRO = '{{char}}'`，模板写 `{{ CHAR_MACRO }}`。
+ * `vue-tsc` 只做类型检查，**不会**报模板编译错误。已经咬过的两类：
+ *   1. 模板里写字面 `{{ '{{char}}' }}` → 内层 `}}` 提前闭合插值
+ *   2. 多语句内联 handler（尤其带换行的）→ 表达式解析失败
+ * 两者都只在浏览器打开那个页面时才炸，改完不跑一遍根本发现不了。
+ *
+ * 这里直接调用 Vue 自己的编译器，任何模板编译错误都能提前拦下。
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parse, compileTemplate } from 'vue/compiler-sfc'
 
-const ROOT = new URL('../src', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('../src', import.meta.url))
 
 function walk(dir) {
   const out = []
@@ -22,22 +26,35 @@ function walk(dir) {
   return out
 }
 
-/** 插值里出现嵌套的 {{ …}} 字面量 */
-const NESTED_MUSTACHE = /\{\{[^}]*\{\{/
-
 let bad = 0
 for (const file of walk(ROOT)) {
-  const src = readFileSync(file, 'utf8')
-  const tpl = src.match(/<template>([\s\S]*)<\/template>/)
-  if (!tpl?.[1]) continue
-  const lines = tpl[1].split('\n')
-  lines.forEach((line, i) => {
-    if (!NESTED_MUSTACHE.test(line)) return
+  const rel = relative(ROOT, file).replace(/\\/g, '/')
+  const source = readFileSync(file, 'utf8')
+
+  const { descriptor, errors } = parse(source, { filename: rel })
+  for (const e of errors) {
     bad++
-    console.error(
-      `${relative(ROOT, file)}:${i + 1}  模板插值里嵌套了 {{ }}，Vue 会提前闭合导致编译失败\n    ${line.trim()}\n    → 改用 <script setup> 常量，例如 const CHAR_MACRO = '{{char}}' 再写 {{ CHAR_MACRO }}`,
-    )
+    console.error(`${rel}: SFC 解析失败 — ${e.message}`)
+  }
+  if (!descriptor.template) continue
+
+  const res = compileTemplate({
+    source: descriptor.template.content,
+    filename: rel,
+    id: rel,
+    // 让编译器按 <script setup> 的方式处理，与实际构建一致
+    compilerOptions: { expressionPlugins: ['typescript'] },
   })
+  for (const e of res.errors) {
+    bad++
+    const msg = typeof e === 'string' ? e : e.message
+    const loc = typeof e === 'object' && e.loc ? `:${e.loc.start.line}` : ''
+    console.error(`${rel}${loc}: 模板编译失败 — ${msg}`)
+    if (typeof e === 'object' && e.loc?.start.line) {
+      const line = descriptor.template.content.split('\n')[e.loc.start.line - 1]
+      if (line) console.error(`    ${line.trim()}`)
+    }
+  }
 }
 
 if (bad) {
