@@ -1,0 +1,164 @@
+/**
+ * 基础样式 —— reset + 全局元素默认 + Chatbox 风格通用组件类
+ * 依赖 tokens.css，需在其之后引入。
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--cbx-font);
+  font-size: var(--cbx-fs-md);
+  line-height: var(--cbx-lh);
+  color: var(--cbx-text);
+  background: var(--cbx-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background var(--cbx-transition), color var(--cbx-transition);
+}
+
+h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: var(--cbx-fw-bold); color: var(--cbx-text); }
+h1 { font-size: var(--cbx-fs-h1); }
+h2 { font-size: var(--cbx-fs-xl); }
+h3 { font-size: var(--cbx-fs-lg); }
+p  { margin: 0; }
+
+a {
+  color: var(--cbx-link);
+  text-decoration: none;
+  transition: color var(--cbx-transition);
+}
+a:hover { text-decoration: underline; }
+
+::placeholder { color: var(--cbx-text-placeholder); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--cbx-gray-4); border-radius: var(--cbx-radius-pill); }
+::-webkit-scrollbar-thumb:hover { background: var(--cbx-gray-5); }
+::-webkit-scrollbar-track { background: transparent; }
+
+:focus-visible { outline: 2px solid var(--cbx-border-focus); outline-offset: 2px; }
+
+/* ══════════════════════════════════════════════════════════
+   通用组件类 —— 直接套用，或作为 Vue 组件样式的参考范式
+   ══════════════════════════════════════════════════════════ */
+
+/* —— 按钮 —— 圆润(16px)、无边框、hover 加深 —— */
+.cbx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cbx-space-2);
+  height: 36px;
+  padding: 0 var(--cbx-space-4);
+  border: none;
+  border-radius: var(--cbx-radius-lg);
+  font-family: inherit;
+  font-size: var(--cbx-fs-sm);
+  font-weight: var(--cbx-fw-medium);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--cbx-transition), color var(--cbx-transition), box-shadow var(--cbx-transition);
+  white-space: nowrap;
+}
+.cbx-btn:disabled { background: var(--cbx-bg-disabled); color: var(--cbx-text-disabled); cursor: not-allowed; }
+
+/* 主按钮：实心品牌色 */
+.cbx-btn--primary { background: var(--cbx-brand); color: var(--cbx-text-on-brand); }
+.cbx-btn--primary:hover:not(:disabled) { background: var(--cbx-brand-hover); }
+.cbx-btn--primary:active:not(:disabled) { background: var(--cbx-brand-active); }
+
+/* 次按钮 / 幽灵：浅品牌底 + 品牌字（Chatbox 的 New Chat 按钮） */
+.cbx-btn--soft { background: var(--cbx-brand-subtle); color: var(--cbx-brand); }
+.cbx-btn--soft:hover:not(:disabled) { background: var(--cbx-brand-light-hover); }
+
+/* 文字按钮 / 图标按钮 */
+.cbx-btn--ghost { background: transparent; color: var(--cbx-text-secondary); }
+.cbx-btn--ghost:hover:not(:disabled) { background: var(--cbx-bg-active); }
+
+/* —— 卡片 —— 白底、细描边、圆角、可选轻阴影 —— */
+.cbx-card {
+  background: var(--cbx-bg);
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-lg);
+  padding: var(--cbx-space-5);
+}
+.cbx-card--raised { border-color: transparent; box-shadow: var(--cbx-shadow-md); }
+
+/* —— 输入框 —— */
+.cbx-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--cbx-space-3);
+  font-family: inherit;
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text);
+  background: var(--cbx-bg);
+  border: 1px solid var(--cbx-border-strong);
+  border-radius: var(--cbx-radius-md);
+  transition: border-color var(--cbx-transition), box-shadow var(--cbx-transition);
+}
+.cbx-input:focus {
+  outline: none;
+  border-color: var(--cbx-border-focus);
+  box-shadow: 0 0 0 3px var(--cbx-brand-light);
+}
+
+/* —— 侧栏列表项 —— hover / 选中 —— */
+.cbx-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-3);
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  border-radius: var(--cbx-radius-md);
+  color: var(--cbx-text-secondary);
+  font-size: var(--cbx-fs-sm);
+  cursor: pointer;
+  transition: background var(--cbx-transition), color var(--cbx-transition);
+}
+.cbx-nav-item:hover { background: var(--cbx-bg-hover); }
+.cbx-nav-item--active { background: var(--cbx-brand-light); color: var(--cbx-brand); font-weight: var(--cbx-fw-medium); }
+
+/* —— 分隔线 / 分组标题 —— */
+.cbx-divider { height: 1px; background: var(--cbx-border); border: none; margin: var(--cbx-space-3) 0; }
+.cbx-group-label {
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  font-size: var(--cbx-fs-xs);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* —— 徽标 / 状态标签 —— */
+.cbx-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--cbx-space-2);
+  border-radius: var(--cbx-radius-sm);
+  font-size: var(--cbx-fs-xs);
+  font-weight: var(--cbx-fw-medium);
+}
+.cbx-badge--brand   { background: var(--cbx-brand-light);   color: var(--cbx-brand); }
+.cbx-badge--success { background: var(--cbx-success-light); color: var(--cbx-success); }
+.cbx-badge--warning { background: var(--cbx-warning-light); color: var(--cbx-warning); }
+.cbx-badge--error   { background: var(--cbx-error-light);   color: var(--cbx-error); }
+
+/* ══════════════════════════════════════════════════════════
+   移动端适配 (< 768px)
+   - 加大控件可点区域到 44px；输入字号 ≥16px 防 iOS 聚焦缩放
+   - 卡片内边距收紧
+   ══════════════════════════════════════════════════════════ */
+@media (max-width: 767px) {
+  .cbx-btn { height: var(--cbx-tap-min); padding: 0 var(--cbx-space-5); }
+  .cbx-input { height: var(--cbx-tap-min); font-size: var(--cbx-fs-md); }
+  .cbx-nav-item { padding: var(--cbx-space-3); min-height: var(--cbx-tap-min); }
+  .cbx-card { padding: var(--cbx-space-4); border-radius: var(--cbx-radius-md); }
+}
+
+/* 触屏设备去掉 hover 残留、优化点击反馈 */
+@media (hover: none) {
+  * { -webkit-tap-highlight-color: transparent; }
+}
