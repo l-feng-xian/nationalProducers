@@ -6,6 +6,7 @@
  */
 
 import { getDb, chatRange } from '../schema'
+import { toPlain } from '../plain'
 import type { ChatMessage } from '@/types/chat'
 
 /** 追加一条：同一事务内从 ChatMeta.nextSeq 取号并自增，同时更新计数/时间 */
@@ -16,12 +17,12 @@ export async function append(chatId: string, msg: Omit<ChatMessage, 'seq'>): Pro
   const meta = await chats.get(chatId)
   if (!meta) throw new Error(`会话 ${chatId} 不存在`)
   const row: ChatMessage = { ...msg, seq: meta.nextSeq }
-  await tx.objectStore('messages').put(row)
+  await tx.objectStore('messages').put(toPlain(row))
   meta.nextSeq += 1
   meta.messageCount += 1
   meta.lastMessageAt = row.send_date
   meta.updatedAt = Date.now()
-  await chats.put(meta)
+  await chats.put(toPlain(meta))
   await tx.done
   return row
 }
@@ -40,14 +41,14 @@ export async function appendMany(
   const out: ChatMessage[] = []
   for (const m of msgs) {
     const row: ChatMessage = { ...m, seq: meta.nextSeq }
-    await store.put(row)
+    await store.put(toPlain(row))
     meta.nextSeq += 1
     meta.messageCount += 1
     meta.lastMessageAt = row.send_date
     out.push(row)
   }
   meta.updatedAt = Date.now()
-  await chats.put(meta)
+  await chats.put(toPlain(meta))
   await tx.done
   return out
 }
@@ -55,7 +56,7 @@ export async function appendMany(
 /** 原地更新（流式增量落盘 / 编辑 / swipe 切换）。已知 seq */
 export async function update(row: ChatMessage): Promise<void> {
   const db = await getDb()
-  await db.put('messages', row)
+  await db.put('messages', toPlain(row))
 }
 
 export async function getById(chatId: string, id: string): Promise<ChatMessage | undefined> {
@@ -104,7 +105,7 @@ export async function remove(chatId: string, seq: number): Promise<void> {
   if (meta) {
     meta.messageCount = Math.max(0, meta.messageCount - 1)
     meta.updatedAt = Date.now()
-    await chats.put(meta)
+    await chats.put(toPlain(meta))
   }
   await tx.done
 }
@@ -126,7 +127,7 @@ export async function removeTail(chatId: string, n: number): Promise<void> {
   if (meta) {
     meta.messageCount = Math.max(0, meta.messageCount - removed)
     meta.updatedAt = Date.now()
-    await chats.put(meta)
+    await chats.put(toPlain(meta))
   }
   await tx.done
 }
@@ -148,7 +149,7 @@ export async function removeFrom(chatId: string, fromSeq: number): Promise<void>
   if (meta) {
     meta.messageCount = Math.max(0, meta.messageCount - removed)
     meta.updatedAt = Date.now()
-    await chats.put(meta)
+    await chats.put(toPlain(meta))
   }
   await tx.done
 }
@@ -162,7 +163,7 @@ export async function clear(chatId: string): Promise<void> {
   if (meta) {
     meta.messageCount = 0
     meta.updatedAt = Date.now()
-    await chats.put(meta)
+    await chats.put(toPlain(meta))
   }
   await tx.done
 }
@@ -178,13 +179,13 @@ export async function copyUpTo(src: string, dst: string, atSeq: number): Promise
   if (!meta) throw new Error(`会话 ${dst} 不存在`)
   for (const r of rows) {
     const row: ChatMessage = { ...r, chatId: dst, seq: meta.nextSeq, id: crypto.randomUUID() }
-    await store.put(row)
+    await store.put(toPlain(row))
     meta.nextSeq += 1
     meta.messageCount += 1
     meta.lastMessageAt = row.send_date
   }
   meta.updatedAt = Date.now()
-  await chats.put(meta)
+  await chats.put(toPlain(meta))
   await tx.done
   return rows.length
 }

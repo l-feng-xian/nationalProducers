@@ -1,4 +1,5 @@
 import { getDb, chatRange } from '../schema'
+import { toPlain } from '../plain'
 import { emptyGroup, type Group, type GroupRelation, type GroupNodeLayout } from '@/types/group'
 
 export async function list(): Promise<Group[]> {
@@ -15,14 +16,14 @@ export async function get(id: string): Promise<Group | undefined> {
 export async function create(name = '新群聊'): Promise<Group> {
   const g = emptyGroup(crypto.randomUUID(), name)
   const db = await getDb()
-  await db.put('groups', g)
+  await db.put('groups', toPlain(g))
   return g
 }
 
 export async function save(g: Group): Promise<void> {
   g.updatedAt = Date.now()
   const db = await getDb()
-  await db.put('groups', g)
+  await db.put('groups', toPlain(g))
 }
 
 async function mutate(id: string, fn: (g: Group) => void): Promise<void> {
@@ -32,7 +33,7 @@ async function mutate(id: string, fn: (g: Group) => void): Promise<void> {
   if (g) {
     fn(g)
     g.updatedAt = Date.now()
-    await tx.store.put(g)
+    await tx.store.put(toPlain(g))
   }
   await tx.done
 }

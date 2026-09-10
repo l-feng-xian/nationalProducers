@@ -1,4 +1,5 @@
 import { getDb, chatRange } from '../schema'
+import { toPlain } from '../plain'
 import { newChatMetadata, type ChatMeta, type ChatMetadata } from '@/types/chat'
 
 export async function list(): Promise<ChatMeta[]> {
@@ -42,14 +43,14 @@ export async function create(
   if (init.characterId !== undefined) meta.characterId = init.characterId
   if (init.groupId !== undefined) meta.groupId = init.groupId
   const db = await getDb()
-  await db.put('chats', meta)
+  await db.put('chats', toPlain(meta))
   return meta
 }
 
 export async function save(meta: ChatMeta): Promise<void> {
   const db = await getDb()
   meta.updatedAt = Date.now()
-  await db.put('chats', meta)
+  await db.put('chats', toPlain(meta))
 }
 
 /** 局部更新 chat_metadata（如世界书定时效果回写） */
@@ -63,7 +64,7 @@ export async function patchMetadata(id: string, patch: Partial<ChatMetadata>): P
   }
   meta.chat_metadata = { ...meta.chat_metadata, ...patch }
   meta.updatedAt = Date.now()
-  await tx.store.put(meta)
+  await tx.store.put(toPlain(meta))
   await tx.done
 }
 
@@ -74,7 +75,7 @@ export async function rename(id: string, title: string): Promise<void> {
   if (meta) {
     meta.title = title
     meta.updatedAt = Date.now()
-    await tx.store.put(meta)
+    await tx.store.put(toPlain(meta))
   }
   await tx.done
 }

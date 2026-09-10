@@ -1,13 +1,50 @@
 <script setup lang="ts">
-import { RouterLink, useRoute } from 'vue-router'
+import { computed, onMounted } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useChatsStore } from '@/stores/chats'
+import type { ChatMeta } from '@/types/chat'
 
 defineProps<{ open: boolean }>()
 
 const ui = useUiStore()
 const route = useRoute()
+const router = useRouter()
+const chats = useChatsStore()
 
 const themeLabel = { light: '☀️ 浅色', dark: '🌙 深色', system: '🖥️ 跟随系统' }
+
+onMounted(() => {
+  void chats.loadList()
+})
+
+/** 按「今天 / 昨天 / 更早」分组 */
+const groups = computed(() => {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfYesterday = startOfToday - 86_400_000
+  const out: { label: string; items: ChatMeta[] }[] = [
+    { label: '今天', items: [] },
+    { label: '昨天', items: [] },
+    { label: '更早', items: [] },
+  ]
+  for (const c of chats.list) {
+    const t = c.lastMessageAt || c.updatedAt
+    const bucket = t >= startOfToday ? 0 : t >= startOfYesterday ? 1 : 2
+    out[bucket]?.items.push(c)
+  }
+  return out.filter((g) => g.items.length > 0)
+})
+
+async function remove(id: string) {
+  await chats.removeChat(id)
+  if (route.params['id'] === id) await router.push('/chat')
+}
+
+async function newChat() {
+  const meta = await chats.createSolo(undefined, '新对话')
+  await router.push(`/chat/${meta.id}`)
+}
 </script>
 
 <template>
@@ -17,15 +54,27 @@ const themeLabel = { light: '☀️ 浅色', dark: '🌙 深色', system: '🖥�
       <span class="brand__name">国货优选</span>
     </div>
 
-    <button class="cbx-btn cbx-btn--soft new-chat" @click="ui.newChatOpen = true">
-      ＋ 新建对话
-    </button>
+    <button class="cbx-btn cbx-btn--soft new-chat" @click="newChat">＋ 新建对话</button>
 
     <div class="cbx-scroll sessions">
-      <div class="cbx-empty">
+      <div v-if="!chats.list.length" class="cbx-empty">
         <span class="cbx-empty__icon">💬</span>
         <span class="cbx-empty__desc">还没有对话</span>
       </div>
+
+      <template v-for="g in groups" :key="g.label">
+        <div class="cbx-group-label">{{ g.label }}</div>
+        <div
+          v-for="c in g.items"
+          :key="c.id"
+          class="cbx-nav-item item"
+          :class="{ 'cbx-nav-item--active': route.params['id'] === c.id }"
+          @click="router.push(`/chat/${c.id}`)"
+        >
+          <span class="item__title">{{ c.title }}</span>
+          <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id)">✕</button>
+        </div>
+      </template>
     </div>
 
     <nav class="foot">
@@ -102,6 +151,25 @@ const themeLabel = { light: '☀️ 浅色', dark: '🌙 深色', system: '🖥�
   margin: var(--cbx-space-2) 0;
 }
 
+.item {
+  justify-content: space-between;
+}
+.item__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item__del {
+  width: 24px;
+  height: 24px;
+  font-size: var(--cbx-fs-xs);
+  opacity: 0;
+  flex-shrink: 0;
+}
+.item:hover .item__del {
+  opacity: 1;
+}
+
 .foot {
   display: flex;
   flex-direction: column;
@@ -118,6 +186,14 @@ const themeLabel = { light: '☀️ 浅色', dark: '🌙 深色', system: '🖥�
 .theme-btn {
   width: 100%;
   margin-top: var(--cbx-space-1);
+}
+
+@media (hover: none) {
+  .item__del {
+    opacity: 0.5;
+    width: var(--cbx-tap-min);
+    height: var(--cbx-tap-min);
+  }
 }
 
 /* ── 移动端：离屏抽屉 ── */

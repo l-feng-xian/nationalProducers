@@ -1,4 +1,5 @@
 import { getDb } from '../schema'
+import { toPlain } from '../plain'
 import { createEntry, type WorldBook, type WorldInfoEntry } from '@/types/worldinfo'
 
 export async function list(): Promise<WorldBook[]> {
@@ -35,14 +36,14 @@ export async function create(name = '新世界书'): Promise<WorldBook> {
     updatedAt: now,
   }
   const db = await getDb()
-  await db.put('worldbooks', book)
+  await db.put('worldbooks', toPlain(book))
   return book
 }
 
 export async function save(book: WorldBook): Promise<void> {
   book.updatedAt = Date.now()
   const db = await getDb()
-  await db.put('worldbooks', book)
+  await db.put('worldbooks', toPlain(book))
 }
 
 export async function rename(id: string, name: string): Promise<void> {
@@ -52,7 +53,7 @@ export async function rename(id: string, name: string): Promise<void> {
   if (b) {
     b.name = name
     b.updatedAt = Date.now()
-    await tx.store.put(b)
+    await tx.store.put(toPlain(b))
   }
   await tx.done
 }
@@ -68,7 +69,7 @@ export async function addEntry(bookId: string): Promise<WorldInfoEntry | undefin
   const entry = createEntry(b.entries)
   b.entries[String(entry.uid)] = entry
   b.updatedAt = Date.now()
-  await tx.store.put(b)
+  await tx.store.put(toPlain(b))
   await tx.done
   return entry
 }
@@ -80,7 +81,7 @@ export async function upsertEntry(bookId: string, entry: WorldInfoEntry): Promis
   if (b) {
     b.entries[String(entry.uid)] = entry
     b.updatedAt = Date.now()
-    await tx.store.put(b)
+    await tx.store.put(toPlain(b))
   }
   await tx.done
 }
@@ -92,7 +93,7 @@ export async function removeEntry(bookId: string, uid: number): Promise<void> {
   if (b) {
     delete b.entries[String(uid)]
     b.updatedAt = Date.now()
-    await tx.store.put(b)
+    await tx.store.put(toPlain(b))
   }
   await tx.done
 }
@@ -113,7 +114,7 @@ export async function remove(id: string): Promise<void> {
   if (s && s.worldInfo.globalBookIds.includes(id)) {
     s.worldInfo.globalBookIds = s.worldInfo.globalBookIds.filter((x) => x !== id)
     s.updatedAt = Date.now()
-    await sStore.put(s)
+    await sStore.put(toPlain(s))
   }
 
   const cStore = tx.objectStore('characters')
@@ -122,7 +123,7 @@ export async function remove(id: string): Promise<void> {
     if (!c.worldBookIds.includes(id)) continue
     c.worldBookIds = c.worldBookIds.filter((x) => x !== id)
     c.updatedAt = Date.now()
-    await cStore.put(c)
+    await cStore.put(toPlain(c))
   }
 
   const chStore = tx.objectStore('chats')
@@ -131,7 +132,7 @@ export async function remove(id: string): Promise<void> {
     if (ch.chat_metadata.worldBookId !== id) continue
     delete ch.chat_metadata.worldBookId
     ch.updatedAt = Date.now()
-    await chStore.put(ch)
+    await chStore.put(toPlain(ch))
   }
 
   await tx.done

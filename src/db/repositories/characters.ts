@@ -1,4 +1,5 @@
 import { getDb, chatRange } from '../schema'
+import { toPlain } from '../plain'
 import { emptyCharacter, type Character } from '@/types/character'
 
 export async function list(): Promise<Character[]> {
@@ -27,7 +28,7 @@ export async function getMany(ids: string[]): Promise<Character[]> {
 export async function create(name = '新角色'): Promise<Character> {
   const c = emptyCharacter(crypto.randomUUID(), name)
   const db = await getDb()
-  await db.put('characters', c)
+  await db.put('characters', toPlain(c))
   return c
 }
 
@@ -36,7 +37,7 @@ export async function save(c: Character): Promise<Character> {
   c.updatedAt = Date.now()
   c.favIdx = c.fav ? 1 : 0
   const db = await getDb()
-  await db.put('characters', c)
+  await db.put('characters', toPlain(c))
   return c
 }
 
@@ -48,7 +49,7 @@ export async function toggleFav(id: string): Promise<void> {
     c.fav = !c.fav
     c.favIdx = c.fav ? 1 : 0
     c.updatedAt = Date.now()
-    await tx.store.put(c)
+    await tx.store.put(toPlain(c))
   }
   await tx.done
 }
@@ -86,7 +87,7 @@ export async function remove(id: string): Promise<void> {
     g.relations = g.relations.filter((r) => r.from !== id && r.to !== id)
     delete g.layout[id]
     g.updatedAt = Date.now()
-    await gStore.put(g)
+    await gStore.put(toPlain(g))
   }
 
   await tx.objectStore('characters').delete(id)

@@ -2,6 +2,7 @@
 import { watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
+import CbxToastHost from '@/components/ui/CbxToastHost.vue'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
@@ -21,6 +22,7 @@ watch(
     <main class="main">
       <RouterView />
     </main>
+    <CbxToastHost />
   </div>
 </template>
 

@@ -1,4 +1,5 @@
 import { getDb } from '../schema'
+import { toPlain } from '../plain'
 import { defaultSettings, type Settings } from '@/types/settings'
 
 /** 读取全局配置；不存在则写入默认值。同时做浅层补齐，防止新增字段读到 undefined */
@@ -7,7 +8,7 @@ export async function load(): Promise<Settings> {
   const existing = await db.get('settings', 'app')
   if (!existing) {
     const s = defaultSettings()
-    await db.put('settings', s)
+    await db.put('settings', toPlain(s))
     return s
   }
   const d = defaultSettings()
@@ -30,5 +31,5 @@ export async function load(): Promise<Settings> {
 export async function save(s: Settings): Promise<void> {
   s.updatedAt = Date.now()
   const db = await getDb()
-  await db.put('settings', s)
+  await db.put('settings', toPlain(s))
 }
