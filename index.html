@@ -1,10 +1,16 @@
 <!DOCTYPE html>
-<html lang="">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Vite App</title>
+    <!-- 移动端浏览器地址栏跟随主题，避免暗色下顶部露出一条白边。
+         值取自 tokens.css 的 --cbx-bg（亮 #ffffff / 暗 #242424）。 -->
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#242424" media="(prefers-color-scheme: dark)">
+    <!-- ⚠️ 这里是静态文件，构建期不经过 src/constants/app.ts。
+         改应用名时两处都要动；运行时 bootstrap 会用 APP_TITLE 再覆盖一次兜底。 -->
+    <title>幕间 · AI 沉浸式角色扮演聊天</title>
   </head>
   <body>
     <div id="app"></div>

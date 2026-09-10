@@ -7,6 +7,8 @@ import { useToast } from '@/composables/useToast'
 import { listModels, chatOnce } from '@/services/provider/openaiCompatible'
 import { ProviderError } from '@/types/provider'
 import { exportAll, importAll, storageEstimate, formatBytes } from '@/services/io/backup'
+import { downloadBlob, safeFileName } from '@/utils/download'
+import { APP_NAME } from '@/constants/app'
 
 const settings = useSettingsStore()
 const toast = useToast()
@@ -28,11 +30,11 @@ const backupInput = ref<HTMLInputElement | null>(null)
 
 async function doExport() {
   const blob = await exportAll()
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `nationalproducers-backup-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  // 文件名跟着应用名走；备份**内部**的 format 标识不会变（见 backup.ts 的说明）
+  downloadBlob(
+    blob,
+    safeFileName(`${APP_NAME}备份-${new Date().toISOString().slice(0, 10)}`, 'json'),
+  )
   toast.success('已导出（不含 API Key）')
 }
 

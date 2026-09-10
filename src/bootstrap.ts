@@ -9,11 +9,16 @@ import { useUiStore } from './stores/ui'
 import { useCharactersStore } from './stores/characters'
 import { useWorldsStore } from './stores/worlds'
 import { useGroupsStore } from './stores/groups'
+import { APP_TITLE } from './constants/app'
 
 export async function bootstrap(): Promise<void> {
   const ui = useUiStore()
   // 主题优先于任何 await，避免首屏白闪
   ui.initTheme()
+
+  // index.html 是静态文件、拿不到这个常量，这里覆盖一次兜底：
+  // 万一哪天只改了 constants/app.ts 忘了改 index.html，标签页也不会说错名字
+  document.title = APP_TITLE
 
   await getDb()
   await runDataMigrations()

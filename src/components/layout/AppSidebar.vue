@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import { useChatsStore } from '@/stores/chats'
+import { APP_LOGO_CHAR, APP_NAME } from '@/constants/app'
 import type { ChatMeta } from '@/types/chat'
 
 defineProps<{ open: boolean }>()
@@ -49,8 +50,8 @@ function newChat() {
 <template>
   <aside class="sidebar" :class="{ 'sidebar--open': open }">
     <div class="brand">
-      <span class="brand__logo">国</span>
-      <span class="brand__name">国货优选</span>
+      <span class="brand__logo">{{ APP_LOGO_CHAR }}</span>
+      <span class="brand__name">{{ APP_NAME }}</span>
     </div>
 
     <button class="cbx-btn cbx-btn--soft new-chat" @click="newChat">＋ 新建对话</button>

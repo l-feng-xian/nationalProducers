@@ -1,4 +1,4 @@
-# 国货优选 · AI 沉浸式角色扮演聊天
+# 幕间 · AI 沉浸式角色扮演聊天
 
 纯前端（Vue 3 + TS + Vite），数据全部存浏览器 IndexedDB，可对接任意 **OpenAI 兼容**接口。
 世界书（World Info）**完整对齐 SillyTavern v1.18.0**。

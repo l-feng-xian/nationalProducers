@@ -8,6 +8,12 @@
 import { getDb } from '@/db/schema'
 import { toPlain } from '@/utils/plain'
 
+/**
+ * ⚠️ `format` 是**数据格式标识，不是应用名**。应用改名（国货优选 → 幕间）时
+ * 刻意没有跟着改：它被 importAll 用作校验值，一旦改动，用户此前导出的所有备份
+ * 都会被判成「不是本应用导出的备份文件」而拒绝导入。除非同时写好双向兼容，
+ * 否则**永远不要动这个字符串**。用户可见的文件名走 APP_NAME，与它无关。
+ */
 export interface BackupFile {
   format: 'nationalproducers-backup'
   version: 1
