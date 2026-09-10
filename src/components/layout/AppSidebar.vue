@@ -15,7 +15,9 @@ const route = useRoute()
 const router = useRouter()
 const chats = useChatsStore()
 
-const themeLabel = { light: '☀️ 浅色', dark: '🌙 深色', system: '🖥️ 跟随系统' }
+/** 图标进按钮、文案进 title —— 见模板里的说明 */
+const themeIcon = { light: '☀️', dark: '🌙', system: '🖥️' }
+const themeLabel = { light: '浅色', dark: '深色', system: '跟随系统' }
 
 onMounted(() => {
   void chats.loadList()
@@ -55,6 +57,17 @@ function newChat() {
       <!-- public/ 下的资源走 BASE_URL 拼接，部署到子路径时才不会 404 -->
       <img class="brand__logo" :src="`${BASE_URL}logo.jpg`" :alt="APP_NAME" />
       <span class="brand__name">{{ APP_NAME }}</span>
+      <!-- 主题切换：收在品牌行右端。只显示图标，当前模式放 title/aria-label，
+           否则「🖥️ 跟随系统」这种长文案会把 240px 的侧栏顶栏挤变形 -->
+      <button
+        class="cbx-icon-btn theme-btn"
+        type="button"
+        :title="`主题：${themeLabel[ui.theme]}（点击切换）`"
+        :aria-label="`主题：${themeLabel[ui.theme]}`"
+        @click="ui.cycleTheme()"
+      >
+        {{ themeIcon[ui.theme] }}
+      </button>
     </div>
 
     <button class="cbx-btn cbx-btn--soft new-chat" @click="newChat">＋ 新建对话</button>
@@ -102,9 +115,6 @@ function newChat() {
       >
         ⚙️ 设置
       </RouterLink>
-      <button class="cbx-btn cbx-btn--ghost theme-btn" @click="ui.cycleTheme()">
-        {{ themeLabel[ui.theme] }}
-      </button>
     </nav>
   </aside>
 </template>
@@ -186,9 +196,11 @@ function newChat() {
 .foot .cbx-nav-item:hover {
   text-decoration: none;
 }
+/* 推到品牌行最右端；.brand 是 flex，margin-left:auto 就够，不用改父级 */
 .theme-btn {
-  width: 100%;
-  margin-top: var(--cbx-space-1);
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--cbx-fs-md);
 }
 
 @media (hover: none) {
