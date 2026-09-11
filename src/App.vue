@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { KeepAlive, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import CbxToastHost from '@/components/ui/CbxToastHost.vue'
@@ -14,6 +14,20 @@ watch(
   () => route.fullPath,
   () => ui.closeDrawer(),
 )
+
+/**
+ * 需要跨导航保活的页面（按组件 name 白名单，见各 SFC 的 defineOptions）。
+ *
+ * **刻意只列角色页**，不是全都缓存：
+ * - 角色页是立绘墙，从编辑页回来时整页重建会把几十个 objectURL 释放再重取、
+ *   滚动位置也归零，观感就是「闪一下」。保活之后 DOM 原样还在，零重建。
+ * - 其它页不缓存：要么有会话态（ChatView 切会话必须重来），要么本来就轻。
+ *   无差别缓存只会让「改了数据回来还是旧的」这类问题遍地开花。
+ *
+ * ⚠️ 保活的组件 onMounted 只跑一次。往这里加页面前，先确认它没有
+ * 「每次进入都得重新拉一遍」的逻辑，否则要改用 onActivated。
+ */
+const KEEP_ALIVE = ['CharactersView']
 </script>
 
 <template>
@@ -21,7 +35,11 @@ watch(
     <div v-if="ui.drawerOpen" class="scrim" @click="ui.closeDrawer()" />
     <AppSidebar :open="ui.drawerOpen" />
     <main class="main">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <KeepAlive :include="KEEP_ALIVE">
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </main>
     <CbxToastHost />
     <NewChatSheet v-if="ui.newChatOpen" />

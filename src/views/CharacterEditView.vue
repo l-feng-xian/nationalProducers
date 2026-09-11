@@ -11,6 +11,8 @@ import { useWorldsStore } from '@/stores/worlds'
 import { useToast } from '@/composables/useToast'
 import { blobsRepo } from '@/db/repositories'
 import { invalidateObjectUrl } from '@/composables/useObjectUrl'
+import { useViewTransition } from '@/composables/useViewTransition'
+import { useMorphTarget } from '@/composables/useMorphTarget'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
 import { downloadBlob, safeFileName } from '@/utils/download'
@@ -145,6 +147,40 @@ function toggleBook(id: string) {
   else m.worldBookIds.push(id)
 }
 
+const vt = useViewTransition()
+const morph = useMorphTarget()
+/** 过渡进行中不接受第二次点击：并发两次过渡会互相 skip，观感是「点了没动画」 */
+let leaving = false
+
+/**
+ * 返回列表，带反向的共享元素过渡：本页的大立绘缩回它在列表里的那张卡。
+ *
+ * 本页立绘的 view-transition-name 是**无条件**挂着的，所以「旧状态」那端天然就绪；
+ * 缺的只是「新状态」那端 —— 列表页得知道给哪张卡挂同名。morph.mark() 就是干这个。
+ *
+ * 不需要在这里等 nextTick：列表组件此刻被 KeepAlive 停用、DOM 是游离的，
+ * 真正的新状态快照发生在 vt.run 内部 update + nextTick 之后，那时绑定早已生效。
+ */
+async function back() {
+  const id = model.value?.id
+  const go = () => router.push('/characters')
+  if (leaving) return
+  if (!vt.supported || !id) {
+    await go()
+    return
+  }
+  leaving = true
+  morph.mark(id)
+  try {
+    await vt.run(go)
+  } finally {
+    // 必须清。留着会让下一次无关导航也给那张卡挂上名字，
+    // 同名撞车时整个过渡被静默 skip，表现为「动画时灵时不灵」
+    morph.clear()
+    leaving = false
+  }
+}
+
 async function remove() {
   if (!model.value) return
   if (!confirm(`确定删除角色「${model.value.data.name}」？其全部对话也会一并删除。`)) return
@@ -157,7 +193,7 @@ async function remove() {
 <template>
   <AppTopbar :title="title">
     <template #actions>
-      <button class="cbx-btn cbx-btn--ghost" @click="router.push('/characters')">返回</button>
+      <button class="cbx-btn cbx-btn--ghost" @click="back">返回</button>
       <button class="cbx-btn cbx-btn--soft" @click="startChat">开始聊天</button>
       <button class="cbx-btn cbx-btn--primary" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}

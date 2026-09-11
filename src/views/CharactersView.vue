@@ -7,10 +7,16 @@ import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useToast } from '@/composables/useToast'
 import { useViewTransition } from '@/composables/useViewTransition'
+import { useMorphTarget } from '@/composables/useMorphTarget'
 import { MORPH_VT_NAME } from '@/constants/app'
 import { readCharaFromPng } from '@/services/io/pngCard'
 import { normalizeCard } from '@/services/io/characterCard'
 import { blobsRepo } from '@/db/repositories'
+
+// name 是 App.vue 里 KeepAlive :include 白名单的匹配依据。
+// <script setup> 虽然会从文件名推断，但那是隐式约定 —— 改个文件名缓存就静默失效
+// 且不报错。显式写死。
+defineOptions({ name: 'CharactersView' })
 
 const router = useRouter()
 const chars = useCharactersStore()
@@ -31,6 +37,22 @@ const vt = useViewTransition()
 const morphingId = ref<string | null>(null)
 /** 过渡进行中不接受新的点击：并发两次过渡会互相 skip，观感是「闪一下没动画」 */
 let morphing = false
+
+const morph = useMorphTarget()
+
+/**
+ * 该不该给这张卡挂 view-transition-name。两个方向各一个来源：
+ *  - morphingId：本页发起的「去编辑页」
+ *  - morph.target：编辑页发起的「回列表页」，它够不到本页 DOM，只能隔空指定
+ *
+ * 返回 undefined 时 Vue 会直接移除该行内样式 —— 保证任一时刻最多一个同名元素，
+ * 不需要手动清理（同名撞车会让整个过渡被 skip 且不报错）。
+ */
+function morphStyle(id: string) {
+  return morphingId.value === id || morph.target.value === id
+    ? { viewTransitionName: MORPH_VT_NAME }
+    : undefined
+}
 
 /**
  * 预热编辑页的路由 chunk。
@@ -144,7 +166,7 @@ async function onImport(e: Event) {
           :blob-id="c.avatarBlobId"
           :name="c.data.name"
           card
-          :style="morphingId === c.id ? { viewTransitionName: MORPH_VT_NAME } : undefined"
+          :style="morphStyle(c.id)"
           @click="openEditor(c.id)"
         />
         <div class="card__name">{{ c.data.name }}</div>
