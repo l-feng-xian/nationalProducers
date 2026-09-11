@@ -15,6 +15,7 @@ import type { Character } from '@/types/character'
 import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
+import { emptyStateCard, extractStateCard, mergeStateCard } from '@/services/memory/stateCard'
 
 export const useGenerationStore = defineStore('generation', () => {
   const busy = ref(false)
@@ -28,6 +29,83 @@ export const useGenerationStore = defineStore('generation', () => {
     aborted = true
     controller?.abort()
     controller = null
+  }
+
+  // ── 会话记忆 · 状态卡 ──────────────────────────────────────
+  /** 提炼是单例的：并发跑两次会互相覆盖 throughSeq */
+  let memoryBusy = false
+  /**
+   * 提炼用独立的 AbortController。
+   * ⚠️ 绝不能复用生成用的 `controller` —— 用户点「停止生成」会连提炼一起杀掉。
+   */
+  let memoryController: AbortController | null = null
+
+  /**
+   * 一轮生成收尾后，够条数就在后台提炼一次状态卡。
+   *
+   * ⚠️ 只挂在 send / sendGroup 的 finally，**绝不能挂进 build()** ——
+   * 「预览提示词」面板每次打开和刷新都会调 build()，挂那儿等于
+   * 「用户每排查一次提示词就烧一次 API」。
+   */
+  async function maybeExtractMemory(chatId: string): Promise<void> {
+    const settings = useSettingsStore()
+    const mem = settings.settings.memory
+    if (!mem.enabled || memoryBusy) return
+
+    const chats = useChatsStore()
+    // 全程用捕获的 chatId 取数，绝不读 chats.current —— 提炼要十几秒，
+    // 期间用户完全可能切走，读当前会话会把 A 的记忆写进 B
+    const meta = chats.list.find((c) => c.id === chatId)
+    if (!meta || meta.id !== chats.current?.id) return
+
+    const card = meta.chat_metadata.stateCard ?? emptyStateCard()
+    const msgs = chats.messages.filter((m) => !m.is_system && !m.exclude)
+    const last = msgs[msgs.length - 1]
+    if (!last) return
+    const interval = Math.max(2, mem.intervalMessages)
+    const fresh = msgs.filter((m) => m.seq > card.throughSeq)
+    if (fresh.length < interval) return
+
+    const dialogue = fresh.map((m) => `${m.name}：${m.mes}`).join('\n')
+    if (dialogue.trim().length < mem.minNewChars) return
+
+    memoryBusy = true
+    memoryController = new AbortController()
+    try {
+      const cfg = await providerConfig()
+      const outcome = await extractStateCard({
+        prev: card,
+        // 从**尾部**截断：保留最新的对话，旧的那头本来就已经被上一次提炼覆盖过
+        dialogue: dialogue.slice(-mem.dialogueCharLimit),
+        cfg,
+        model: mem.model.trim() || settings.settings.provider.model,
+        signal: memoryController.signal,
+      })
+      const merged = mergeStateCard(card, outcome, last.seq)
+      // 写库前再确认一次会话没变
+      if (chats.current?.id !== chatId) return
+      await chatsRepo.patchMetadata(chatId, { stateCard: merged })
+      await chats.refreshMeta(chatId)
+    } catch {
+      // 记忆是尽力而为，任何异常都不许把聊天搞崩
+    } finally {
+      memoryBusy = false
+      memoryController = null
+    }
+  }
+
+  /** 设置页/记忆面板的「立即提炼」按钮：绕过条数门槛 */
+  async function extractMemoryNow(chatId: string): Promise<boolean> {
+    const settings = useSettingsStore()
+    const saved = settings.settings.memory.intervalMessages
+    settings.settings.memory.intervalMessages = 2
+    try {
+      await maybeExtractMemory(chatId)
+      const chats = useChatsStore()
+      return !(chats.list.find((c) => c.id === chatId)?.chat_metadata.stateCard?.failures ?? 0)
+    } finally {
+      settings.settings.memory.intervalMessages = saved
+    }
   }
 
   async function providerConfig(): Promise<ProviderConfig> {
@@ -85,6 +163,7 @@ export const useGenerationStore = defineStore('generation', () => {
       loreSources,
       timedStore,
       isDryRun,
+      stateCard: meta.chat_metadata.stateCard?.text ?? '',
     })
     lastPrompt.value = built
     return built
@@ -190,6 +269,8 @@ export const useGenerationStore = defineStore('generation', () => {
         timedWorldInfo: meta.chat_metadata.timedWorldInfo,
       })
       await chats.refreshMeta(meta.id)
+      // fire-and-forget：提炼要十几秒，不能卡住 UI 收尾
+      void maybeExtractMemory(meta.id)
     }
   }
 
@@ -263,6 +344,9 @@ export const useGenerationStore = defineStore('generation', () => {
       })
       await chats.refreshMeta(meta.id)
       aborted = false
+      // 挂在 sendGroup 的 finally 而不是 generateOne —— 否则 5 个成员的群聊
+      // 一轮会发 5 次提炼请求
+      void maybeExtractMemory(meta.id)
     }
   }
 
@@ -298,6 +382,7 @@ export const useGenerationStore = defineStore('generation', () => {
       chatId: meta.id,
       chatIdHash: meta.chat_metadata.chat_id_hash ?? 0,
       variables: meta.chat_metadata.variables,
+      stateCard: meta.chat_metadata.stateCard?.text ?? '',
       group: g,
       relations: meta.chat_metadata.relationGraph?.relations ?? g.relations,
       relationTemplate: meta.chat_metadata.relationGraph?.relationTemplate ?? g.relationTemplate,
@@ -383,5 +468,5 @@ export const useGenerationStore = defineStore('generation', () => {
     await send()
   }
 
-  return { busy, lastPrompt, build, send, sendGroup, regenerate, stop }
+  return { busy, lastPrompt, build, send, sendGroup, regenerate, stop, extractMemoryNow }
 })

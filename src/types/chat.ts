@@ -87,6 +87,30 @@ export interface ChatMetadata {
   chat_id_hash?: number
   /** 1vN 关系图谱 */
   relationGraph?: RelationGraphSnapshot
+  /** 会话记忆 · 状态卡 */
+  stateCard?: StateCard
+}
+
+/**
+ * 会话记忆的「状态卡」。
+ *
+ * 一段由模型**每次整体重写**（而非追加）的现在时快照，描述「此刻是什么样」：
+ * 关系到了哪一步、身处何地、在做什么、有什么未了结的事。
+ *
+ * 整体重写是它不会无限膨胀的唯一原因，也是它能表达「某件事已经不成立了」的原因 ——
+ * 这一点是任何检索式记忆（关键词或向量）都做不到的：检索只会把过去的片段原样捞回来，
+ * 哪怕那句话早已被后续剧情推翻。
+ */
+export interface StateCard {
+  /** 正文。空串表示还没提炼出任何东西 */
+  text: string
+  /** 上次提炼覆盖到的最大 seq。下次从这之后的消息开始读 */
+  throughSeq: number
+  updatedAt: number
+  /** 连续失败次数。>0 时 UI 要让用户看见，否则「记忆悄悄停摆」无从察觉 */
+  failures?: number
+  /** 最后一次失败原因，给 UI 显示 */
+  lastError?: string
 }
 
 export interface ChatMeta {

@@ -131,6 +131,8 @@ export interface BuildPromptInput {
   timedStore?: TimedWorldInfo
   /** 提示词预览等场景置 true：不推进 sticky/cooldown */
   isDryRun?: boolean
+  /** 会话记忆 · 状态卡正文。空/未传则整块不出现 */
+  stateCard?: string
 }
 
 export interface BuiltPrompt {
@@ -305,6 +307,25 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
         }),
       )
     }
+  }
+
+  // 3c. 会话记忆 · 状态卡。
+  // 注册成普通深度注入，零特例：白嫖预算保护（mandatory+injected 先扣）、
+  // 深度语义、以及「预览提示词」面板的展示。
+  // depth 默认 2 —— 比约束提示词(0)靠前、比世界书靠后：它是「此刻的事实」，
+  // 应当压过检索来的历史片段，但不该压过硬规则。
+  const stateCard = input.stateCard?.trim()
+  if (stateCard) {
+    injections.push(
+      makeInjection({
+        key: 'MEMORY_STATE',
+        value: `【会话记忆】\n${sub(stateCard)}`,
+        depth: s.memory?.depth ?? 2,
+        role: EXT_ROLE.SYSTEM,
+        order: 150, // 世界书 100 < 记忆 150 < 约束提示词 200
+        scan: false, // 记忆不参与世界书扫描，避免自己触发自己
+      }),
+    )
   }
 
   // ── 4. 固定块（顺序即最终输出顺序） ──

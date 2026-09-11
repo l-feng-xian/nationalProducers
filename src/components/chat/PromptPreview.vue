@@ -44,6 +44,7 @@ const LABEL: Record<string, string> = {
   chatHistory: '聊天历史',
   groupNudge: '群聊提示',
   jailbreak: '后置指令',
+  memoryState: '会话记忆',
 }
 function labelOf(m: PromptMessage): string {
   const s = m.source ?? ''

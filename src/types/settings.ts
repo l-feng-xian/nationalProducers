@@ -22,6 +22,29 @@ export interface ConstraintPromptConfig {
   order: number
 }
 
+/**
+ * 会话记忆设置。
+ *
+ * 一期只有状态卡（每 N 条消息让模型整体重写一次的现在时快照）。
+ * 向量召回是二期，届时在这里加 `vector.*`。
+ */
+export interface MemorySettings {
+  enabled: boolean
+  /** 距上次提炼新增多少条消息才触发一次。约等于每 intervalMessages/2 轮往返 */
+  intervalMessages: number
+  /** 新对话不足这么多字符就跳过本次提炼，防「连发三个『嗯』就烧一次 API」 */
+  minNewChars: number
+  /** 喂给提炼器的新对话字符上限，**从尾部截断**（保留最新的）。提炼成本的大头 */
+  dialogueCharLimit: number
+  /** 状态卡的深度注入位置。2 = 注入后仍有 2 条真实消息，贴近回复且不破坏前缀缓存 */
+  depth: number
+  /**
+   * 提炼专用模型，空 = 沿用主对话模型。
+   * 主聊用推理模型时把提炼切到普通模型能省一半以上成本。
+   */
+  model: string
+}
+
 export interface ProviderSettings {
   /** 例 https://api.deepseek.com/v1 */
   baseUrl: string
@@ -99,6 +122,7 @@ export interface Settings {
   prompt: PromptSettings
   /** 需求 4 核心 */
   constraint: Record<ChatMode, ConstraintPromptConfig>
+  memory: MemorySettings
   chat: { streamFlushMs: number; sendOnEnter: boolean; showTokens: boolean }
   updatedAt: number
 }
@@ -164,6 +188,14 @@ export function defaultSettings(): Settings {
       wiFormat: '{0}',
       pinExamples: false,
       perMessageTokens: 16,
+    },
+    memory: {
+      enabled: false,
+      intervalMessages: 12,
+      minNewChars: 40,
+      dialogueCharLimit: 3000,
+      depth: 2,
+      model: '',
     },
     constraint: {
       solo: { enabled: true, text: DEFAULT_SOLO_CONSTRAINT, depth: 0, role: 0, order: 200 },

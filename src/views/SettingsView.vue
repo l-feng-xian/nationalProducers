@@ -17,6 +17,7 @@ const toast = useToast()
 const USER_MACRO = '{{user}}'
 
 const wi = computed(() => settings.settings.worldInfo)
+const mem = computed(() => settings.settings.memory)
 const budgetTokens = computed(() => {
   const cap = wi.value.world_info_budget_cap
   const raw = Math.round(
@@ -551,7 +552,85 @@ async function testConnection() {
         </div>
       </section>
 
-      <!-- ⑤ 外观 -->
+      <!-- ⑤ 会话记忆 -->
+      <section class="cbx-card sec">
+        <h3>会话记忆</h3>
+        <p class="note">
+          每积累若干条消息，让模型把这段对话**整体重写**成一段简短的「此刻状态」，
+          注入到每轮提示词里。它描述的是现在时的关系、处境与未了结的事，
+          每次重写都会丢掉不再成立的内容 —— 这是它与「把旧消息捞回来」的根本区别。
+          <strong>会产生额外的 API 调用</strong>，默认关闭。
+        </p>
+
+        <div class="switchrow">
+          <label class="cbx-switch swopt">
+            <input v-model="mem.enabled" type="checkbox" @change="settings.touch()" />
+            <span class="cbx-switch__track" />
+            <span>启用会话记忆</span>
+          </label>
+        </div>
+
+        <template v-if="mem.enabled">
+          <div class="grid2">
+            <label class="cbx-field">
+              <span class="cbx-field__label">每多少条消息提炼一次</span>
+              <input
+                v-model.number="mem.intervalMessages"
+                class="cbx-input"
+                type="number"
+                min="2"
+                max="50"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">新对话字符下限</span>
+              <input
+                v-model.number="mem.minNewChars"
+                class="cbx-input"
+                type="number"
+                min="0"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">喂给提炼的字符上限</span>
+              <input
+                v-model.number="mem.dialogueCharLimit"
+                class="cbx-input"
+                type="number"
+                min="500"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">注入深度</span>
+              <input
+                v-model.number="mem.depth"
+                class="cbx-input"
+                type="number"
+                min="0"
+                @change="settings.touch()"
+              />
+            </label>
+          </div>
+
+          <label class="cbx-field cbx-field--md">
+            <span class="cbx-field__label">提炼专用模型（留空 = 用主对话模型）</span>
+            <input
+              v-model="mem.model"
+              class="cbx-input"
+              :placeholder="settings.settings.provider.model || 'deepseek-chat'"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint">
+              主聊用推理模型时，把提炼切到普通模型能省一半以上成本
+            </span>
+          </label>
+        </template>
+      </section>
+
+      <!-- ⑥ 外观 -->
       <section class="cbx-card sec">
         <h3>外观与聊天</h3>
         <div class="switchrow">
