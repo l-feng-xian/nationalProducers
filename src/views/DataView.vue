@@ -25,13 +25,26 @@ const toast = useToast()
 
 const usage = ref<{ usage: number; quota: number } | null>(null)
 const selectedId = ref('')
-/** 选中会话的向量块数。memIndex.chunks 是 ord 取号器不是块数，必须真查 */
-const chunkCount = ref<number | null>(null)
+/**
+ * 每个会话的向量块数。
+ *
+ * **必须真查**，不能读 memIndex.chunks —— 那个是 ord 取号器不是块数，
+ * 删过中间的块之后两者就不相等了（见 memchunks 仓储的说明）。
+ */
+const chunkCounts = ref<Record<string, number>>({})
 const backupInput = ref<HTMLInputElement | null>(null)
+
+async function loadChunkCounts() {
+  const entries = await Promise.all(
+    chats.list.map(async (c) => [c.id, await memchunksRepo.countByChat(c.id)] as const),
+  )
+  chunkCounts.value = Object.fromEntries(entries)
+}
 
 onMounted(async () => {
   await chats.loadList()
   if (!worlds.loaded) await worlds.load()
+  await loadChunkCounts()
   usage.value = await storageEstimate()
 })
 
@@ -43,23 +56,34 @@ const meta = computed(() => selected.value?.chat_metadata)
 /** 变量以数组形式编辑，避免直接改对象键导致输入框失焦重建 */
 const varRows = ref<{ key: string; value: string }[]>([])
 
-async function select(id: string) {
-  selectedId.value = id
-  chunkCount.value = null
+/** 点同一行再点一次则收起详情 —— 表格本身已经够看，不必强制留着编辑面板 */
+function select(id: string) {
+  selectedId.value = selectedId.value === id ? '' : id
   const m = chats.list.find((c) => c.id === id)
   varRows.value = Object.entries(m?.chat_metadata.variables ?? {}).map(([key, value]) => ({
     key,
     value,
   }))
-  chunkCount.value = await memchunksRepo.countByChat(id)
+  cardText.value = m?.chat_metadata.stateCard?.text ?? ''
 }
 
 async function refreshSelected() {
   await chats.loadList()
-  if (selectedId.value) {
-    chunkCount.value = await memchunksRepo.countByChat(selectedId.value)
-  }
+  await loadChunkCounts()
   usage.value = await storageEstimate()
+}
+
+/** 表格里每行要展示的派生数据。组件里算好，模板保持干净 */
+function rowOf(c: ChatMeta) {
+  const m = c.chat_metadata
+  const t = m.timedWorldInfo
+  return {
+    vars: Object.keys(m.variables ?? {}).length,
+    chunks: chunkCounts.value[c.id] ?? 0,
+    card: m.stateCard?.text?.length ?? 0,
+    timed: Object.keys(t?.sticky ?? {}).length + Object.keys(t?.cooldown ?? {}).length,
+    book: m.worldBookId ? (worlds.byId(m.worldBookId)?.name ?? '（已删除）') : '',
+  }
 }
 
 // ── 标题 ──
@@ -269,26 +293,53 @@ async function doImport(e: Event) {
             <span class="cbx-empty__desc">还没有会话</span>
           </div>
 
-          <div v-else class="split">
-            <div class="picker cbx-scroll">
-              <button
-                v-for="c in chats.list"
-                :key="c.id"
-                class="cbx-nav-item pick"
-                :class="{ 'cbx-nav-item--active': selectedId === c.id }"
-                @click="select(c.id)"
-              >
-                <span class="pick__icon">{{ c.kind === 'group' ? '👥' : '💬' }}</span>
-                <span class="pick__name">{{ c.title }}</span>
-                <span class="pick__meta">{{ c.messageCount }}</span>
-              </button>
+          <template v-else>
+            <!-- 表格必须自己横向滚，绝不能让 body 横向溢出 —— 窄屏上列数放不下 -->
+            <div class="tablewrap cbx-scroll">
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th class="tbl__name">会话</th>
+                    <th>消息</th>
+                    <th>变量</th>
+                    <th>向量块</th>
+                    <th>状态卡</th>
+                    <th>定时</th>
+                    <th>世界书</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="c in chats.list"
+                    :key="c.id"
+                    class="tbl__row"
+                    :class="{ 'tbl__row--on': selectedId === c.id }"
+                    @click="select(c.id)"
+                  >
+                    <td class="tbl__name">
+                      <div class="nm">
+                        <span>{{ c.kind === 'group' ? '👥' : '💬' }}</span>
+                        <span class="tbl__title">{{ c.title }}</span>
+                        <span v-if="c.parentChatId" class="tbl__tag" title="由其它会话分支而来">
+                          分支
+                        </span>
+                      </div>
+                    </td>
+                    <td class="num">{{ c.messageCount }}</td>
+                    <td class="num" :class="{ zero: !rowOf(c).vars }">{{ rowOf(c).vars }}</td>
+                    <td class="num" :class="{ zero: !rowOf(c).chunks }">{{ rowOf(c).chunks }}</td>
+                    <td class="num" :class="{ zero: !rowOf(c).card }">
+                      {{ rowOf(c).card ? `${rowOf(c).card} 字` : '—' }}
+                    </td>
+                    <td class="num" :class="{ zero: !rowOf(c).timed }">{{ rowOf(c).timed }}</td>
+                    <td :class="{ zero: !rowOf(c).book }">{{ rowOf(c).book || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
+            <p class="cbx-field__hint">点任意一行展开编辑；再点一次收起。</p>
 
-            <div v-if="!selected" class="detail detail--empty">
-              <span class="cbx-empty__desc">选一个会话查看它的数据</span>
-            </div>
-
-            <div v-else class="detail">
+            <div v-if="selected" class="detail">
               <label class="cbx-field">
                 <span class="cbx-field__label">会话标题</span>
                 <input
@@ -298,14 +349,8 @@ async function doImport(e: Event) {
                 />
               </label>
 
-              <div class="chips">
-                <span class="chip">{{ selected.messageCount }} 条消息</span>
-                <span class="chip">{{ varRows.length }} 个变量</span>
-                <span class="chip"> 向量块 {{ chunkCount === null ? '…' : chunkCount }} </span>
-                <span class="chip">{{ timedCount }} 条定时效果</span>
-                <span v-if="selected.parentChatId" class="chip">
-                  分支自 seq {{ selected.branchFromSeq }}
-                </span>
+              <div v-if="selected.parentChatId" class="chips">
+                <span class="chip">分支自 seq {{ selected.branchFromSeq }}</span>
               </div>
 
               <!-- 会话变量：增删改查 -->
@@ -370,7 +415,7 @@ async function doImport(e: Event) {
                 <div class="acts">
                   <button
                     class="cbx-btn cbx-btn--ghost sm danger"
-                    :disabled="!chunkCount"
+                    :disabled="!chunkCounts[selected.id]"
                     @click="clearIndex"
                   >
                     清除索引
@@ -433,7 +478,7 @@ async function doImport(e: Event) {
                 </div>
               </div>
             </div>
-          </div>
+          </template>
         </section>
       </div>
     </div>
@@ -463,33 +508,84 @@ async function doImport(e: Event) {
   gap: var(--cbx-space-3);
 }
 
-.split {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: var(--cbx-space-4);
-  align-items: start;
+/* 表格自己横向滚，绝不让 body 溢出 —— 窄屏上 7 列放不下 */
+.tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-md);
 }
-.picker {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  /* 会话可能很多，列表自己滚，别把整页拉长 */
-  max-height: 420px;
-}
-.pick {
+.tbl {
   width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cbx-fs-sm);
+  /* 列宽按内容排，配合 min-width 保证窄屏下是滚动而不是挤成一团 */
+  min-width: 640px;
+}
+.tbl th,
+.tbl td {
+  padding: var(--cbx-space-2) var(--cbx-space-3);
   text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--cbx-border);
+}
+.tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--cbx-bg-secondary);
+  font-size: var(--cbx-fs-xs);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-tertiary);
+}
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
+}
+.tbl__row {
+  cursor: pointer;
+  transition: background var(--cbx-transition);
+}
+@media (hover: hover) {
+  .tbl__row:hover {
+    background: var(--cbx-bg-hover);
+  }
+}
+.tbl__row--on {
+  background: var(--cbx-brand-light);
+}
+.tbl__row--on:hover {
+  background: var(--cbx-brand-light-hover);
+}
+.tbl__name {
+  /* 让名字列吃掉所有多余宽度，其余数字列各自按内容收紧。
+     ⚠️ 不能把 display:flex 加在 <td> 上 —— 那会让它不再是表格单元格、
+     退出列宽计算，表现是名字列被撑出一大段空白。flex 放在内层 .nm 上。 */
+  width: 100%;
+}
+.nm {
+  display: flex;
+  align-items: center;
   gap: var(--cbx-space-2);
 }
-.pick__name {
-  flex: 1;
+.tbl__title {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 260px;
 }
-.pick__meta {
+.tbl__tag {
+  padding: 0 var(--cbx-space-1);
+  border-radius: var(--cbx-radius-xs);
+  background: var(--cbx-bg-tertiary);
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-tertiary);
+}
+/* 数字列右对齐并等宽，扫一眼就能比大小 */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* 空值压淡：一眼看出哪些会话其实没挂数据 */
+.zero {
+  color: var(--cbx-text-placeholder);
 }
 
 .detail {
@@ -594,11 +690,32 @@ async function doImport(e: Event) {
 }
 
 @media (max-width: 767px) {
-  .split {
-    grid-template-columns: 1fr;
+  .tablewrap {
+    /* 窄屏限高，表格内部纵向也能滚，不至于把详情面板推到屏幕外 */
+    max-height: 45vh;
   }
-  .picker {
-    max-height: 200px;
+  /* 窄屏下名字列不能再吃满宽度：640px 的表在 375px 屏上只露得出第一列，
+     右边的数字列一个都看不见，用户根本不知道还能横滑。收窄它让「消息」列
+     探出半个头，横向可滚才有视觉暗示。 */
+  .tbl__name {
+    width: auto;
+    /* 跟着横滑走会丢失「这是哪一行」，钉住首列。
+       钉住的格子必须自带不透明背景 + z-index，否则下面滚过去的数字会透上来。 */
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--cbx-bg);
+  }
+  .tbl__row--on .tbl__name {
+    /* 选中行钉住的首列要跟着变色，否则横滑时首列是白的、行是蓝的 */
+    background: var(--cbx-brand-light);
+  }
+  .tbl thead .tbl__name {
+    /* 表头首列两个方向都钉住，层级要压过只钉一个方向的邻居 */
+    z-index: 2;
+  }
+  .tbl__title {
+    max-width: 120px;
   }
   .varrow__k {
     width: 110px;
