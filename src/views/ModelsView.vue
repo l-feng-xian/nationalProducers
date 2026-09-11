@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import { useModelsStore } from '@/stores/models'
-import { formatBytes } from '@/services/io/backup'
+import { formatBytes, storageEstimate } from '@/services/io/backup'
 
 const models = useModelsStore()
+const usage = ref<{ usage: number; quota: number } | null>(null)
 
-onMounted(() => {
-  void models.refresh()
+async function refreshUsage() {
+  usage.value = await storageEstimate()
+}
+
+onMounted(async () => {
+  await models.refresh()
+  await refreshUsage()
 })
 
 const pct = computed(() => {
@@ -16,10 +22,21 @@ const pct = computed(() => {
   return Math.min(100, Math.round((p.loaded / p.total) * 100))
 })
 
-function statusOf(id: string): 'unknown' | 'ready' | 'missing' {
+type Status = 'unknown' | 'ready' | 'missing'
+function statusOf(id: string): Status {
   const c = models.cached[id]
   if (c === undefined) return 'unknown'
   return c ? 'ready' : 'missing'
+}
+
+/** 下载/删除完都要重新算占用，否则用户看不到自己刚腾出来的空间 */
+async function download(id: string) {
+  await models.download(id)
+  await refreshUsage()
+}
+async function remove(id: string) {
+  await models.remove(id)
+  await refreshUsage()
 }
 </script>
 
@@ -29,7 +46,7 @@ function statusOf(id: string): 'unknown' | 'ready' | 'missing' {
 
     <div class="cbx-scroll body">
       <div class="cbx-form-col col">
-        <section class="cbx-card sec">
+        <section class="cbx-card intro">
           <h3>嵌入模型</h3>
           <p class="note">
             会话记忆的「向量召回」需要一个嵌入模型。模型不随应用发布，要在这里
@@ -38,104 +55,129 @@ function statusOf(id: string): 'unknown' | 'ready' | 'missing' {
             HuggingFace；<strong>下载之后推理全程离线</strong>， 对话内容不会离开这台设备。
           </p>
           <p v-if="models.persisted === false" class="note note--warn">
-            浏览器没有授予持久化存储许可。模型仍然可用，但磁盘空间紧张时可能被系统清掉，
+            ⚠️ 浏览器没有授予持久化存储许可。模型仍然可用，但磁盘空间紧张时可能被系统清掉，
             届时需要重新下载。多用几次本站通常就会自动授予。
           </p>
           <p v-if="models.errors['__check']" class="note note--warn">
-            检查下载状态失败：{{ models.errors['__check'] }}
+            ⚠️ 检查下载状态失败：{{ models.errors['__check'] }}
           </p>
+        </section>
 
-          <div class="list">
-            <article
-              v-for="p in models.presets"
-              :key="p.id"
-              class="row"
-              :class="{ 'row--active': models.activeId === p.id }"
-            >
-              <div class="row__head">
-                <!-- 不要套 .cbx-switch：那个类把原生 input 设成 opacity:0/width:0，
-                     是给带 __track 的开关用的。直接套在单选上会变成「没有任何可见控件」 -->
-                <label class="pick">
-                  <!-- 没下载就不给勾：勾上也只会得到一个静默不工作的状态 -->
-                  <input
-                    class="pick__radio"
-                    type="radio"
-                    name="embed-model"
-                    :value="p.id"
-                    :checked="models.activeId === p.id"
-                    :disabled="statusOf(p.id) !== 'ready'"
-                    @change="models.select(p.id)"
-                  />
-                  <span class="pick__name">{{ p.name }}</span>
-                </label>
-
-                <span v-if="models.activeId === p.id" class="cbx-badge cbx-badge--success">
-                  已启用
-                </span>
-                <span v-else-if="statusOf(p.id) === 'ready'" class="cbx-badge">已下载</span>
-                <span v-else-if="statusOf(p.id) === 'unknown'" class="cbx-badge">检查中…</span>
-                <span v-else class="cbx-badge cbx-badge--warning">未下载</span>
+        <div class="grid">
+          <article
+            v-for="p in models.presets"
+            :key="p.id"
+            class="card"
+            :class="{
+              'card--active': models.activeId === p.id,
+              'card--busy': models.downloadingId === p.id,
+              'card--missing': statusOf(p.id) === 'missing',
+            }"
+          >
+            <header class="card__top">
+              <!-- 标识块放**维度**而不是名字首字母：两个 BGE 的首字母都是 B，
+                   等于没区分；维度 512/768/384 天然各不相同，还顺带是真信息 -->
+              <span class="card__mark" :title="`向量维度 ${p.dim}`">
+                <b>{{ p.dim }}</b>
+                <i>维</i>
+              </span>
+              <div class="card__id">
+                <h4 class="card__name">{{ p.name }}</h4>
+                <code class="card__repo">{{ p.id }}</code>
               </div>
+              <!-- 真单选而非按钮：同一时刻只能启用一个模型，单选把这条语义
+                   直接交给浏览器，键盘与读屏也免费拿到。样式是 appearance:none
+                   自绘的，所有颜色走 token，暗色模式自动跟随 -->
+              <label class="tick" :title="statusOf(p.id) === 'ready' ? '启用此模型' : '需先下载'">
+                <input
+                  class="tick__input"
+                  type="radio"
+                  name="embed-model"
+                  :value="p.id"
+                  :checked="models.activeId === p.id"
+                  :disabled="statusOf(p.id) !== 'ready'"
+                  :aria-label="`启用 ${p.name}`"
+                  @change="models.select(p.id)"
+                />
+                <span class="tick__box" aria-hidden="true" />
+              </label>
+            </header>
 
-              <p class="row__blurb">{{ p.blurb }}</p>
+            <div class="chips">
+              <span v-if="models.activeId === p.id" class="chip chip--ok">✓ 已启用</span>
+              <span v-else-if="statusOf(p.id) === 'ready'" class="chip chip--ready">已下载</span>
+              <span v-else-if="statusOf(p.id) === 'unknown'" class="chip">检查中…</span>
+              <span v-else class="chip chip--warn">未下载</span>
+              <span class="chip">{{ formatBytes(p.bytes) }}</span>
+              <span class="chip">{{ p.mobileFriendly ? '📱 手机可用' : '🖥️ 建议桌面' }}</span>
+            </div>
 
-              <div class="row__meta">
-                <span>{{ formatBytes(p.bytes) }}</span>
-                <span>{{ p.dim }} 维</span>
-                <span>{{ p.mobileFriendly ? '✅ 手机可用' : '⚠️ 建议桌面' }}</span>
-              </div>
+            <p class="card__blurb">{{ p.blurb }}</p>
 
-              <!-- 进度条只在下载这一个模型时出现 -->
+            <p v-if="models.errors[p.id]" class="card__err">{{ models.errors[p.id] }}</p>
+
+            <!-- 进度条与按钮一起钉在卡片底部，同一行的卡片才会对齐 -->
+            <div class="card__foot">
               <div v-if="models.downloadingId === p.id" class="prog">
                 <div class="prog__bar">
                   <div class="prog__fill" :style="{ width: pct + '%' }" />
                 </div>
-                <span class="prog__txt">
-                  {{ pct }}%
-                  <template v-if="models.progress?.file">· {{ models.progress.file }}</template>
+                <span class="prog__txt">{{ pct }}%</span>
+                <span v-if="models.progress?.file" class="prog__file">
+                  {{ models.progress.file }}
                 </span>
               </div>
 
-              <p v-if="models.errors[p.id]" class="note note--warn">{{ models.errors[p.id] }}</p>
-
-              <div class="row__acts">
+              <div class="acts">
                 <button
                   v-if="models.downloadingId === p.id"
                   class="cbx-btn cbx-btn--soft"
                   @click="models.cancel()"
                 >
-                  取消
+                  取消下载
                 </button>
                 <button
                   v-else-if="statusOf(p.id) !== 'ready'"
-                  class="cbx-btn cbx-btn--primary"
+                  class="cbx-btn cbx-btn--primary grow"
                   :disabled="!!models.downloadingId || statusOf(p.id) === 'unknown'"
-                  @click="models.download(p.id)"
+                  @click="download(p.id)"
                 >
-                  下载（{{ formatBytes(p.bytes) }}）
+                  下载 {{ formatBytes(p.bytes) }}
                 </button>
                 <template v-else>
                   <button
                     v-if="models.activeId === p.id"
-                    class="cbx-btn cbx-btn--soft"
+                    class="cbx-btn cbx-btn--soft grow"
                     @click="models.select('')"
                   >
                     停用
                   </button>
+                  <button v-else class="cbx-btn cbx-btn--primary grow" @click="models.select(p.id)">
+                    启用
+                  </button>
                   <button
                     class="cbx-btn cbx-btn--soft danger"
                     :disabled="!!models.downloadingId"
-                    @click="models.remove(p.id)"
+                    @click="remove(p.id)"
                   >
                     删除
                   </button>
                 </template>
               </div>
-            </article>
-          </div>
+            </div>
+          </article>
+        </div>
 
+        <section class="cbx-card intro">
+          <div v-if="usage" class="usage">
+            <span class="usage__label">本站已占用存储</span>
+            <span class="usage__val">{{ formatBytes(usage.usage) }}</span>
+            <span v-if="usage.quota" class="usage__quota">
+              / 可用配额约 {{ formatBytes(usage.quota) }}
+            </span>
+          </div>
           <p class="note">
-            换模型会让已建立的记忆索引全部作废并在后续对话里自动重建 ——
+            换模型会让已建立的记忆索引全部作废，并在后续对话里自动重建 ——
             维度和向量分布都不一样，旧索引无法复用。已有的对话内容不受影响。
           </p>
         </section>
@@ -161,104 +203,281 @@ function statusOf(id: string): 'unknown' | 'ready' | 'missing' {
   flex-direction: column;
   gap: var(--cbx-space-4);
 }
-.sec {
+.intro {
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-3);
 }
 
-.list {
+/* auto-fill + minmax：宽屏自动排成 2~3 列，窄屏退回单列，不用写断点 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--cbx-space-4);
+}
+
+.card {
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-3);
-}
-.row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--cbx-space-2);
-  padding: var(--cbx-space-3);
+  padding: var(--cbx-space-4);
+  background: var(--cbx-bg);
   border: 1px solid var(--cbx-border);
-  border-radius: var(--cbx-radius-md);
+  border-radius: var(--cbx-radius);
+  transition:
+    box-shadow var(--cbx-transition),
+    transform var(--cbx-transition),
+    border-color var(--cbx-transition);
 }
-.row--active {
+/* 选中态用 inset ring 而不是加粗 border —— 后者会让卡片尺寸跳一下 */
+.card--active {
+  border-color: var(--cbx-brand);
+  box-shadow: inset 0 0 0 1px var(--cbx-brand);
+  background: var(--cbx-brand-subtle);
+}
+.card--missing .card__mark {
+  background: var(--cbx-bg-active);
+  color: var(--cbx-text-tertiary);
+}
+.card--busy {
   border-color: var(--cbx-brand);
 }
-.row__head {
-  display: flex;
-  align-items: center;
-  gap: var(--cbx-space-2);
-  flex-wrap: wrap;
+@media (hover: hover) {
+  .card:hover {
+    box-shadow: var(--cbx-shadow-md);
+    transform: translateY(-2px);
+  }
+  .card--active:hover {
+    box-shadow:
+      inset 0 0 0 1px var(--cbx-brand),
+      var(--cbx-shadow-md);
+  }
 }
-.pick {
+
+.card__top {
   display: flex;
-  align-items: center;
-  gap: var(--cbx-space-2);
-  cursor: pointer;
+  align-items: flex-start;
+  gap: var(--cbx-space-3);
 }
-.pick__radio {
-  /* 原生单选默认 13px，手指点不中。accent-color 让它跟随品牌色而不用自绘 */
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--cbx-brand);
-  cursor: pointer;
+.card__mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--cbx-radius-md);
+  background: var(--cbx-brand-light);
+  color: var(--cbx-brand);
+  line-height: 1;
 }
-.pick__radio:disabled {
-  cursor: not-allowed;
+.card__mark b {
+  font-size: var(--cbx-fs-md);
+  font-weight: var(--cbx-fw-bold);
+  font-variant-numeric: tabular-nums;
 }
-.pick:has(.pick__radio:disabled) {
-  cursor: not-allowed;
-  opacity: 0.55;
+.card__mark i {
+  margin-top: 2px;
+  font-size: 10px;
+  font-style: normal;
+  opacity: 0.75;
 }
-.pick__name {
+.card__id {
+  flex: 1;
+  min-width: 0;
+}
+.card__name {
+  margin: 0;
+  font-size: var(--cbx-fs-md);
   font-weight: var(--cbx-fw-medium);
 }
-.row__blurb {
+.card__repo {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--cbx-font-mono);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  /* 仓库 id 比卡片窄不了多少，省略号比换行好看 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 自绘单选：原生样式在暗色下很难看，且默认 13px 点不中 ── */
+.tick {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  /* 24px 的圈 + padding 凑够手指可点的面积 */
+  padding: var(--cbx-space-2);
+  margin: calc(var(--cbx-space-2) * -1);
+  cursor: pointer;
+}
+.tick:has(.tick__input:disabled) {
+  cursor: not-allowed;
+}
+.tick__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.tick__box {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--cbx-border-strong);
+  border-radius: var(--cbx-radius-pill);
+  transition:
+    border-color var(--cbx-transition),
+    background var(--cbx-transition);
+}
+.tick__box::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: var(--cbx-radius-pill);
+  background: var(--cbx-brand-contrast);
+  transform: scale(0);
+  transition: transform var(--cbx-transition);
+}
+.tick__input:checked + .tick__box {
+  border-color: var(--cbx-brand);
+  background: var(--cbx-brand);
+}
+.tick__input:checked + .tick__box::after {
+  transform: scale(1);
+}
+.tick__input:disabled + .tick__box {
+  border-color: var(--cbx-border);
+  background: var(--cbx-bg-disabled);
+}
+/* 原生 outline 没了，焦点环要自己补，否则键盘用户看不出焦点在哪 */
+.tick__input:focus-visible + .tick__box {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cbx-space-2);
+}
+.chip {
+  padding: 2px var(--cbx-space-2);
+  border-radius: var(--cbx-radius-sm);
+  background: var(--cbx-bg-secondary);
+  color: var(--cbx-text-secondary);
+  font-size: var(--cbx-fs-xs);
+  white-space: nowrap;
+}
+.chip--ok {
+  background: var(--cbx-success-light);
+  color: var(--cbx-success);
+  font-weight: var(--cbx-fw-medium);
+}
+.chip--ready {
+  background: var(--cbx-brand-light);
+  color: var(--cbx-brand);
+}
+.chip--warn {
+  background: var(--cbx-warning-light);
+  color: var(--cbx-warning-hover);
+}
+
+.card__blurb {
   margin: 0;
   font-size: var(--cbx-fs-sm);
   color: var(--cbx-text-secondary);
-  line-height: 1.6;
+  line-height: 1.7;
 }
-.row__meta {
-  display: flex;
-  gap: var(--cbx-space-3);
-  flex-wrap: wrap;
-  font-size: var(--cbx-fs-xs);
-  color: var(--cbx-text-tertiary);
-}
-.row__acts {
-  display: flex;
-  gap: var(--cbx-space-2);
-  flex-wrap: wrap;
-}
-.danger {
+.card__err {
+  margin: 0;
+  padding: var(--cbx-space-2);
+  border-radius: var(--cbx-radius-sm);
+  background: var(--cbx-error-light);
   color: var(--cbx-error);
+  font-size: var(--cbx-fs-xs);
+  /* 报错可能很长（比如 JSON 解析失败带一大段），别把卡片撑破 */
+  overflow-wrap: anywhere;
+}
+
+/* margin-top:auto 把底部区推到卡底，同一行卡片的按钮就对齐了 */
+.card__foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-2);
+  margin-top: auto;
 }
 
 .prog {
   display: flex;
   align-items: center;
   gap: var(--cbx-space-2);
+  flex-wrap: wrap;
 }
 .prog__bar {
   flex: 1;
+  min-width: 120px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--cbx-radius-pill);
   background: var(--cbx-bg-tertiary);
   overflow: hidden;
 }
 .prog__fill {
   height: 100%;
+  border-radius: var(--cbx-radius-pill);
   background: var(--cbx-brand);
   transition: width 0.2s linear;
 }
 .prog__txt {
   font-size: var(--cbx-fs-xs);
-  color: var(--cbx-text-tertiary);
-  /* 文件名长短不一，固定最小宽度免得进度条随文字跳动 */
-  min-width: 12ch;
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-secondary);
+  /* 百分比在 1~3 位之间变，固定宽度免得进度条左右抖 */
+  min-width: 4ch;
   text-align: right;
+}
+.prog__file {
+  flex-basis: 100%;
+  font-family: var(--cbx-font-mono);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acts {
+  display: flex;
+  gap: var(--cbx-space-2);
+}
+.grow {
+  flex: 1;
+}
+.danger {
+  color: var(--cbx-error);
+}
+
+.usage {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cbx-space-2);
+  flex-wrap: wrap;
+}
+.usage__label {
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+}
+.usage__val {
+  font-size: var(--cbx-fs-lg);
+  font-weight: var(--cbx-fw-medium);
+}
+.usage__quota {
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
 }
 
 .note {
@@ -268,12 +487,16 @@ function statusOf(id: string): 'unknown' | 'ready' | 'missing' {
   line-height: 1.7;
 }
 .note--warn {
-  color: var(--cbx-warning);
+  color: var(--cbx-warning-hover);
 }
 
 @media (max-width: 767px) {
-  .row__acts .cbx-btn {
-    flex: 1;
+  .grid {
+    /* 手机上 320px 的 minmax 会在 375-16*2 的容器里勉强挤成一列，
+       但某些折叠屏/横屏会挤成两列且每列过窄，直接写死单列更稳 */
+    grid-template-columns: 1fr;
+  }
+  .acts .cbx-btn {
     min-height: var(--cbx-tap-min);
   }
 }
