@@ -9,6 +9,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
+import SyncDialog from '@/components/data/SyncDialog.vue'
 import { useChatsStore } from '@/stores/chats'
 import { useWorldsStore } from '@/stores/worlds'
 import { useToast } from '@/composables/useToast'
@@ -33,6 +34,7 @@ const selectedId = ref('')
  */
 const chunkCounts = ref<Record<string, number>>({})
 const backupInput = ref<HTMLInputElement | null>(null)
+const syncOpen = ref(false)
 
 async function loadChunkCounts() {
   const entries = await Promise.all(
@@ -278,8 +280,12 @@ async function doImport(e: Event) {
           <div class="acts">
             <button class="cbx-btn cbx-btn--ghost" @click="doExport">导出全部数据</button>
             <button class="cbx-btn cbx-btn--ghost" @click="openBackup">导入备份</button>
+            <button class="cbx-btn cbx-btn--ghost" @click="syncOpen = true">二维码同步</button>
             <input ref="backupInput" type="file" accept=".json" hidden @change="doImport" />
           </div>
+          <p class="cbx-field__hint">
+            「二维码同步」把数据直接传给同一局域网里的另一台设备，扫码建立连接，不经过服务器。
+          </p>
         </section>
 
         <section class="cbx-card sec">
@@ -482,6 +488,8 @@ async function doImport(e: Event) {
         </section>
       </div>
     </div>
+
+    <SyncDialog v-if="syncOpen" @close="syncOpen = false" />
   </div>
 </template>
 

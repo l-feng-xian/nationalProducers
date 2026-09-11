@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 /**
  * 认出 onnxruntime-web 的 asyncify 版 wasm（这一支历史上叫过 jsep）。
@@ -80,8 +81,20 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const llmOrigin = env['VITE_LLM_ORIGIN'] || 'https://api.openai.com'
 
+  /**
+   * `npm run dev:lan` 专用：自签证书 + 监听 0.0.0.0，好让手机能连过来联调扫码同步。
+   *
+   * 为什么非要 https：摄像头（getUserMedia）和 WebRTC 都只在**安全上下文**里可用，
+   * 而手机访问 http://192.168.x.x:5173 不算 —— localhost 才算，那只对开发机自己成立。
+   * 手机上会表现为「点了扫码毫无反应」，且控制台在手机上还不好看。
+   *
+   * 刻意只在 lan 模式挂：默认的 npm run dev 一点都不受影响，也不会天天弹证书警告。
+   * 手机首次访问要点一次「继续前往（不安全）」，自签证书就这样。
+   */
+  const lanPlugins = mode === 'lan' ? [basicSsl()] : []
+
   return {
-    plugins: [vue(), vueDevTools(), dropUnusedOrtAsyncifyWasm()],
+    plugins: [vue(), vueDevTools(), dropUnusedOrtAsyncifyWasm(), ...lanPlugins],
     // esnext 是唯一的非协商项：transformers.js v4 用了顶层 await。
     // 官方所有 embedding 示例的 vite.config 也就只有这一行。
     build: { target: 'esnext' },

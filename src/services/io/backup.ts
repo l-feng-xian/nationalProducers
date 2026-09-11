@@ -7,6 +7,7 @@
 
 import { getDb } from '@/db/schema'
 import { toPlain } from '@/utils/plain'
+import { collectBlobRefs } from '@/db/repositories/blobs'
 
 /**
  * ⚠️ `format` 是**数据格式标识，不是应用名**。应用改名（国货优选 → 幕间）时
@@ -60,26 +61,72 @@ function stripMemIndex(row: unknown): unknown {
   return { ...(row as object), chat_metadata: rest }
 }
 
-export async function exportAll(): Promise<Blob> {
+/**
+ * 一次搬运包含哪几类数据。
+ *
+ * `chats` 连带 messages —— 光有会话没有消息是个空壳，分开勾没有意义。
+ * `settings` 单列是因为它会**整包覆盖**对方的接口地址、模型、人设，
+ * 所以扫码同步默认不勾它；整库导出则默认全都要。
+ */
+export interface SyncScope {
+  characters: boolean
+  worldbooks: boolean
+  groups: boolean
+  chats: boolean
+  settings: boolean
+}
+
+export const FULL_SCOPE: SyncScope = {
+  characters: true,
+  worldbooks: true,
+  groups: true,
+  chats: true,
+  settings: true,
+}
+
+/**
+ * 按范围组装备份对象。
+ *
+ * 图片**按可达性挑选**，而不是无脑 `getAll('blobs')`：只勾角色时不该把群头像
+ * 也塞进去。可达集统一走 `collectBlobRefs`，那里同时认 avatarBlobId 和
+ * depthBlobId —— 漏掉深度图会让对方收到的角色卡失去视差效果。
+ */
+export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<BackupFile> {
+  const s: SyncScope = { ...FULL_SCOPE, ...scope }
   const db = await getDb()
-  const blobRecs = await db.getAll('blobs')
+
+  const characters = s.characters ? await db.getAll('characters') : []
+  const groups = s.groups ? await db.getAll('groups') : []
+  const settings = s.settings ? ((await db.get('settings', 'app')) ?? null) : null
+
+  const wanted = collectBlobRefs({
+    characters,
+    groups,
+    persona: settings?.persona,
+  })
   const blobs: BackupFile['blobs'] = []
-  for (const b of blobRecs) {
+  for (const b of await db.getAll('blobs')) {
+    if (!wanted.has(b.id)) continue
     blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
   }
-  const file: BackupFile = {
+
+  return {
     format: 'nationalproducers-backup',
     version: 1,
     exportedAt: Date.now(),
-    settings: (await db.get('settings', 'app')) ?? null,
-    characters: await db.getAll('characters'),
-    worldbooks: await db.getAll('worldbooks'),
-    groups: await db.getAll('groups'),
-    chats: await db.getAll('chats'),
-    messages: await db.getAll('messages'),
+    settings,
+    characters,
+    worldbooks: s.worldbooks ? await db.getAll('worldbooks') : [],
+    groups,
+    chats: s.chats ? await db.getAll('chats') : [],
+    messages: s.chats ? await db.getAll('messages') : [],
     blobs,
     // 注意：secrets（API Key）不导出
   }
+}
+
+export async function exportAll(): Promise<Blob> {
+  const file = await buildBackup()
   return new Blob([JSON.stringify(file)], { type: 'application/json' })
 }
 
@@ -98,6 +145,16 @@ export async function importAll(text: string): Promise<ImportResult> {
   if (file.format !== 'nationalproducers-backup') {
     throw new Error('不是本应用导出的备份文件')
   }
+  return applyBackup(file)
+}
+
+/**
+ * 把备份对象合并进本地库：同 id 覆盖，不清空现有数据。
+ *
+ * 与 importAll 的区别只在于**不做 format 校验**：扫码同步的数据是从对端
+ * 直接构造出来的对象，不经过文件，校验在握手阶段就做过了。
+ */
+export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResult> {
   const db = await getDb()
   const out: ImportResult = {
     characters: 0,
