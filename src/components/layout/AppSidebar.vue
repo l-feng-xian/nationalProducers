@@ -102,6 +102,13 @@ function newChat() {
         🎭 角色
       </RouterLink>
       <RouterLink
+        to="/groups"
+        class="cbx-nav-item"
+        :class="{ 'cbx-nav-item--active': route.path.startsWith('/groups') }"
+      >
+        👥 群聊
+      </RouterLink>
+      <RouterLink
         to="/worlds"
         class="cbx-nav-item"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/worlds') }"

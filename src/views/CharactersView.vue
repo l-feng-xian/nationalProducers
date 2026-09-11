@@ -5,7 +5,6 @@ import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
-import { useGroupsStore } from '@/stores/groups'
 import { useToast } from '@/composables/useToast'
 import { useViewTransition } from '@/composables/useViewTransition'
 import { MORPH_VT_NAME } from '@/constants/app'
@@ -16,13 +15,11 @@ import { blobsRepo } from '@/db/repositories'
 const router = useRouter()
 const chars = useCharactersStore()
 const chats = useChatsStore()
-const groups = useGroupsStore()
 const toast = useToast()
 const fileInput = ref<HTMLInputElement | null>(null)
 
 onMounted(() => {
   if (!chars.loaded) void chars.load()
-  if (!groups.loaded) void groups.load()
 })
 
 const vt = useViewTransition()
@@ -120,7 +117,6 @@ async function onImport(e: Event) {
   <AppTopbar title="角色">
     <template #actions>
       <button class="cbx-btn cbx-btn--ghost" @click="fileInput?.click()">导入角色卡</button>
-      <button class="cbx-btn cbx-btn--ghost" @click="router.push('/groups/new')">＋ 群聊</button>
       <button class="cbx-btn cbx-btn--primary" @click="create">＋ 新建角色</button>
       <input ref="fileInput" type="file" accept=".png,.json" multiple hidden @change="onImport" />
     </template>
@@ -161,22 +157,6 @@ async function onImport(e: Event) {
         </div>
       </div>
     </div>
-
-    <template v-if="groups.items.length">
-      <div class="cbx-group-label">群聊</div>
-      <div class="glist">
-        <div
-          v-for="g in groups.items"
-          :key="g.id"
-          class="cbx-nav-item grow"
-          @click="router.push(`/groups/${g.id}`)"
-        >
-          <span class="grow__icon">👥</span>
-          <span class="grow__name">{{ g.name }}</span>
-          <span class="grow__meta">{{ g.members.length }} 位成员</span>
-        </div>
-      </div>
-    </template>
   </div>
 </template>
 
@@ -225,20 +205,6 @@ async function onImport(e: Event) {
   height: 32px;
   padding: 0 var(--cbx-space-2);
   font-size: var(--cbx-fs-xs);
-}
-
-.glist {
-  margin-top: var(--cbx-space-2);
-}
-.grow__icon {
-  font-size: var(--cbx-fs-lg);
-}
-.grow__name {
-  flex: 1;
-}
-.grow__meta {
-  font-size: var(--cbx-fs-xs);
-  color: var(--cbx-text-tertiary);
 }
 
 @media (max-width: 767px) {

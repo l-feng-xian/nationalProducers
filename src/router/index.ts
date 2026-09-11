@@ -19,6 +19,13 @@ const router = createRouter({
       name: 'character-edit',
       component: () => import('@/views/CharacterEditView.vue'),
     },
+    // 必须排在 '/groups/:id' 之前。:id 是必填段，`/groups` 本身匹配不上它，
+    // 但顺序写反了以后再加可选段（:id?）就会被前者吞掉
+    {
+      path: '/groups',
+      name: 'groups',
+      component: () => import('@/views/GroupsView.vue'),
+    },
     {
       path: '/groups/:id',
       name: 'group-edit',

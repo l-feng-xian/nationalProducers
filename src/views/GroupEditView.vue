@@ -72,7 +72,8 @@ onMounted(async () => {
   const found = gid ? groups.byId(gid) : undefined
   if (!found) {
     toast.error('群聊不存在')
-    await router.push('/characters')
+    // 群聊已经有独立的 tab 页了，找不到时回群聊列表，别再甩到角色页
+    await router.push('/groups')
     return
   }
   model.value = toPlain(found)
