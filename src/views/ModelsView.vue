@@ -42,7 +42,20 @@ async function remove(id: string) {
 
 <template>
   <div class="page">
-    <AppTopbar title="模型管理" />
+    <AppTopbar title="模型管理">
+      <template #actions>
+        <!-- 插槽内容在父组件作用域编译，所以本文件的 scoped 样式对它有效 -->
+        <span
+          v-if="usage"
+          class="usage"
+          :title="`本站已占用 ${formatBytes(usage.usage)}${usage.quota ? `，可用配额约 ${formatBytes(usage.quota)}` : ''}`"
+        >
+          <span class="usage__label">已占用</span>
+          <strong class="usage__val">{{ formatBytes(usage.usage) }}</strong>
+          <span v-if="usage.quota" class="usage__quota">/ {{ formatBytes(usage.quota) }}</span>
+        </span>
+      </template>
+    </AppTopbar>
 
     <div class="cbx-scroll body">
       <div class="cbx-form-col col">
@@ -53,6 +66,10 @@ async function remove(id: string) {
             <strong>手动下载一次</strong>，下载完再勾选启用才会真正生效 ——
             没有勾选的模型不会产生任何流量。 下载来自
             HuggingFace；<strong>下载之后推理全程离线</strong>， 对话内容不会离开这台设备。
+          </p>
+          <p class="note">
+            换模型会让已建立的记忆索引全部作废，并在后续对话里自动重建 ——
+            维度和向量分布都不一样，旧索引无法复用。已有的对话内容不受影响。
           </p>
           <p v-if="models.persisted === false" class="note note--warn">
             ⚠️ 浏览器没有授予持久化存储许可。模型仍然可用，但磁盘空间紧张时可能被系统清掉，
@@ -167,20 +184,6 @@ async function remove(id: string) {
             </div>
           </article>
         </div>
-
-        <section class="cbx-card intro">
-          <div v-if="usage" class="usage">
-            <span class="usage__label">本站已占用存储</span>
-            <span class="usage__val">{{ formatBytes(usage.usage) }}</span>
-            <span v-if="usage.quota" class="usage__quota">
-              / 可用配额约 {{ formatBytes(usage.quota) }}
-            </span>
-          </div>
-          <p class="note">
-            换模型会让已建立的记忆索引全部作废，并在后续对话里自动重建 ——
-            维度和向量分布都不一样，旧索引无法复用。已有的对话内容不受影响。
-          </p>
-        </section>
       </div>
     </div>
   </div>
@@ -461,23 +464,36 @@ async function remove(id: string) {
   color: var(--cbx-error);
 }
 
+/* 顶栏里的存储占用。不换行、不挤压标题 —— 顶栏空间有限，宁可让它先消失 */
 .usage {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  gap: var(--cbx-space-2);
-  flex-wrap: wrap;
-}
-.usage__label {
-  font-size: var(--cbx-fs-sm);
-  color: var(--cbx-text-secondary);
-}
-.usage__val {
-  font-size: var(--cbx-fs-lg);
-  font-weight: var(--cbx-fw-medium);
-}
-.usage__quota {
+  gap: var(--cbx-space-1);
+  flex-shrink: 0;
+  padding: var(--cbx-space-1) var(--cbx-space-3);
+  border-radius: var(--cbx-radius-pill);
+  background: var(--cbx-bg-secondary);
+  white-space: nowrap;
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-tertiary);
+}
+.usage__label {
+  color: var(--cbx-text-tertiary);
+}
+.usage__val {
+  font-size: var(--cbx-fs-sm);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 767px) {
+  /* 375px 的顶栏里已经有「☰ + 模型管理」，再塞下配额就会把标题挤成省略号。
+     完整文案留在 title 属性里，长按仍看得到 */
+  .usage__quota,
+  .usage__label {
+    display: none;
+  }
 }
 
 .note {
