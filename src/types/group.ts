@@ -14,6 +14,26 @@ export type GroupGenerationMode = (typeof group_generation_mode)[keyof typeof gr
 export const DEFAULT_AUTO_MODE_DELAY = 5
 
 /**
+ * 关系图谱里代表「用户自己」的节点 id。
+ *
+ * 用户不是角色、没有 characterId，但沉浸式群聊里「我和她是什么关系」和
+ * 「她和他是什么关系」同样重要。用一个不可能与 UUID 冲突的哨兵串把用户接进
+ * **同一套**有向边里，关系渲染、画布节点、成员移除清理全都不需要开特例分支。
+ */
+export const USER_NODE_ID = '__user__'
+
+/**
+ * 群聊内用户扮演的身份。
+ *
+ * 两项都留空 = 沿用全局人设。做成群聊级而非会话级，是因为它和关系图谱是一对：
+ * 同一个群聊里「我是谁」和「我跟她们什么关系」必须一起成立，分开配会互相矛盾。
+ */
+export interface GroupPersona {
+  name: string
+  description: string
+}
+
+/**
  * 关系图谱的**有向**边（需求 3）。
  * A→B 与 B→A 是两条独立的边，可以完全不同
  * （例：A→B「暗恋」，B→A「当成妹妹」）。
@@ -58,6 +78,8 @@ export interface Group {
   layout: Record<string, GroupNodeLayout>
   /** 关系行模板，支持 {{from}} {{to}} {{label}} {{desc}} */
   relationTemplate: string
+  /** 本群聊里用户扮演的身份，留空则沿用全局人设 */
+  persona: GroupPersona
   /**
    * false = 照搬 ST（只用当前发言者的世界书）；
    * true  = 并集去重所有成员的世界书。
@@ -87,9 +109,26 @@ export function emptyGroup(id: string, name = '新群聊'): Group {
     relations: [],
     layout: {},
     relationTemplate: DEFAULT_RELATION_TEMPLATE,
+    persona: { name: '', description: '' },
     mergeMemberBooks: false,
     createdAt: now,
     updatedAt: now,
+  }
+}
+
+/**
+ * 解析本轮实际生效的用户身份：群聊级覆盖优先，否则回落到全局人设。
+ *
+ * 用 `|| fallback` 而不是 `?? fallback`：空串也要回落。否则用户把名字清空后
+ * `{{user}}` 会渲染成空，提示词里出现「 对 她：师徒」这种断头行。
+ */
+export function resolvePersona(
+  g: Group | undefined,
+  fallback: { name: string; description: string },
+): { name: string; description: string } {
+  return {
+    name: g?.persona?.name?.trim() || fallback.name,
+    description: g?.persona?.description?.trim() || fallback.description,
   }
 }
 

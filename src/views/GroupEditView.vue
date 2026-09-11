@@ -12,9 +12,12 @@ import { toPlain } from '@/utils/plain'
 import {
   group_activation_strategy,
   group_generation_mode,
+  resolvePersona,
+  USER_NODE_ID,
   type Group,
   type GroupRelation,
 } from '@/types/group'
+import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
 const router = useRouter()
@@ -53,6 +56,27 @@ const memberChars = computed(() =>
     .map((id) => chars.byId(id))
     .filter((c): c is NonNullable<typeof c> => !!c),
 )
+
+const settings = useSettingsStore()
+
+/** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
+const USER_MACRO = '{{user}}'
+
+/** 本群聊实际生效的「我」—— 群聊留空就显示全局人设的值，让用户看得见回落结果 */
+const effectivePersona = computed(() =>
+  resolvePersona(model.value ?? undefined, settings.settings.persona),
+)
+
+/**
+ * 关系图谱的节点集合 = 用户自己 + 全体成员。
+ *
+ * 用户排在最前：他是玩家视角的锚点，画布初始布局按顺序排圆周，放第一个
+ * 位置最稳定。列表视图的下拉也跟着这个顺序，「我」永远是第一项。
+ */
+const relationNodes = computed(() => [
+  { id: USER_NODE_ID, name: effectivePersona.value.name, isUser: true },
+  ...memberChars.value.map((c) => ({ id: c.id, name: c.data.name, isUser: false })),
+])
 const candidates = computed(() =>
   chars.items.filter((c) => !(model.value?.members ?? []).includes(c.id)),
 )
@@ -125,9 +149,11 @@ function move(id: string, dir: -1 | 1) {
 
 function addRelation(from?: string, to?: string) {
   const m = model.value
-  if (!m || memberChars.value.length < 2) return
-  const f = from ?? memberChars.value[0]?.id
-  const t = to ?? memberChars.value[1]?.id
+  // 节点集合含「我」，所以 1 个成员就够凑出一条边
+  if (!m || relationNodes.value.length < 2) return
+  // 默认取「我 → 第一个成员」：沉浸式群聊里用户最想先定的就是自己跟谁什么关系
+  const f = from ?? relationNodes.value[0]?.id
+  const t = to ?? relationNodes.value[1]?.id
   if (!f || !t) return
   const r: GroupRelation = { id: crypto.randomUUID(), from: f, to: t, label: '' }
   m.relations.push(r)
@@ -175,14 +201,14 @@ async function removeGroup() {
   if (!confirm(`确定删除群聊「${m.name}」？其全部对话也会一并删除。`)) return
   await groups.remove(m.id)
   toast.success('已删除')
-  await router.push('/characters')
+  await router.push('/groups')
 }
 </script>
 
 <template>
   <AppTopbar :title="model?.name || '群聊'">
     <template #actions>
-      <button class="cbx-btn cbx-btn--ghost" @click="router.push('/characters')">返回</button>
+      <button class="cbx-btn cbx-btn--ghost" @click="router.push('/groups')">返回</button>
       <button class="cbx-btn cbx-btn--soft" @click="startChat">开始群聊</button>
       <button class="cbx-btn cbx-btn--primary" @click="save">保存</button>
     </template>
@@ -227,6 +253,42 @@ async function removeGroup() {
 
       <!-- 成员 -->
       <section v-show="tab === 'members'" class="pane">
+        <!-- 「我」也是这场戏里的一个参与者，所以放在成员列表最上面而不是塞进设置页：
+             全局人设是跨所有对话的默认值，这里配的是**只在这个群聊里**的身份 -->
+        <div class="me">
+          <div class="me__head">
+            <span class="me__icon">🙋</span>
+            <span class="cbx-field__label">我扮演的角色</span>
+            <span v-if="!model.persona.name && !model.persona.description" class="cbx-badge">
+              沿用全局人设
+            </span>
+          </div>
+          <p class="cbx-field__hint">
+            只作用于本群聊。留空则沿用设置里的全局人设（当前为「{{
+              settings.settings.persona.name
+            }}」）。这里填的名字就是提示词里的
+            {{ USER_MACRO }}，也会作为关系图谱里「我」这个节点的名字。
+          </p>
+          <input
+            v-model="model.persona.name"
+            class="cbx-input"
+            :placeholder="settings.settings.persona.name || '我'"
+            @change="save"
+          />
+          <textarea
+            v-model="model.persona.description"
+            class="cbx-textarea me__desc"
+            rows="3"
+            :placeholder="
+              settings.settings.persona.description ||
+              '你在这个场景里是谁、什么身份、和大家什么渊源'
+            "
+            @change="save"
+          />
+        </div>
+
+        <div class="cbx-divider" />
+
         <div v-if="!memberChars.length" class="cbx-empty">
           <span class="cbx-empty__desc">还没有成员，从下面添加</span>
         </div>
@@ -303,7 +365,7 @@ async function removeGroup() {
                就是添加关系，再摆个按钮反而多余。
                列表视图没有连线这个动作，必须保留，否则列表用户根本没法新增。 -->
           <button
-            v-if="relView === 'list' && memberChars.length >= 2"
+            v-if="relView === 'list' && relationNodes.length >= 2"
             class="cbx-btn cbx-btn--soft"
             @click="addRelation()"
           >
@@ -311,14 +373,16 @@ async function removeGroup() {
           </button>
         </div>
 
-        <div v-if="memberChars.length < 2" class="cbx-empty">
-          <span class="cbx-empty__desc">至少需要 2 个成员才能配置关系</span>
+        <!-- 门槛按**节点数**算而不是成员数：加进「我」之后，1 个角色就能配
+             「我 对 她：师徒」，不必等到凑够两个角色 -->
+        <div v-if="relationNodes.length < 2" class="cbx-empty">
+          <span class="cbx-empty__desc">至少添加 1 个成员才能配置关系</span>
         </div>
 
         <template v-else>
           <RelationGraph
             v-if="relView === 'graph'"
-            :members="memberChars.map((c) => ({ id: c.id, name: c.data.name }))"
+            :members="relationNodes"
             :relations="model.relations"
             :layout="model.layout"
             @update:layout="onLayout"
@@ -334,16 +398,16 @@ async function removeGroup() {
             </div>
             <div v-for="r in model.relations" :key="r.id" class="rel">
               <select v-model="r.from" class="cbx-input rel__who" @change="save">
-                <option v-for="c in memberChars" :key="c.id" :value="c.id">
-                  {{ c.data.name }}
+                <option v-for="n in relationNodes" :key="n.id" :value="n.id">
+                  {{ n.isUser ? `${n.name}（我）` : n.name }}
                 </option>
               </select>
               <button class="cbx-icon-btn tiny" title="交换方向" @click="swapDirection(r)">
                 ⇄
               </button>
               <select v-model="r.to" class="cbx-input rel__who" @change="save">
-                <option v-for="c in memberChars" :key="c.id" :value="c.id">
-                  {{ c.data.name }}
+                <option v-for="n in relationNodes" :key="n.id" :value="n.id">
+                  {{ n.isUser ? `${n.name}（我）` : n.name }}
                 </option>
               </select>
               <input
@@ -476,11 +540,29 @@ async function removeGroup() {
   margin-bottom: var(--cbx-space-2);
 }
 .rel__who {
-  width: 110px;
+  /* 加进「我」之后选项里会出现「名字（我）」，110px 装不下，放宽一档 */
+  width: 132px;
   flex-shrink: 0;
 }
 .rel__label {
   flex: 1;
+}
+
+.me {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-2);
+}
+.me__head {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+}
+.me__icon {
+  font-size: var(--cbx-fs-lg);
+}
+.me__desc {
+  resize: vertical;
 }
 .mt {
   margin-top: var(--cbx-space-3);

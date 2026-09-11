@@ -40,7 +40,7 @@ import {
 } from '@/types/prompt'
 import type { Character } from '@/types/character'
 import type { ChatMessage, TimedWorldInfo } from '@/types/chat'
-import type { Group, GroupRelation } from '@/types/group'
+import { resolvePersona, USER_NODE_ID, type Group, type GroupRelation } from '@/types/group'
 import type { Settings } from '@/types/settings'
 import type { GenerationTrigger } from '@/types/worldinfo'
 
@@ -174,13 +174,16 @@ function roleByName(r: string): 0 | 1 | 2 {
 /** 构建宏求值环境 */
 export function buildMacroEnv(input: BuildPromptInput, relationsText: string): MacroEnv {
   const s = input.settings
+  // 群聊可以覆盖用户身份（{{user}} 与 {{persona}} 都跟着走）。
+  // 只有 isGroup 时才看 group，否则 1v1 会被某个群聊的设定污染
+  const p = resolvePersona(input.isGroup ? input.group : undefined, s.persona)
   return {
-    user: s.persona.name,
+    user: p.name,
     char: input.speaker.name,
     groupMembers: input.members.map((m) => m.name),
     mutedMembers: input.members.filter((m) => input.mutedIds.includes(m.id)).map((m) => m.name),
     card: cardFieldsOf(input.speaker.char),
-    persona: s.persona.description,
+    persona: p.description,
     relations: relationsText,
     chatId: input.chatId,
     chatIdHash: input.chatIdHash,
@@ -208,7 +211,12 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const count = input.count ?? estimateTokens
 
   // ── 1. 关系图谱文本（1vN），供 {{relations}} ──
+  const persona = resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
   const nameOf = new Map(input.members.map((m) => [m.id, m.name]))
+  // 用户也是关系图谱里的一个节点。少了这一行，「我 对 她：师徒」这条边会因为
+  // nameOf 查不到名字被 renderRelations **整行静默丢弃** —— 不报错，
+  // 只是用户配好的关系压根没进提示词
+  nameOf.set(USER_NODE_ID, persona.name)
   const relationsText = input.relations?.length
     ? renderRelations({
         relations: input.relations,
@@ -241,7 +249,7 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     personality: joined ? joined.personality : base(c.data.personality),
     scenario: joined ? joined.scenario : base(c.data.scenario),
     mesExample: joined ? joined.mesExample : base(c.data.mes_example),
-    persona: base(s.persona.description),
+    persona: base(persona.description),
     systemPrompt: base(c.data.system_prompt),
     postHistory: base(c.data.post_history_instructions),
     depthPrompt: base(c.data.extensions.depth_prompt?.prompt ?? ''),

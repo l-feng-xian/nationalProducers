@@ -19,7 +19,8 @@ import type { GroupNodeLayout, GroupRelation } from '@/types/group'
  *    不处理就会永久卡在拖拽状态
  */
 const props = defineProps<{
-  members: { id: string; name: string }[]
+  /** 参与关系的节点。用户自己也是其中一个（isUser），只是没有 characterId */
+  members: { id: string; name: string; isUser?: boolean }[]
   relations: GroupRelation[]
   layout: Record<string, GroupNodeLayout>
 }>()
@@ -106,7 +107,12 @@ onUnmounted(() => {
 watch(() => [props.members.map((m) => m.id).join(','), props.layout], syncLayout, { deep: true })
 
 const nodes = computed(() =>
-  props.members.map((m) => ({ id: m.id, name: m.name, ...(pos.value[m.id] ?? { x: 0, y: 0 }) })),
+  props.members.map((m) => ({
+    id: m.id,
+    name: m.name,
+    isUser: !!m.isUser,
+    ...(pos.value[m.id] ?? { x: 0, y: 0 }),
+  })),
 )
 
 /** 只画两端都还在的边 */
@@ -365,7 +371,12 @@ const ghost = computed(() => {
       <path v-if="ghost" :d="ghost" class="edge--ghost" />
 
       <!-- 节点 -->
-      <g v-for="n in nodes" :key="n.id" :class="{ 'node--on': selected === n.id }" class="node">
+      <g
+        v-for="n in nodes"
+        :key="n.id"
+        :class="{ 'node--on': selected === n.id, 'node--me': n.isUser }"
+        class="node"
+      >
         <circle :cx="n.x" :cy="n.y" :r="NODE_R" class="node__ring" />
         <text :x="n.x" :y="n.y + 7" text-anchor="middle" class="node__initial">
           {{ n.name.slice(0, 1) }}
@@ -473,6 +484,16 @@ const ghost = computed(() => {
 .node--on .node__ring {
   stroke: var(--cbx-brand);
   stroke-width: 3;
+}
+/* 「我」这个节点要一眼认出来 —— 画布上全是角色，混进去就分不清哪个是自己 */
+.node--me .node__ring {
+  fill: var(--cbx-brand-light);
+  stroke: var(--cbx-brand);
+  stroke-dasharray: 4 3;
+}
+.node--me .node__initial,
+.node--me .node__label {
+  fill: var(--cbx-brand);
 }
 .node__initial {
   fill: var(--cbx-text-secondary);
