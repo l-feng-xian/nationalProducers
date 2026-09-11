@@ -17,6 +17,7 @@ import {
   type DownloadHandle,
 } from '@/services/vector/manager'
 import { EMBED_PRESETS, findPreset, toSpec } from '@/services/vector/presets'
+import { DEPTH_PRESETS, DEPTH_TASK, findDepthPreset } from '@/services/depth/presets'
 import { useSettingsStore } from './settings'
 import * as memRuntime from '@/services/memory/runtime'
 
@@ -28,6 +29,15 @@ export interface DownloadState {
 
 export const useModelsStore = defineStore('models', () => {
   const presets = EMBED_PRESETS
+  const depthPresets = DEPTH_PRESETS
+
+  /**
+   * 每个模型属于哪一类任务。下载/查缓存/删除都必须带上它 ——
+   * transformers 的 is_pipeline_cached 是按 task 决定要查哪些文件的，
+   * 用错 task 查深度模型会得到「没下载」，然后用户怎么点下载都没反应。
+   */
+  const taskOf = (id: string) =>
+    findDepthPreset(id) ? (DEPTH_TASK as 'depth-estimation') : undefined
   /** id → 是否已完整下载。未查过时为 undefined，UI 要能区分「未知」和「没有」 */
   const cached = ref<Record<string, boolean | undefined>>({})
   const checking = ref(false)
@@ -40,14 +50,23 @@ export const useModelsStore = defineStore('models', () => {
 
   const settings = useSettingsStore()
   const activeId = computed(() => settings.settings.memory.vector.modelId)
+  const activeDepthId = computed(() => settings.settings.depth.modelId)
 
   async function refresh() {
     checking.value = true
     try {
-      cached.value = await checkCached(presets.map((p) => p.id))
+      // 两类模型要分别按各自的 task 去查，不能合成一次调用
+      const [emb, dep] = await Promise.all([
+        checkCached(presets.map((p) => p.id)),
+        checkCached(
+          depthPresets.map((p) => p.id),
+          DEPTH_TASK as 'depth-estimation',
+        ),
+      ])
+      cached.value = { ...emb, ...dep }
     } catch (e) {
       // 查不出来时把全部置为 false 而不是留空：留空会让按钮一直是「检查中」的样子
-      cached.value = Object.fromEntries(presets.map((p) => [p.id, false]))
+      cached.value = Object.fromEntries([...presets, ...depthPresets].map((p) => [p.id, false]))
       errors.value = { ...errors.value, __check: errText(e) }
     } finally {
       checking.value = false
@@ -55,7 +74,7 @@ export const useModelsStore = defineStore('models', () => {
   }
 
   async function download(id: string) {
-    const p = findPreset(id)
+    const p = findPreset(id) ?? findDepthPreset(id)
     if (!p || downloadingId.value) return
     const next = { ...errors.value }
     delete next[id]
@@ -66,9 +85,15 @@ export const useModelsStore = defineStore('models', () => {
 
     downloadingId.value = id
     progress.value = { loaded: 0, total: p.bytes, file: '' }
-    handle = downloadModel(toSpec(p), (pr) => {
-      progress.value = pr
-    })
+    // 深度模型没有 pooling 这类嵌入专属字段，toSpec 只在嵌入预设上有意义
+    const spec = 'pooling' in p ? toSpec(p) : { id: p.id, pooling: 'cls' as const }
+    handle = downloadModel(
+      spec,
+      (pr) => {
+        progress.value = pr
+      },
+      taskOf(id),
+    )
     try {
       await handle.promise
       cached.value = { ...cached.value, [id]: true }
@@ -91,8 +116,9 @@ export const useModelsStore = defineStore('models', () => {
   async function remove(id: string) {
     // 删掉正在用的模型就必须同时取消启用，否则设置里留着一个指向空气的 id
     if (activeId.value === id) await select('')
+    if (activeDepthId.value === id) await selectDepth('')
     try {
-      await removeModel(id)
+      await removeModel(id, taskOf(id))
     } catch (e) {
       errors.value = { ...errors.value, [id]: errText(e) }
     }
@@ -116,8 +142,24 @@ export const useModelsStore = defineStore('models', () => {
     await settings.flushNow()
   }
 
+  /**
+   * 启用/停用深度模型。选中即启用，空串即停用。
+   *
+   * 它只在**上传角色图片时**起作用 —— 启用之后新上传的立绘会顺带生成深度图；
+   * 已经存在的立绘不会被追溯生成（那会是一次几十秒的批量 CPU 占用），
+   * 需要的话去角色编辑页单独点生成。
+   */
+  async function selectDepth(id: string) {
+    if (id && !cached.value[id]) return
+    settings.settings.depth.modelId = id
+    await settings.flushNow()
+  }
+
   return {
     presets,
+    depthPresets,
+    activeDepthId,
+    selectDepth,
     cached,
     checking,
     downloadingId,

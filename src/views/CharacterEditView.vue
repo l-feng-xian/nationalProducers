@@ -13,6 +13,8 @@ import { blobsRepo } from '@/db/repositories'
 import { invalidateObjectUrl } from '@/composables/useObjectUrl'
 import { useViewTransition } from '@/composables/useViewTransition'
 import { useMorphTarget } from '@/composables/useMorphTarget'
+import { useSettingsStore } from '@/stores/settings'
+import { generateDepth } from '@/services/depth/generate'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
 import { downloadBlob, safeFileName } from '@/utils/download'
@@ -29,6 +31,10 @@ const toast = useToast()
 
 /** 模板里要显示字面的宏，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const CHAR_MACRO = '{{char}}'
+
+const settings = useSettingsStore()
+const depthBusy = ref(false)
+const depthPct = ref(0)
 
 const model = ref<Character | null>(null)
 const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced'>('basic')
@@ -99,14 +105,66 @@ async function onAvatar(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   if (!f || !model.value) return
   const old = model.value.avatarBlobId
+  const oldDepth = model.value.depthBlobId
   const id = await blobsRepo.put(f)
   model.value.avatarBlobId = id
+  // 深度图和立绘是一对，换了图旧深度图必须立刻作废 ——
+  // 留着会渲染出和新图对不上的视差，比没有视差更糟
+  model.value.depthBlobId = undefined
   if (old) {
     invalidateObjectUrl(old)
     await blobsRepo.remove(old)
   }
+  if (oldDepth) {
+    invalidateObjectUrl(oldDepth)
+    await blobsRepo.remove(oldDepth)
+  }
   await save()
   ;(e.target as HTMLInputElement).value = ''
+
+  // 图片已经落盘了，深度图是**附加增强**：失败只是没有视差，绝不能回滚换图
+  await makeDepth(f)
+}
+
+/**
+ * 生成并保存深度图。模型没启用就直接跳过 —— 这是「勾选启用才生成」的执行点。
+ *
+ * 任何失败都只弹一条提示，不抛、不回滚：立绘已经换好了，视差有没有是另一回事。
+ */
+async function makeDepth(source: Blob) {
+  const m = model.value
+  const modelId = settings.settings.depth.modelId
+  if (!m || !modelId) return
+  depthBusy.value = true
+  depthPct.value = 0
+  try {
+    const { promise } = generateDepth(source, modelId, (loaded, total) => {
+      if (total) depthPct.value = Math.round((loaded / total) * 100)
+    })
+    const res = await promise
+    const blobId = await blobsRepo.put(res.blob)
+    m.depthBlobId = blobId
+    await save()
+    toast.success(`深度图已生成（${res.width}×${res.height}，${(res.ms / 1000).toFixed(1)} 秒）`)
+  } catch (err) {
+    toast.error(`深度图生成失败：${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    depthBusy.value = false
+  }
+}
+
+/** 给已有立绘补生成。上传时会自动跑，这个按钮是给「先有图、后启用模型」的情况兜底 */
+async function regenDepth() {
+  const m = model.value
+  if (!m?.avatarBlobId || depthBusy.value) return
+  const blob = await blobsRepo.get(m.avatarBlobId)
+  if (!blob) return
+  const oldDepth = m.depthBlobId
+  await makeDepth(blob)
+  if (oldDepth && m.depthBlobId !== oldDepth) {
+    invalidateObjectUrl(oldDepth)
+    await blobsRepo.remove(oldDepth)
+  }
 }
 
 async function startChat() {
@@ -233,10 +291,29 @@ async function remove() {
               card
               :style="{ viewTransitionName: MORPH_VT_NAME }"
             />
-            <button class="cbx-btn cbx-btn--ghost full" @click="avatarInput?.click()">
+            <button
+              class="cbx-btn cbx-btn--ghost full"
+              :disabled="depthBusy"
+              @click="avatarInput?.click()"
+            >
               更换图片
             </button>
             <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatar" />
+
+            <!-- 深度图状态。只有启用了深度模型才出现，没启用时这块完全不存在 -->
+            <div v-if="settings.settings.depth.modelId && model.avatarBlobId" class="depth">
+              <span v-if="depthBusy" class="depth__state">
+                正在生成深度图…{{ depthPct ? ` ${depthPct}%` : '' }}
+              </span>
+              <template v-else-if="model.depthBlobId">
+                <span class="depth__state depth__state--ok">✓ 已有深度图 · 卡片可视差</span>
+                <button class="cbx-btn cbx-btn--ghost tiny" @click="regenDepth">重新生成</button>
+              </template>
+              <template v-else>
+                <span class="depth__state">这张图还没有深度图</span>
+                <button class="cbx-btn cbx-btn--soft tiny" @click="regenDepth">生成深度图</button>
+              </template>
+            </div>
           </div>
           <div class="fields">
             <label class="cbx-field cbx-field--md">
@@ -421,6 +498,26 @@ async function remove() {
 }
 .full {
   width: 100%;
+}
+.depth {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--cbx-space-1);
+  margin-top: var(--cbx-space-2);
+}
+.depth__state {
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  text-align: center;
+}
+.depth__state--ok {
+  color: var(--cbx-success);
+}
+.tiny {
+  height: 28px;
+  padding: 0 var(--cbx-space-2);
+  font-size: var(--cbx-fs-xs);
 }
 .fields {
   flex: 1;

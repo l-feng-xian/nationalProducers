@@ -13,7 +13,7 @@
  * 纯 service：不 import vue/pinia。
  */
 
-import type { InMsg, OutMsg } from './embedder.worker'
+import type { InMsg, ManagedTask, OutMsg } from './embedder.worker'
 import type { ModelSpec } from './presets'
 
 const CHECK_TIMEOUT = 30_000
@@ -95,11 +95,17 @@ function once<T>(
   }
 }
 
-/** 查这些模型是否已完整下载。查不出来一律当作「没下载」 */
-export async function checkCached(ids: string[]): Promise<Record<string, boolean>> {
+/**
+ * 查这些模型是否已完整下载。查不出来一律当作「没下载」。
+ * `task` 缺省是嵌入；管深度模型时传 'depth-estimation'。
+ */
+export async function checkCached(
+  ids: string[],
+  task?: ManagedTask,
+): Promise<Record<string, boolean>> {
   if (!ids.length) return {}
   const { promise } = once<Record<string, boolean>>(
-    { type: 'check', ids },
+    { type: 'check', ids, ...(task ? { task } : {}) },
     (m) => (m.type === 'checked' ? m.cached : undefined),
     { timeout: CHECK_TIMEOUT },
   )
@@ -120,18 +126,19 @@ export interface DownloadHandle {
 export function downloadModel(
   model: ModelSpec,
   onProgress?: (p: DownloadProgress) => void,
+  task?: ManagedTask,
 ): DownloadHandle {
   const h = once<string>(
-    { type: 'download', model },
+    { type: 'download', model, ...(task ? { task } : {}) },
     (m) => (m.type === 'downloaded' ? m.id : undefined),
     { timeout: STALL_TIMEOUT, ...(onProgress ? { onProgress } : {}) },
   )
   return { promise: h.promise, cancel: h.cancel }
 }
 
-export async function removeModel(id: string): Promise<void> {
+export async function removeModel(id: string, task?: ManagedTask): Promise<void> {
   const { promise } = once<true>(
-    { type: 'remove', id },
+    { type: 'remove', id, ...(task ? { task } : {}) },
     (m) => (m.type === 'removed' ? true : undefined),
     { timeout: REMOVE_TIMEOUT },
   )

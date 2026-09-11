@@ -18,7 +18,7 @@
  */
 
 /// <reference lib="webworker" />
-import wasmPaths from './wasm'
+import { setupTf, type Tf } from '../ml/tfEnv'
 import type { ModelSpec } from './presets'
 
 // 没有这行，TS 会把 self 推断成 Window，postMessage 的 transfer 参数重载对不上
@@ -33,18 +33,23 @@ export interface EmbedMsg {
   id: number
   texts: string[]
 }
-/** 查这些模型是否已完整下载到浏览器缓存 */
+/** 管哪一类模型。缺省是嵌入；模型管理页管深度模型时传 'depth-estimation' */
+export type ManagedTask = 'feature-extraction' | 'depth-estimation'
+
 export interface CheckMsg {
   type: 'check'
   ids: string[]
+  task?: ManagedTask
 }
 export interface DownloadMsg {
   type: 'download'
   model: ModelSpec
+  task?: ManagedTask
 }
 export interface RemoveMsg {
   type: 'remove'
   id: string
+  task?: ManagedTask
 }
 export type InMsg = InitMsg | EmbedMsg | CheckMsg | DownloadMsg | RemoveMsg
 
@@ -57,13 +62,12 @@ export type OutMsg =
   | { type: 'removed'; id: string }
   | { type: 'error'; id?: number; message: string }
 
-type Tf = typeof import('@huggingface/transformers')
-
 type Extractor = (
   texts: string[],
   opts: { pooling: 'cls' | 'mean'; normalize: boolean },
 ) => Promise<{ dims: number[]; data: Float32Array }>
 
+/** 嵌入任务。check/download/remove 三个管理操作可由消息覆盖成别的任务 */
 const TASK = 'feature-extraction'
 const DTYPE = 'q8'
 
@@ -72,43 +76,12 @@ let pooling: 'cls' | 'mean' = 'cls'
 let dim = 0
 
 /**
- * 配好 env 并返回 transformers 模块。
- *
- * ⚠️ `allowLocalModels` 必须**恒为 false**，这条是踩出来的，代价很大：
- *
- * 模型不再随应用发布，`/models/...` 已经不存在。而 SPA 托管（vite dev、preview、
- * Netlify、Vercel…）对未知路径的回落是 **200 + index.html**，不是 404。
- * allowLocalModels 为 true 时，未命中缓存的文件会先去那里探一次，拿回一份 HTML；
- * `loadResourceFile` 只看状态码是不是 200 就把它**写进 Cache Storage**，键是本地路径。
- *
- * 于是缓存被永久毒化：此后每次加载都先命中这条 HTML 条目，而**缓存命中会短路掉
- * 所有 allow 开关**，重试、换配置、改 env 全都没用，报错永远是
- * 「Unexpected token '<'」，看不出跟本地路径有任何关系。只有手动清掉整个
- * Cache Storage 才能恢复。
- *
- * 连带的代价：不能用 `local_files_only` 来表达「只用缓存、绝不联网」——
- * 它有一道守卫要求 allowLocalModels 为 true（allowLocalModels=false +
- * local_files_only=true 直接抛错）。所以「不许联网」改由调用方在 pipeline **之前**
- * 用 is_pipeline_cached 把关，见 init()。
+ * env 配置收在 services/ml/tfEnv.ts，与深度 Worker 共用 ——
+ * 那里记着 allowLocalModels 必须恒为 false 的完整原因（SPA 回落会永久毒化缓存）。
+ * 别在这里复制一份，两份注释迟早漂移。
  */
-async function setup(): Promise<Tf> {
-  const tf = await import('@huggingface/transformers')
-  const env = tf.env
-
-  const wasmEnv = env.backends.onnx.wasm
-  if (!wasmEnv) throw new Error('onnxruntime-web 的 wasm 后端不可用')
-  // wasmPaths 必须是**同时带 .wasm 与 .mjs 两个键的对象**：
-  // v4 源码里 shouldUseWasmCache 的守卫要求如此，老文档里的字符串写法
-  // 不报错，只是静默禁用 WASM 缓存。
-  wasmEnv.wasmPaths = wasmPaths
-  // 不追求多线程：需要 COOP/COEP 跨源隔离，而那会拦掉角色卡外链头像和外部字体，
-  // 静态托管也多半配不了。换来的 2.5× 只作用在批量回填这一个非交互场景。
-  wasmEnv.numThreads = 1
-  wasmEnv.proxy = false
-
-  env.allowLocalModels = false
-  env.allowRemoteModels = true
-  return tf
+function setup(): Promise<Tf> {
+  return setupTf('cache')
 }
 
 function onProgress(p: unknown): void {
@@ -157,18 +130,22 @@ async function download(msg: DownloadMsg): Promise<void> {
   const tf = await setup()
   // 全项目**唯一**不做前置缓存检查就调 pipeline 的地方 ——
   // 也就是唯一允许产生网络流量的地方。其它入口都先过 is_pipeline_cached。
-  const pipe = await tf.pipeline(TASK, msg.model.id, {
+  const pipe = await tf.pipeline(msg.task ?? TASK, msg.model.id, {
     dtype: DTYPE,
     device: 'wasm',
     progress_callback: onProgress,
   })
   // 跑一次再报成功：只「加载成功」不足以说明模型可用，
-  // ORT 有「建得出 session 但推理出 NaN」这一类失败
-  const probe = (await (pipe as unknown as Extractor)(['测试向量'], {
-    pooling: msg.model.pooling,
-    normalize: true,
-  })) as { dims: number[] }
-  if (!probe.dims[probe.dims.length - 1]) throw new Error('模型下载完成但推理异常')
+  // ORT 有「建得出 session 但推理出 NaN」这一类失败。
+  // 探针是**嵌入专用**的（pooling/normalize），别的任务跳过 —— 拿一段文本去喂
+  // 深度模型只会抛一个看不懂的错，而那时模型其实已经下完了。
+  if (!msg.task || msg.task === TASK) {
+    const probe = (await (pipe as unknown as Extractor)(['测试向量'], {
+      pooling: msg.model.pooling,
+      normalize: true,
+    })) as { dims: number[] }
+    if (!probe.dims[probe.dims.length - 1]) throw new Error('模型下载完成但推理异常')
+  }
   post({ type: 'downloaded', id: msg.model.id })
 }
 
@@ -177,7 +154,9 @@ async function check(msg: CheckMsg): Promise<void> {
   const cached: Record<string, boolean> = {}
   for (const id of msg.ids) {
     try {
-      cached[id] = await tf.ModelRegistry.is_pipeline_cached(TASK, id, { dtype: DTYPE })
+      cached[id] = await tf.ModelRegistry.is_pipeline_cached(msg.task ?? TASK, id, {
+        dtype: DTYPE,
+      })
     } catch {
       // 查不出来一律按「没下载」处理：宁可让用户多点一次下载，
       // 也不要显示「已下载」然后在真正用的时候才炸

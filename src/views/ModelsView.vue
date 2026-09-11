@@ -184,6 +184,123 @@ async function remove(id: string) {
             </div>
           </article>
         </div>
+
+        <section class="cbx-card intro">
+          <h3>深度模型 · 立绘视差</h3>
+          <p class="note">
+            给角色立绘估算深度，让卡片在鼠标移动时产生<strong>真正的视差</strong>——
+            人物会真的从背景里浮出来，而不是整张图一起平移。
+            启用后，<strong>上传角色图片时</strong>会顺带算一次深度图并永久缓存（实测约 3 秒）；
+            没启用就一个字节都不下载，也不会产生任何额外耗时。
+          </p>
+          <p class="note">
+            已有的立绘不会被追溯生成 —— 那会是一次几十秒的批量 CPU 占用。
+            需要的话去角色编辑页单独点「生成深度图」。触屏设备与开启了「减少动效」的系统不会启用视差。
+          </p>
+        </section>
+
+        <div class="grid">
+          <article
+            v-for="p in models.depthPresets"
+            :key="p.id"
+            class="card"
+            :class="{
+              'card--active': models.activeDepthId === p.id,
+              'card--busy': models.downloadingId === p.id,
+              'card--missing': statusOf(p.id) === 'missing',
+            }"
+          >
+            <header class="card__top">
+              <span class="card__mark" title="深度估计模型">
+                <b>3D</b>
+                <i>深度</i>
+              </span>
+              <div class="card__id">
+                <h4 class="card__name">{{ p.name }}</h4>
+                <code class="card__repo">{{ p.id }}</code>
+              </div>
+              <label class="tick" :title="statusOf(p.id) === 'ready' ? '启用此模型' : '需先下载'">
+                <input
+                  class="tick__input"
+                  type="radio"
+                  name="depth-model"
+                  :value="p.id"
+                  :checked="models.activeDepthId === p.id"
+                  :disabled="statusOf(p.id) !== 'ready'"
+                  :aria-label="`启用 ${p.name}`"
+                  @change="models.selectDepth(p.id)"
+                />
+                <span class="tick__box" aria-hidden="true" />
+              </label>
+            </header>
+
+            <div class="chips">
+              <span v-if="models.activeDepthId === p.id" class="chip chip--ok">✓ 已启用</span>
+              <span v-else-if="statusOf(p.id) === 'ready'" class="chip chip--ready">已下载</span>
+              <span v-else-if="statusOf(p.id) === 'unknown'" class="chip">检查中…</span>
+              <span v-else class="chip chip--warn">未下载</span>
+              <span class="chip">{{ formatBytes(p.bytes) }}</span>
+              <span class="chip">约 {{ (p.approxMs / 1000).toFixed(0) }} 秒/张</span>
+              <span class="chip">{{ p.mobileFriendly ? '📱 手机可用' : '🖥️ 建议桌面' }}</span>
+            </div>
+
+            <p class="card__blurb">{{ p.blurb }}</p>
+            <p v-if="models.errors[p.id]" class="card__err">{{ models.errors[p.id] }}</p>
+
+            <div class="card__foot">
+              <div v-if="models.downloadingId === p.id" class="prog">
+                <div class="prog__bar">
+                  <div class="prog__fill" :style="{ width: pct + '%' }" />
+                </div>
+                <span class="prog__txt">{{ pct }}%</span>
+                <span v-if="models.progress?.file" class="prog__file">
+                  {{ models.progress.file }}
+                </span>
+              </div>
+
+              <div class="acts">
+                <button
+                  v-if="models.downloadingId === p.id"
+                  class="cbx-btn cbx-btn--soft"
+                  @click="models.cancel()"
+                >
+                  取消下载
+                </button>
+                <button
+                  v-else-if="statusOf(p.id) !== 'ready'"
+                  class="cbx-btn cbx-btn--primary grow"
+                  :disabled="!!models.downloadingId || statusOf(p.id) === 'unknown'"
+                  @click="download(p.id)"
+                >
+                  下载 {{ formatBytes(p.bytes) }}
+                </button>
+                <template v-else>
+                  <button
+                    v-if="models.activeDepthId === p.id"
+                    class="cbx-btn cbx-btn--soft grow"
+                    @click="models.selectDepth('')"
+                  >
+                    停用
+                  </button>
+                  <button
+                    v-else
+                    class="cbx-btn cbx-btn--primary grow"
+                    @click="models.selectDepth(p.id)"
+                  >
+                    启用
+                  </button>
+                  <button
+                    class="cbx-btn cbx-btn--soft danger"
+                    :disabled="!!models.downloadingId"
+                    @click="remove(p.id)"
+                  >
+                    删除
+                  </button>
+                </template>
+              </div>
+            </div>
+          </article>
+        </div>
       </div>
     </div>
   </div>

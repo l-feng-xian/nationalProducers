@@ -83,6 +83,15 @@ export interface Character extends CharacterV1Mirror {
   // ── 本 app 专有 ──
   /** blobs store 的 id，角色图片 */
   avatarBlobId?: string
+  /**
+   * blobs store 的 id，立绘的**深度图**（单通道灰度 PNG，长边 512）。
+   * 有它才能在角色卡上做真视差；没有就退化成普通静态图片。
+   *
+   * 只在**上传图片时**生成，且必须先在模型管理里启用深度模型 ——
+   * 单张推理实测约 3 秒，hover 现算和进页面批量都不现实。
+   * 换头像时必须连带作废：深度图和立绘是一对，对不上就会渲染出错位的视差。
+   */
+  depthBlobId?: string
   /** 角色世界书。ST 只有单本 world，这里扩展成多本 */
   worldBookIds: string[]
   fav: boolean

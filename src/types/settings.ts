@@ -136,6 +136,18 @@ export interface PromptSettings {
   perMessageTokens: number
 }
 
+/**
+ * 立绘深度视差。
+ *
+ * 与向量召回同一套语义：**选中即启用，空串即停用**，只有一处真相。
+ * 启用后，上传角色图片时会顺带生成深度图（实测约 3 秒）并永久缓存；
+ * 没启用就一个字节都不下载、也不会产生任何额外耗时。
+ */
+export interface DepthSettings {
+  /** DEPTH_PRESETS 里的 id，空 = 不启用 */
+  modelId: string
+}
+
 export interface Settings {
   id: 'app'
   schemaVersion: number
@@ -147,6 +159,7 @@ export interface Settings {
   /** 需求 4 核心 */
   constraint: Record<ChatMode, ConstraintPromptConfig>
   memory: MemorySettings
+  depth: DepthSettings
   chat: { streamFlushMs: number; sendOnEnter: boolean; showTokens: boolean }
   updatedAt: number
 }
@@ -229,6 +242,7 @@ export function defaultSettings(): Settings {
         backfillLimit: 400,
       },
     },
+    depth: { modelId: '' },
     constraint: {
       solo: { enabled: true, text: DEFAULT_SOLO_CONSTRAINT, depth: 0, role: 0, order: 200 },
       group: { enabled: true, text: DEFAULT_GROUP_CONSTRAINT, depth: 0, role: 0, order: 200 },

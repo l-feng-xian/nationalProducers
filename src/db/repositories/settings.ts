@@ -31,6 +31,9 @@ export async function load(): Promise<Settings> {
       ...existing.memory,
       vector: { ...d.memory.vector, ...existing.memory?.vector },
     },
+    // 同 memory：老配置里整个 depth 都不存在，不补的话
+    // 模型管理页读 settings.depth.modelId 直接抛错
+    depth: { ...d.depth, ...existing.depth },
     chat: { ...d.chat, ...existing.chat },
   }
   return merged
