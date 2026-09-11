@@ -123,6 +123,13 @@ function newChat() {
         🧠 模型管理
       </RouterLink>
       <RouterLink
+        to="/data"
+        class="cbx-nav-item"
+        :class="{ 'cbx-nav-item--active': route.path.startsWith('/data') }"
+      >
+        🗃️ 数据管理
+      </RouterLink>
+      <RouterLink
         to="/settings"
         class="cbx-nav-item"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/settings') }"

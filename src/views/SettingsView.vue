@@ -8,9 +8,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { listModels, chatOnce } from '@/services/provider/openaiCompatible'
 import { ProviderError } from '@/types/provider'
-import { exportAll, importAll, storageEstimate, formatBytes } from '@/services/io/backup'
-import { downloadBlob, safeFileName } from '@/utils/download'
-import { APP_NAME } from '@/constants/app'
 
 const settings = useSettingsStore()
 const toast = useToast()
@@ -30,39 +27,6 @@ const budgetTokens = computed(() => {
   return cap > 0 ? Math.min(raw, cap) : raw
 })
 
-const usage = ref<{ usage: number; quota: number } | null>(null)
-const backupInput = ref<HTMLInputElement | null>(null)
-
-async function doExport() {
-  const blob = await exportAll()
-  // 文件名跟着应用名走；备份**内部**的 format 标识不会变（见 backup.ts 的说明）
-  downloadBlob(
-    blob,
-    safeFileName(`${APP_NAME}备份-${new Date().toISOString().slice(0, 10)}`, 'json'),
-  )
-  toast.success('已导出（不含 API Key）')
-}
-
-async function doImport(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (!file) return
-  try {
-    const r = await importAll(await file.text())
-    toast.success(
-      `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}`,
-    )
-    // 内存里的 store 已与库不一致，直接重载最省事
-    setTimeout(() => location.reload(), 800)
-  } catch (err) {
-    toast.error(err instanceof Error ? err.message : String(err))
-  }
-  ;(e.target as HTMLInputElement).value = ''
-}
-
-function openBackup() {
-  backupInput.value?.click()
-}
-
 const apiKey = ref('')
 const showKey = ref(false)
 const testing = ref(false)
@@ -72,7 +36,6 @@ const loadingModels = ref(false)
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
   apiKey.value = await settings.getApiKey()
-  usage.value = await storageEstimate()
 })
 
 async function saveKey() {
@@ -723,21 +686,13 @@ async function testConnection() {
         </div>
       </section>
 
-      <!-- ⑥ 数据 -->
+      <!-- ⑥ 数据（整节已移至「数据管理」页）-->
       <section class="cbx-card sec">
         <h3>数据</h3>
-        <p v-if="usage" class="note">
-          已占用 {{ formatBytes(usage.usage) }} / 可用约 {{ formatBytes(usage.quota) }}
-        </p>
         <p class="note">
-          所有数据都存在这台设备的浏览器里。清除站点数据或换浏览器都会丢，重要内容请导出备份。
-          <strong>备份不含 API Key</strong>，可以放心分享。
+          备份导出/导入，以及按会话管理变量、状态卡、向量索引等关联数据， 都在
+          <RouterLink to="/data">数据管理</RouterLink> 里。
         </p>
-        <div class="rowline">
-          <button class="cbx-btn cbx-btn--ghost" @click="doExport">导出全部数据</button>
-          <button class="cbx-btn cbx-btn--ghost" @click="openBackup">导入备份</button>
-          <input ref="backupInput" type="file" accept=".json" hidden @change="doImport" />
-        </div>
       </section>
     </div>
   </div>
