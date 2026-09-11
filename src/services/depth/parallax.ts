@@ -15,7 +15,7 @@
  * 走不同的量、方向相反，重叠时还能靠深度缓冲正确遮挡。
  *
  * ⚠️ 代价：没有背景修补，深度断崖处会被**拉伸**（被遮挡的背景像素本就不存在）。
- * 靠两件事压住：位移幅度小，以及顶点着色器里对深度做 5 点模糊把断崖抹成斜坡 ——
+ * 靠两件事压住：位移幅度小，以及顶点着色器里对深度做 9 点模糊把断崖抹成斜坡 ——
  * 拉伸比撕裂好看得多。想彻底解决要做 inpainting，那是另一个量级。
  *
  * 纯 service：不 import vue/pinia。three.js 是**动态 import** 的，
@@ -27,21 +27,30 @@ import type * as THREE_NS from 'three'
 /** 细分密度。2:3 的卡，横向 96 段就足够让断崖过渡平滑，再高只是白烧顶点 */
 const SEG_X = 96
 const SEG_Y = 144
-/** 平面比视口略大，位移时四边才不会露出底色 */
-const OVERSCAN = 1.12
+/**
+ * 平面比视口略大，位移时四边才不会露出底色。
+ *
+ * 只需盖住「最大位移量」那一圈：单侧最大位移 = STRENGTH/2，两侧共 STRENGTH。
+ * 放太大会让画面在 hover 时明显跳一下 —— 这个放大**必须在 uv 里补偿掉**
+ * （见 uUvScale），否则静态图与 canvas 的取景对不上，观感就是「图片一碰就变」。
+ */
+const OVERSCAN = 1.05
 /**
  * 视差强度，单位是**世界单位**（视口高度固定为 2）。
  *
  * 顶点位移量 = STRENGTH × 指针(-1..1) × (深度-0.5)，所以单侧最大位移是
- * STRENGTH/2 = 0.09，约等于画面高度的 4.5% —— 明显看得见，又不至于把
- * 深度断崖处拉得太夸张。
+ * STRENGTH/2 = 0.035，约等于画面高度的 1.75%。
+ *
+ * ⚠️ 别往大调。没有背景修补，位移越大深度断崖处的拉伸（拖影）越明显，
+ * 0.18 那一档实测已经糊得没法看。视差靠的是「近远不同步」这个**关系**，
+ * 不是绝对位移量 —— 小幅度照样成立，而且干净。
  *
  * ⚠️ 别回头改成「透视相机 + 相机位移」那套：实测过，视差量
  * ≈ 相机位移 × z / 相机距离，相机在 3 个单位外时算出来**不到 1 个像素**，
  * 两帧互相关的位移是 0。想靠加大相机位移补回来就得把相机甩出画面。
  * 正交 + 显式位移的幅度是直接可控的，不受相机距离摆布。
  */
-const STRENGTH = 0.18
+const STRENGTH = 0.07
 /** 指数平滑系数：越小越黏手。0.12 在 60Hz 下约 120ms 跟手时间 */
 const LERP = 0.12
 
@@ -50,24 +59,38 @@ uniform sampler2D uDepth;
 uniform float uStrength;
 uniform vec2 uMouse;
 uniform vec2 uTexel;
+uniform vec2 uUvScale;
 varying vec2 vUv;
 
-// 5 点十字模糊：把深度断崖抹成斜坡，撕裂变拉伸
+// 9 点模糊：把深度断崖抹成斜坡。断崖越陡，位移后拉伸（拖影）越明显，
+// 抹平它比减小位移更能治本
 float depthAt(vec2 uv) {
-  float c = texture2D(uDepth, uv).r;
-  float l = texture2D(uDepth, uv - vec2(uTexel.x, 0.0)).r;
-  float r = texture2D(uDepth, uv + vec2(uTexel.x, 0.0)).r;
-  float u = texture2D(uDepth, uv - vec2(0.0, uTexel.y)).r;
-  float d = texture2D(uDepth, uv + vec2(0.0, uTexel.y)).r;
-  return (c * 2.0 + l + r + u + d) / 6.0;
+  float s = 0.0;
+  s += texture2D(uDepth, uv).r * 4.0;
+  s += texture2D(uDepth, uv + vec2( uTexel.x, 0.0)).r * 2.0;
+  s += texture2D(uDepth, uv + vec2(-uTexel.x, 0.0)).r * 2.0;
+  s += texture2D(uDepth, uv + vec2(0.0,  uTexel.y)).r * 2.0;
+  s += texture2D(uDepth, uv + vec2(0.0, -uTexel.y)).r * 2.0;
+  s += texture2D(uDepth, uv + uTexel).r;
+  s += texture2D(uDepth, uv - uTexel).r;
+  s += texture2D(uDepth, uv + vec2( uTexel.x, -uTexel.y)).r;
+  s += texture2D(uDepth, uv + vec2(-uTexel.x,  uTexel.y)).r;
+  return s / 16.0;
 }
 
 void main() {
-  vUv = uv;
+  // uUvScale 同时干两件事：
+  //  1. 抵消 OVERSCAN 带来的放大 —— 让**画面可见区域**正好对应完整的取景，
+  //     静态 <img> 与 canvas 两者取景一致，hover 时不跳变
+  //  2. 实现 object-fit: cover —— 图片比例与卡片比例不同时按短边铺满、长边裁切，
+  //     和 CSS 里那张 <img> 的行为一致。少了这一步 9:16 的立绘会被压成 2:3
+  vec2 fixedUv = (uv - 0.5) * uUvScale + 0.5;
+  vUv = fixedUv;
+
   // Depth Anything 的约定：值越大越近。减 0.5 让中景成为不动的支点，
   // 近景朝一边走、远景朝另一边走 —— 这个反向才是「视差」，
   // 全部同向只会读成整张图在平移。
-  float d = depthAt(uv) - 0.5;
+  float d = depthAt(fixedUv) - 0.5;
   vec3 p = position;
   p.xy += uMouse * uStrength * d;
   // z 不参与正交投影，只喂深度缓冲：近景写得更靠前，
@@ -118,7 +141,20 @@ async function boot(): Promise<State> {
     // preserveDrawingBuffer 刻意不开：它有真实的性能代价，而唯一的用处是让
     // drawImage/readPixels 能读回画面 —— 那只在调参测量时需要，临时开一下即可
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
-    renderer.outputColorSpace = THREE.SRGBColorSpace
+    // ⚠️ 刻意**不设 outputColorSpace**，也不给纹理标色彩空间 —— 走纯直通。
+    //
+    // 这里只是把一张图原样贴出来，没有光照、没有混合，根本不需要线性工作空间。
+    // 而 ShaderMaterial 是裸着色器，不含 three 的 colorspace_fragment 转换块，
+    // 所以输出端本来就不会做任何转换；只要输入端也不解码，就是字节进字节出，
+    // 与静态 <img> 完全一致。
+    //
+    // 踩过的两个坑：
+    //  1. 把纹理标成 SRGBColorSpace → WebGL2 用 sRGB 内部格式**自动解码成线性值**，
+    //     着色器把线性值直接写进画面 = 整体压暗、严重失真。
+    //  2. 想「关掉转换」而写 `outputColorSpace = NoColorSpace` → **直接抛异常**：
+    //     NoColorSpace 的值是空串，three 的 setter 去查
+    //     `ColorManagement.spaces[''].outputColorSpaceConfig` 拿到 undefined。
+    //     而 attach() 的静默 catch 会把它吞掉，表现成「hover 毫无反应」。
     // DPR 封到 2：立绘卡最大也就 300px 宽，3x 屏上再往上加纯属浪费显存
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 
@@ -136,6 +172,7 @@ async function boot(): Promise<State> {
         uDepth: { value: null },
         uStrength: { value: STRENGTH },
         uMouse: { value: new THREE.Vector2(0, 0) },
+        uUvScale: { value: new THREE.Vector2(1, 1) },
         uTexel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
       },
     })
@@ -204,8 +241,8 @@ export async function attach(args: AttachArgs): Promise<boolean> {
       depth.dispose()
       return false
     }
-    color.colorSpace = s.THREE.SRGBColorSpace
-    // 深度是数据不是颜色，走线性空间；夹边避免采样到对侧像素
+    // 两张都不转换，理由见 boot() 里 outputColorSpace 那段
+    color.colorSpace = s.THREE.NoColorSpace
     depth.colorSpace = s.THREE.NoColorSpace
     for (const t of [color, depth]) {
       t.wrapS = s.THREE.ClampToEdgeWrapping
@@ -222,6 +259,22 @@ export async function attach(args: AttachArgs): Promise<boolean> {
     const dh = dImg?.height || 512
     ;(s.material.uniforms['uTexel']!.value as THREE_NS.Vector2).set(1 / dw, 1 / dh)
 
+    // object-fit: cover —— 按短边铺满、长边居中裁切，和那张静态 <img> 的行为一致。
+    // 立绘常见 9:16，卡片是 2:3，不做这一步就会被压扁。
+    const cImg = color.image as { width?: number; height?: number } | undefined
+    const imgAspect = (cImg?.width || 1) / (cImg?.height || 1)
+    let coverX = 1
+    let coverY = 1
+    if (imgAspect > args.aspect)
+      coverX = args.aspect / imgAspect // 图更宽 → 裁两侧
+    else
+      coverY = imgAspect / args.aspect // 图更高 → 裁上下
+    // 再乘 OVERSCAN 抵消平面放大：可见区域正好落回完整取景，hover 时不跳变
+    ;(s.material.uniforms['uUvScale']!.value as THREE_NS.Vector2).set(
+      coverX * OVERSCAN,
+      coverY * OVERSCAN,
+    )
+
     // 平面按图片比例摆正，并略大于视口，相机偏移时不会露边
     s.mesh.scale.set(2 * args.aspect * OVERSCAN, 2 * OVERSCAN, 1)
     s.camera.left = -args.aspect
@@ -237,7 +290,11 @@ export async function attach(args: AttachArgs): Promise<boolean> {
     current = { ...target }
     schedule()
     return true
-  } catch {
+  } catch (e) {
+    // 对用户静默降级（视差是纯装饰，绝不能把列表搞崩），但开发期必须看得见 ——
+    // 这里曾经吞掉一个 outputColorSpace 的 TypeError，表现只是「hover 没反应」，
+    // 查了好几轮才定位到。
+    if (import.meta.env.DEV) console.warn('[parallax] attach 失败，已降级为静态图片：', e)
     return false
   }
 }
