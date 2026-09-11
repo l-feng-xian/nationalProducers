@@ -17,6 +17,7 @@
  */
 
 import type { InMsg, OutMsg } from './embedder.worker'
+import type { ModelSpec } from './presets'
 
 const INIT_TIMEOUT = 90_000
 const EMBED_TIMEOUT = 30_000
@@ -26,8 +27,8 @@ const IDLE_MS = 5 * 60_000
 const MAX_STRIKES = 2
 
 export interface EmbedderOpts {
-  localModelPath: string
-  modelId: string
+  /** 用哪个模型。它决定向量维度，换了就等于整套索引作废 */
+  model: ModelSpec
   onProgress?: (loaded: number, total: number) => void
 }
 
@@ -72,11 +73,7 @@ export class Embedder {
       new Promise<number>((resolve, reject) => {
         this.#bootResolve = resolve
         this.#bootReject = reject
-        this.#post({
-          type: 'init',
-          localModelPath: this.opts.localModelPath,
-          modelId: this.opts.modelId,
-        })
+        this.#post({ type: 'init', model: this.opts.model })
       }),
       INIT_TIMEOUT,
       '模型加载超时',
@@ -114,7 +111,10 @@ export class Embedder {
       p.resolve(m.vecs)
       return
     }
-    // error
+    // checked / downloaded / removed 是给 ModelManager 的，推理宿主收到就忽略。
+    // 少了这一行会掉进下面的 error 分支，把一条正常回执当成失败去 strike。
+    if (m.type !== 'error') return
+
     if (m.id !== undefined) {
       const p = this.#pending.get(m.id)
       this.#pending.delete(m.id)

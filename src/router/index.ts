@@ -30,6 +30,11 @@ const router = createRouter({
       component: () => import('@/views/WorldBooksView.vue'),
     },
     {
+      path: '/models',
+      name: 'models',
+      component: () => import('@/views/ModelsView.vue'),
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),

@@ -38,9 +38,19 @@ export interface MemorySettings {
   dialogueCharLimit: number
   /** 状态卡的深度注入位置。2 = 注入后仍有 2 条真实消息，贴近回复且不破坏前缀缓存 */
   depth: number
-  /** 向量召回（二期）。关闭时一个字节的模型都不会下载 */
+  /** 向量召回。没选模型时一个字节都不会下载 */
   vector: {
-    enabled: boolean
+    /**
+     * 启用哪个嵌入模型，空串 = 不启用向量召回。
+     *
+     * 刻意**不再单独设一个 enabled 开关**：一个「开关」加一个「选哪个模型」会产生
+     * 「开着但没选」「选了但关着」两种没有意义的状态，UI 还得替它们各编一句解释。
+     * 选中即启用，取消选中即停用 —— 只有一处真相。
+     *
+     * 值是 EMBED_PRESETS 里的 id。模型未下载时选不中（模型管理页会禁用），
+     * 即使被手改成没下载的 id，推理侧也只会静默不召回而不会去联网。
+     */
+    modelId: string
     /** 召回几条 */
     topK: number
     /** 相似度下限。见 search.ts 里 minScore 的实测说明 */
@@ -211,7 +221,7 @@ export function defaultSettings(): Settings {
       depth: 2,
       model: '',
       vector: {
-        enabled: false,
+        modelId: '',
         topK: 3,
         minScore: 0.4,
         recallDepth: 6,

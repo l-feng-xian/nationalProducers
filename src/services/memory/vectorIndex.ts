@@ -42,6 +42,8 @@ export interface CatchUpArgs {
   state: IndexState
   embedder: Embedder
   model: string
+  /** 文档侧前缀（e5 系是 'passage: '，bge 系为空）。只在嵌入时拼，不入库 */
+  docPrefix: string
   /** 只回填最近这么多条；全历史给显式按钮 */
   backfillLimit: number
   signal?: AbortSignal
@@ -98,7 +100,7 @@ export async function catchUp(args: CatchUpArgs): Promise<CatchUpResult> {
     const batch = chunks.slice(i, i + BATCH)
     let vecs: Float32Array[]
     try {
-      vecs = await embedder.embed(batch.map((c) => c.text))
+      vecs = await embedder.embed(batch.map((c) => args.docPrefix + c.text))
     } catch {
       // 嵌入失败就停在这里，下次从同一水位线继续。绝不推进 throughSeq
       return { state, added, aborted: true }
@@ -134,10 +136,20 @@ export async function catchUp(args: CatchUpArgs): Promise<CatchUpResult> {
   return { state, added, aborted: false }
 }
 
-/** 会话打开时建一次打包缓存，之后每轮检索复用 */
+/**
+ * 会话打开时建一次打包缓存，之后每轮检索复用。
+ *
+ * 维度对不上就直接放弃（返回 null），等 catchUp 用新模型重建。
+ * 这种情况出现在「换了模型但这个会话还没轮到重建索引」时。
+ * 不拦住的话 packIndex 会把 512 维的向量按 768 的步长摆进缓冲区 ——
+ * 短的那头静默错位、长的那头 RangeError，前者更糟：不报错，只是
+ * 召回突然全变成不相干的片段，很难联想到是换模型引起的。
+ */
 export async function loadIndex(chatId: string, dim: number): Promise<PackedIndex | null> {
   const chunks = await memchunksRepo.listByChat(chatId)
-  if (!chunks.length) return null
+  const first = chunks[0]
+  if (!first) return null
+  if (first.vec.length !== dim) return null
   return packIndex(chatId, chunks, dim)
 }
 
@@ -146,26 +158,24 @@ export interface RecallArgs {
   /** 查询文本 —— 必须用与索引期**同一个**渲染器，否则分布错位 */
   queryMessages: ChatMessage[]
   embedder: Embedder
+  /**
+   * 检索指令前缀，由模型预设给出。
+   *
+   * bge 系是**非对称**检索：只加查询侧，文档侧加了反而把优势抵消。
+   * 实测（本项目真实对话样本）：不加 0.053，加了 0.086，区分度 +62%；
+   * 「老陈的酒馆」这条无关项从 0.418 掉到 0.335，正好被阈值拦住。
+   * e5 系则是两侧都加、且内容不同（query: / passage:），docPrefix 管那一侧。
+   *
+   * 前缀只在**嵌入那一刻**拼上，绝不写进 memchunks.text —— 那段文本要原样进提示词。
+   */
+  queryPrefix: string
   opts: SearchOpts
 }
-
-/**
- * bge 系列的**非对称检索**指令前缀。
- *
- * ⚠️ 只加在**查询侧**，文档侧绝不能加 —— 这是 bge 的设计，两边都加会把优势抵消。
- *
- * 实测（本项目真实对话样本，4 条文档）：
- *   不加前缀：相关最高 − 无关最高 = 0.053
- *   加前缀　：相关最高 − 无关最高 = 0.086（区分度 +62%）
- * 「老陈的酒馆」这条无关项从 0.418 掉到 0.335，正好被 minScore 拦住。
- * 不加不报错，只是召回里混进一堆看似沾边的噪声。
- */
-const QUERY_PREFIX = '为这个句子生成表示以用于检索相关文章：'
 
 export async function recall(args: RecallArgs): Promise<Hit[]> {
   const text = renderWindow(args.queryMessages)
   if (!text.trim()) return []
-  const [q] = await args.embedder.embed([QUERY_PREFIX + text])
+  const [q] = await args.embedder.embed([args.queryPrefix + text])
   if (!q) return []
   return search(args.idx, q, args.opts)
 }

@@ -120,12 +120,16 @@ export const useGenerationStore = defineStore('generation', () => {
     const settings = useSettingsStore()
     const mem = settings.settings.memory
     memRuntime.clearHits()
-    if (!mem.enabled || !mem.vector.enabled) return
+    // 没选模型 = 不启用。选了个不存在的 id 也当没启用处理，
+    // 这样即使配置被手改坏，最坏结果也只是没有召回，不会去联网拉模型
+    const preset = memRuntime.activePreset(mem.vector.modelId)
+    if (!mem.enabled || !preset) return
     const chats = useChatsStore()
     await memRuntime.prepareRecall({
       chatId,
       messages: chats.messages,
       queryWindow: mem.vector.queryWindow,
+      preset,
       opts: {
         topK: mem.vector.topK,
         minScore: mem.vector.minScore,
@@ -137,23 +141,25 @@ export const useGenerationStore = defineStore('generation', () => {
   async function catchUpIndex(chatId: string): Promise<void> {
     const settings = useSettingsStore()
     const mem = settings.settings.memory
-    if (!mem.enabled || !mem.vector.enabled || vecBusy) return
+    const preset = memRuntime.activePreset(mem.vector.modelId)
+    if (!mem.enabled || !preset || vecBusy) return
     const chats = useChatsStore()
     const meta = chats.list.find((c) => c.id === chatId)
     if (!meta || chats.current?.id !== chatId) return
 
     vecBusy = true
     try {
-      const emb = memRuntime.getEmbedder()
+      const emb = memRuntime.getEmbedder(preset)
       if (emb.dead) return
       await emb.ensure()
-      const state = meta.chat_metadata.memIndex ?? emptyIndexState(memRuntime.MODEL_ID, emb.dim)
+      const state = meta.chat_metadata.memIndex ?? emptyIndexState(preset.id, emb.dim)
       const res = await catchUp({
         chatId,
         messages: chats.messages,
         state,
         embedder: emb,
-        model: memRuntime.MODEL_ID,
+        model: preset.id,
+        docPrefix: preset.docPrefix,
         backfillLimit: mem.vector.backfillLimit,
       })
       if (res.added > 0) {
@@ -174,15 +180,18 @@ export const useGenerationStore = defineStore('generation', () => {
   async function backfillAll(chatId: string, onProgress?: (a: number, b: number) => void) {
     const settings = useSettingsStore()
     const chats = useChatsStore()
-    const emb = memRuntime.getEmbedder()
+    const preset = memRuntime.activePreset(settings.settings.memory.vector.modelId)
+    if (!preset) throw new Error('尚未启用嵌入模型')
+    const emb = memRuntime.getEmbedder(preset)
     await emb.ensure()
     await memchunksRepo.clearChat(chatId)
     const res = await catchUp({
       chatId,
       messages: chats.messages,
-      state: emptyIndexState(memRuntime.MODEL_ID, emb.dim),
+      state: emptyIndexState(preset.id, emb.dim),
       embedder: emb,
-      model: memRuntime.MODEL_ID,
+      model: preset.id,
+      docPrefix: preset.docPrefix,
       backfillLimit: Number.MAX_SAFE_INTEGER,
       ...(onProgress ? { onProgress } : {}),
     })
@@ -230,7 +239,7 @@ export const useGenerationStore = defineStore('generation', () => {
     // build() 是同步的，这是整个方案唯一的架构阻碍。把它改成 async 会牵动
     // send/sendGroup/generateOne 三处加 PromptPreview.vue，返工面太大。
     const mem = settings.settings.memory
-    if (mem.enabled && mem.vector.enabled) {
+    if (mem.enabled && mem.vector.modelId) {
       const book = buildMemoryBook({
         stateCard: '',
         hits: memRuntime.currentHits(),

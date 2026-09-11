@@ -109,6 +109,13 @@ function newChat() {
         📚 世界书
       </RouterLink>
       <RouterLink
+        to="/models"
+        class="cbx-nav-item"
+        :class="{ 'cbx-nav-item--active': route.path.startsWith('/models') }"
+      >
+        🧠 模型管理
+      </RouterLink>
+      <RouterLink
         to="/settings"
         class="cbx-nav-item"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/settings') }"

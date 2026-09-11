@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import { findPreset } from '@/services/vector/presets'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -18,6 +20,8 @@ const USER_MACRO = '{{user}}'
 
 const wi = computed(() => settings.settings.worldInfo)
 const mem = computed(() => settings.settings.memory)
+/** 非 null 即「已下载且已勾选启用」。向量召回的参数只在这时才有意义 */
+const activeModel = computed(() => findPreset(mem.value.vector.modelId))
 const budgetTokens = computed(() => {
   const cap = wi.value.world_info_budget_cap
   const raw = Math.round(
@@ -616,20 +620,24 @@ async function testConnection() {
           </div>
 
           <div class="cbx-divider" />
-          <div class="switchrow">
-            <label class="cbx-switch swopt">
-              <input v-model="mem.vector.enabled" type="checkbox" @change="settings.touch()" />
-              <span class="cbx-switch__track" />
-              <span>向量召回（本地模型，首次约 24MB）</span>
-            </label>
+          <div class="vecrow">
+            <span class="cbx-field__label">向量召回</span>
+            <span v-if="activeModel" class="cbx-badge cbx-badge--success">
+              已启用 · {{ activeModel.name }}
+            </span>
+            <span v-else class="cbx-badge">未启用</span>
+            <RouterLink to="/models" class="cbx-btn cbx-btn--soft vecrow__go">模型管理</RouterLink>
           </div>
-          <p v-if="mem.vector.enabled" class="note">
-            在本机浏览器里跑一个 24MB 的中文向量模型，把早期对话按**语义**召回。
-            不联网、不上传任何内容。模型随应用发布，只在第一次用到时加载。
-            它擅长「同义改写」的召回（你说「那把断了的刀」也能找到「缺口长刀」），
-            但**无法表达「已经不成立」** —— 那由上面的状态卡负责。
+          <p class="note">
+            把早期对话按<strong>语义</strong>召回 —— 你说「那把断了的刀」也能找到「缺口长刀」。
+            模型在本机浏览器里跑，推理全程离线、不上传任何内容；但模型本身需要先到
+            <RouterLink to="/models">模型管理</RouterLink>
+            手动下载一次并勾选启用。没有勾选的模型不会产生任何流量。 它<strong
+              >无法表达「已经不成立」</strong
+            >
+            —— 那由上面的状态卡负责。
           </p>
-          <div v-if="mem.vector.enabled" class="grid2">
+          <div v-if="activeModel" class="grid2">
             <label class="cbx-field">
               <span class="cbx-field__label">召回条数</span>
               <input
@@ -751,6 +759,17 @@ async function testConnection() {
 .sec h3 {
   margin-bottom: var(--cbx-space-3);
 }
+.vecrow {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-3);
+  flex-wrap: wrap;
+}
+.vecrow__go {
+  margin-left: auto;
+  text-decoration: none;
+}
+
 .note {
   /* 说明性散文是全页唯一真正需要「阅读宽」的内容 —— 卡片加宽到 1280 后
      必须显式封顶，否则 1238px 的行长完全不可读。 */
