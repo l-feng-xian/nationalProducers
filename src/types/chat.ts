@@ -89,6 +89,16 @@ export interface ChatMetadata {
   relationGraph?: RelationGraphSnapshot
   /** 会话记忆 · 状态卡 */
   stateCard?: StateCard
+  /** 会话记忆 · 向量索引水位线（二期） */
+  memIndex?: MemIndexState
+}
+
+/** 向量索引的进度。换模型时整会话作废重建 */
+export interface MemIndexState {
+  throughSeq: number
+  chunks: number
+  model: string
+  dim: number
 }
 
 /**

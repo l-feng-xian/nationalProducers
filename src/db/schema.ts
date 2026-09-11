@@ -13,7 +13,7 @@ import type { ChatMeta, ChatMessage } from '@/types/chat'
 import type { Settings } from '@/types/settings'
 
 export const DB_NAME = 'np-chat'
-export const DB_VERSION = 1
+export const DB_VERSION = 3
 
 export interface BlobRecord {
   id: string
@@ -57,6 +57,37 @@ export interface NpDB extends DBSchema {
     indexes: { by_msgId: [string, string] }
   }
   blobs: { key: string; value: BlobRecord }
+  /**
+   * 会话记忆的向量块。
+   *
+   * 三段复合主键 `[chatId, kindRank, ord]` 是刻意的：
+   *  - number < array，所以 `chatRange(chatId)` 原样复用，级联删除一行搞定；
+   *  - kindRank 在前，让「对话窗口块(0)」与「LLM 事实(1)」各占一段连续键空间，
+   *    失效时能用 IDBKeyRange 一刀切掉「endSeq ≥ S 的全部窗口块」。
+   *
+   * **刻意零二级索引**：IDB 每个索引在写入时都要同步维护，移动端上索引维护
+   * 常比主记录写入还慢，而这里的查询模式（按会话整取）主键已经全覆盖。
+   */
+  memchunks: { key: [string, number, number]; value: MemChunk }
+}
+
+/** 一块可检索的记忆。向量写入前已 L2 归一化，检索时余弦退化成纯点积 */
+export interface MemChunk {
+  chatId: string
+  /** 0=对话窗口块，1=LLM 提炼的事实。排序用，也用于键空间分段 */
+  kindRank: 0 | 1
+  /** 同一 kind 内的序号，保证主键唯一且有序 */
+  ord: number
+  /** 渲染后的正文，注入时原样使用 */
+  text: string
+  /** 本块覆盖的消息 seq 列表。失效与去重都靠它 */
+  srcSeqs: number[]
+  /** 覆盖到的最大 seq，范围失效用 */
+  endSeq: number
+  /** L2 归一化后的向量 */
+  vec: Float32Array
+  /** 源文本的 fnv1a，消息被编辑后能发现内容变了 */
+  srcHash: number
 }
 
 let dbPromise: Promise<IDBPDatabase<NpDB>> | null = null
@@ -93,6 +124,21 @@ export function getDb(): Promise<IDBPDatabase<NpDB>> {
         msgs.createIndex('by_msgId', ['chatId', 'id'])
 
         db.createObjectStore('blobs', { keyPath: 'id' })
+      }
+      // v2：会话记忆的向量块。
+      // 追加而不是改动 v1 那块 —— v1 已经发布过，改它会让老库升不上来。
+      if (oldVersion < 2) {
+        db.createObjectStore('memchunks', { keyPath: ['chatId', 'kindRank', 'ord'] })
+      }
+      // v3：补建 memchunks。
+      //
+      // 开发期的真实事故：DB_VERSION 先 bump 到 2、建 store 的代码后写，
+      // 中间刷新过一次页面的库就永久停在「version=2 但没有 memchunks」——
+      // 版本号已经到位，`oldVersion < 2` 再也不会触发，于是记忆功能一开就
+      // NotFoundError，而且删库重来才能修（会赔上没被导出的 API Key）。
+      // 加一级台阶把这种库捞回来；v2 本来就正确的库走到这里是空转。
+      if (!db.objectStoreNames.contains('memchunks')) {
+        db.createObjectStore('memchunks', { keyPath: ['chatId', 'kindRank', 'ord'] })
       }
     },
     blocked() {

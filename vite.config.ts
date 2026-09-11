@@ -18,6 +18,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue(), vueDevTools()],
+    // esnext 是唯一的非协商项：transformers.js v4 用了顶层 await。
+    // 官方所有 embedding 示例的 vite.config 也就只有这一行。
+    build: { target: 'esnext' },
+    // 嵌入管线跑在 Worker 里（见 services/vector/embedder.worker.ts 的说明）
+    worker: { format: 'es' },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

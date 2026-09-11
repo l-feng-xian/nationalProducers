@@ -23,6 +23,14 @@ export async function load(): Promise<Settings> {
       solo: { ...d.constraint.solo, ...existing.constraint?.solo },
       group: { ...d.constraint.group, ...existing.constraint?.group },
     },
+    // memory.vector 是**嵌套两层**的，必须单独补 —— 只写 `{...d.memory, ...existing.memory}`
+    // 的话，老配置里有 memory 但没有 vector 时，vector 会被整个覆盖成 undefined，
+    // 设置页的 v-model="mem.vector.enabled" 直接抛错。
+    memory: {
+      ...d.memory,
+      ...existing.memory,
+      vector: { ...d.memory.vector, ...existing.memory?.vector },
+    },
     chat: { ...d.chat, ...existing.chat },
   }
   return merged

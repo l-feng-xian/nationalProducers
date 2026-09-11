@@ -16,6 +16,10 @@ import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
 import { emptyStateCard, extractStateCard, mergeStateCard } from '@/services/memory/stateCard'
+import { memchunksRepo } from '@/db/repositories'
+import * as memRuntime from '@/services/memory/runtime'
+import { buildMemoryBook } from '@/services/memory/book'
+import { catchUp, emptyIndexState } from '@/services/memory/vectorIndex'
 
 export const useGenerationStore = defineStore('generation', () => {
   const busy = ref(false)
@@ -108,6 +112,87 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  // ── 会话记忆 · 向量召回（二期）────────────────────────────
+  let vecBusy = false
+
+  /** 在 build() 之前算好本轮召回。失败静默 —— 记忆是增强，不能拖垮生成 */
+  async function prepareRecall(chatId: string): Promise<void> {
+    const settings = useSettingsStore()
+    const mem = settings.settings.memory
+    memRuntime.clearHits()
+    if (!mem.enabled || !mem.vector.enabled) return
+    const chats = useChatsStore()
+    await memRuntime.prepareRecall({
+      chatId,
+      messages: chats.messages,
+      queryWindow: mem.vector.queryWindow,
+      opts: {
+        topK: mem.vector.topK,
+        minScore: mem.vector.minScore,
+      },
+    })
+  }
+
+  /** 生成收尾后把索引追到最新。fire-and-forget */
+  async function catchUpIndex(chatId: string): Promise<void> {
+    const settings = useSettingsStore()
+    const mem = settings.settings.memory
+    if (!mem.enabled || !mem.vector.enabled || vecBusy) return
+    const chats = useChatsStore()
+    const meta = chats.list.find((c) => c.id === chatId)
+    if (!meta || chats.current?.id !== chatId) return
+
+    vecBusy = true
+    try {
+      const emb = memRuntime.getEmbedder()
+      if (emb.dead) return
+      await emb.ensure()
+      const state = meta.chat_metadata.memIndex ?? emptyIndexState(memRuntime.MODEL_ID, emb.dim)
+      const res = await catchUp({
+        chatId,
+        messages: chats.messages,
+        state,
+        embedder: emb,
+        model: memRuntime.MODEL_ID,
+        backfillLimit: mem.vector.backfillLimit,
+      })
+      if (res.added > 0) {
+        if (chats.current?.id !== chatId) return
+        await chatsRepo.patchMetadata(chatId, { memIndex: res.state })
+        await chats.refreshMeta(chatId)
+        // 索引变了，打包缓存要重建
+        memRuntime.invalidateIndex(chatId)
+      }
+    } catch {
+      // 尽力而为
+    } finally {
+      vecBusy = false
+    }
+  }
+
+  /** 设置面板用：把整段历史都索引一遍 */
+  async function backfillAll(chatId: string, onProgress?: (a: number, b: number) => void) {
+    const settings = useSettingsStore()
+    const chats = useChatsStore()
+    const emb = memRuntime.getEmbedder()
+    await emb.ensure()
+    await memchunksRepo.clearChat(chatId)
+    const res = await catchUp({
+      chatId,
+      messages: chats.messages,
+      state: emptyIndexState(memRuntime.MODEL_ID, emb.dim),
+      embedder: emb,
+      model: memRuntime.MODEL_ID,
+      backfillLimit: Number.MAX_SAFE_INTEGER,
+      ...(onProgress ? { onProgress } : {}),
+    })
+    await chatsRepo.patchMetadata(chatId, { memIndex: res.state })
+    await chats.refreshMeta(chatId)
+    memRuntime.invalidateIndex(chatId)
+    void settings
+    return res
+  }
+
   async function providerConfig(): Promise<ProviderConfig> {
     const settings = useSettingsStore()
     const p = settings.settings.provider
@@ -140,6 +225,20 @@ export const useGenerationStore = defineStore('generation', () => {
       chatBookId: meta.chat_metadata.worldBookId,
       personaBookId: settings.settings.persona.worldBookId,
     })
+
+    // 向量召回的结果由 prepareRecall() 在 build() **之前**算好放在 runtime 里 ——
+    // build() 是同步的，这是整个方案唯一的架构阻碍。把它改成 async 会牵动
+    // send/sendGroup/generateOne 三处加 PromptPreview.vue，返工面太大。
+    const mem = settings.settings.memory
+    if (mem.enabled && mem.vector.enabled) {
+      const book = buildMemoryBook({
+        stateCard: '',
+        hits: memRuntime.currentHits(),
+        stateDepth: mem.depth,
+        recallDepth: mem.vector.recallDepth,
+      })
+      if (book) loreSources.chat = [book, ...loreSources.chat]
+    }
 
     // dryRun 必须克隆定时效果，否则每点一次预览就推进一格 sticky/cooldown
     const isDryRun = opts.isDryRun ?? false
@@ -184,6 +283,8 @@ export const useGenerationStore = defineStore('generation', () => {
       return
     }
 
+    // 检索必须在 build() 之前：build() 是同步的，拿不到 await
+    await prepareRecall(meta.id)
     const built = build()
     if (!built) return
 
@@ -271,6 +372,7 @@ export const useGenerationStore = defineStore('generation', () => {
       await chats.refreshMeta(meta.id)
       // fire-and-forget：提炼要十几秒，不能卡住 UI 收尾
       void maybeExtractMemory(meta.id)
+      void catchUpIndex(meta.id)
     }
   }
 
@@ -328,6 +430,10 @@ export const useGenerationStore = defineStore('generation', () => {
     const genId = Date.now()
     await chats.markTainted()
 
+    // 整轮**只检索一次**：放进循环的话，3 个成员就会嵌入 3 次同样的查询，
+    // 纯属白烧 CPU，而且每人召回的还是同一批片段
+    await prepareRecall(meta.id)
+
     try {
       for (const id of speakers) {
         const char = charById.get(id)
@@ -347,6 +453,7 @@ export const useGenerationStore = defineStore('generation', () => {
       // 挂在 sendGroup 的 finally 而不是 generateOne —— 否则 5 个成员的群聊
       // 一轮会发 5 次提炼请求
       void maybeExtractMemory(meta.id)
+      void catchUpIndex(meta.id)
     }
   }
 
@@ -468,5 +575,17 @@ export const useGenerationStore = defineStore('generation', () => {
     await send()
   }
 
-  return { busy, lastPrompt, build, send, sendGroup, regenerate, stop, extractMemoryNow }
+  return {
+    busy,
+    lastPrompt,
+    build,
+    send,
+    sendGroup,
+    regenerate,
+    stop,
+    extractMemoryNow,
+    prepareRecall,
+    catchUpIndex,
+    backfillAll,
+  }
 })

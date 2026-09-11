@@ -83,8 +83,11 @@ export async function rename(id: string, title: string): Promise<void> {
 /** 删会话同时删其全部消息，必须同事务 */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
-  const tx = db.transaction(['chats', 'messages'], 'readwrite')
+  // memchunks 必须和 messages 在**同一事务**里删：分开删的话，中途失败会留下
+  // 几 MB 的孤儿向量，而且没有任何东西会再去回收它们
+  const tx = db.transaction(['chats', 'messages', 'memchunks'], 'readwrite')
   await tx.objectStore('messages').delete(chatRange(id))
+  await tx.objectStore('memchunks').delete(chatRange(id))
   await tx.objectStore('chats').delete(id)
   await tx.done
 }

@@ -168,8 +168,18 @@ export async function clear(chatId: string): Promise<void> {
   await tx.done
 }
 
-/** 分支：把 src 会话 seq <= atSeq 的消息复制进 dst，返回复制条数 */
-export async function copyUpTo(src: string, dst: string, atSeq: number): Promise<number> {
+/**
+ * 分支：把 src 会话 seq <= atSeq 的消息复制进 dst。
+ *
+ * 返回 **旧 seq → 新 seq** 的映射（`.size` 即复制条数）。新会话是重新取号的，
+ * 任何按 seq 索引到消息的旁路数据（向量块的 srcSeqs、记忆水位线）都得靠它平移，
+ * 否则会在错误的位置生效。
+ */
+export async function copyUpTo(
+  src: string,
+  dst: string,
+  atSeq: number,
+): Promise<Map<number, number>> {
   const db = await getDb()
   const tx = db.transaction(['chats', 'messages'], 'readwrite')
   const store = tx.objectStore('messages')
@@ -177,9 +187,11 @@ export async function copyUpTo(src: string, dst: string, atSeq: number): Promise
   const chats = tx.objectStore('chats')
   const meta = await chats.get(dst)
   if (!meta) throw new Error(`会话 ${dst} 不存在`)
+  const seqMap = new Map<number, number>()
   for (const r of rows) {
     const row: ChatMessage = { ...r, chatId: dst, seq: meta.nextSeq, id: crypto.randomUUID() }
     await store.put(toPlain(row))
+    seqMap.set(r.seq, row.seq)
     meta.nextSeq += 1
     meta.messageCount += 1
     meta.lastMessageAt = row.send_date
@@ -187,5 +199,5 @@ export async function copyUpTo(src: string, dst: string, atSeq: number): Promise
   meta.updatedAt = Date.now()
   await chats.put(toPlain(meta))
   await tx.done
-  return rows.length
+  return seqMap
 }

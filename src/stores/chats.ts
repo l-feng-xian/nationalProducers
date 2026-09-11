@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { chatsRepo, messagesRepo } from '@/db/repositories'
+import { chatsRepo, memchunksRepo, messagesRepo } from '@/db/repositories'
 import { newAiMessage, newUserMessage, type ChatMessage, type ChatMeta } from '@/types/chat'
 import { fnv1a } from '@/services/hash'
 import { buildMacroEnv, pickGreeting } from '@/services/prompt/builder'
@@ -8,6 +8,13 @@ import { useCharactersStore, defaultAssistantCharacter } from './characters'
 import { useSettingsStore } from './settings'
 import { useGroupsStore } from './groups'
 import { toPlain } from '@/utils/plain'
+import {
+  invalidateDeletedSeq,
+  invalidateFromSeq,
+  remapThroughSeq,
+  type InvalidateResult,
+} from '@/services/memory/invalidate'
+import { invalidateIndex, releaseIndex } from '@/services/memory/runtime'
 
 export const useChatsStore = defineStore('chats', () => {
   const list = ref<ChatMeta[]>([])
@@ -33,8 +40,21 @@ export const useChatsStore = defineStore('chats', () => {
   }
 
   function close() {
+    // 打包索引是 N×512 的 Float32Array，切走不放手的话连开几个长会话
+    // 就能把低端机的标签页耗死
+    if (current.value) releaseIndex()
     current.value = null
     messages.value = []
+  }
+
+  /** 失效结果收口：水位线变了才落盘，并让打包缓存重建 */
+  async function applyInvalidation(chatId: string, res: InvalidateResult) {
+    if (!res.removed) return
+    if (res.state) {
+      await chatsRepo.patchMetadata(chatId, { memIndex: res.state })
+      await refreshMeta(chatId)
+    }
+    invalidateIndex(chatId)
   }
 
   /** 新建 1v1 会话，并按需求 2 随机播种一条开场白 */
@@ -200,7 +220,9 @@ export const useChatsStore = defineStore('chats', () => {
   }
 
   async function removeChat(id: string) {
+    // 向量块由 chatsRepo.remove 在同一事务里删掉
     await chatsRepo.remove(id)
+    invalidateIndex(id)
     list.value = list.value.filter((c) => c.id !== id)
     if (current.value?.id === id) close()
   }
@@ -209,9 +231,16 @@ export const useChatsStore = defineStore('chats', () => {
   async function removeTail(n: number) {
     const meta = current.value
     if (!meta) return
+    const from = messages.value[Math.max(0, messages.value.length - n)]
     await messagesRepo.removeTail(meta.id, n)
     messages.value = messages.value.slice(0, Math.max(0, messages.value.length - n))
     await refreshMeta(meta.id)
+    if (from) {
+      await applyInvalidation(
+        meta.id,
+        await invalidateFromSeq(meta.id, from.seq, meta.chat_metadata.memIndex),
+      )
+    }
   }
 
   /** 编辑某条消息的正文；若它有 swipes，同步更新当前那一条 */
@@ -226,6 +255,15 @@ export const useChatsStore = defineStore('chats', () => {
     }
     patchLocal(id, patch)
     await persist(id)
+
+    // 正文变了：这条之后的索引整段作废重建，新正文才进得来
+    const meta = current.value
+    if (meta) {
+      await applyInvalidation(
+        meta.id,
+        await invalidateFromSeq(meta.id, row.seq, meta.chat_metadata.memIndex),
+      )
+    }
   }
 
   /** 删除单条消息 */
@@ -236,6 +274,10 @@ export const useChatsStore = defineStore('chats', () => {
     await messagesRepo.remove(meta.id, row.seq)
     messages.value = messages.value.filter((m) => m.id !== id)
     await refreshMeta(meta.id)
+    await applyInvalidation(
+      meta.id,
+      await invalidateDeletedSeq(meta.id, row.seq, meta.chat_metadata.memIndex),
+    )
   }
 
   /** 删除该条及其之后的全部消息 */
@@ -247,6 +289,10 @@ export const useChatsStore = defineStore('chats', () => {
     const i = messages.value.findIndex((m) => m.id === id)
     if (i >= 0) messages.value = messages.value.slice(0, i)
     await refreshMeta(meta.id)
+    await applyInvalidation(
+      meta.id,
+      await invalidateFromSeq(meta.id, row.seq, meta.chat_metadata.memIndex),
+    )
   }
 
   /**
@@ -273,7 +319,23 @@ export const useChatsStore = defineStore('chats', () => {
     next.chat_metadata.chat_id_hash = meta.chat_metadata.chat_id_hash ?? fnv1a(meta.id)
     await chatsRepo.save(next)
 
-    await messagesRepo.copyUpTo(meta.id, next.id, row.seq)
+    const seqMap = await messagesRepo.copyUpTo(meta.id, next.id, row.seq)
+
+    // 新会话是重新取号的，一切按 seq 索引的旁路数据都得跟着平移，
+    // 否则失效逻辑会在错误的位置开刀（「改了第 30 条，第 80 条的记忆没了」）
+    const memIndex = next.chat_metadata.memIndex
+    if (memIndex) {
+      const copied = await memchunksRepo.copyRemapped(meta.id, next.id, seqMap)
+      if (copied) {
+        memIndex.throughSeq = remapThroughSeq(memIndex.throughSeq, seqMap)
+      } else {
+        delete next.chat_metadata.memIndex
+      }
+    }
+    const card = next.chat_metadata.stateCard
+    if (card) card.throughSeq = remapThroughSeq(card.throughSeq, seqMap)
+    await chatsRepo.save(next)
+
     const saved = await chatsRepo.get(next.id)
     if (saved) list.value = [saved, ...list.value]
     return saved ?? next

@@ -41,6 +41,25 @@ async function dataUrlToBlob(url: string): Promise<Blob> {
   return res.blob()
 }
 
+/**
+ * 会话记忆的**向量块刻意不导出**。
+ *
+ * 一是体积：JSON 里 Float32Array 会被摊成 `{"0":0.12,"1":-0.03,…}`，512 维一块就是
+ * 上万字符，一个长会话几千块直接把备份撑到几十 MB，正常的备份/恢复都做不成。
+ * 二是它本就是从 messages 推导出来的派生数据，还绑定具体模型 —— 换模型后照样作废。
+ *
+ * 但**水位线必须一起抹掉**：memIndex.throughSeq 说「已经索引到第 N 条了」，
+ * 而导入的库里一个向量块都没有。追赶逻辑只认水位线，会认定无事可做，
+ * 于是导入的会话记忆永远是空的，且不报任何错。这是必须成对处理的两件事。
+ */
+function stripMemIndex(row: unknown): unknown {
+  if (!row || typeof row !== 'object') return row
+  const meta = (row as { chat_metadata?: { memIndex?: unknown } }).chat_metadata
+  if (!meta || typeof meta !== 'object' || !('memIndex' in meta)) return row
+  const { memIndex: _drop, ...rest } = meta
+  return { ...(row as object), chat_metadata: rest }
+}
+
 export async function exportAll(): Promise<Blob> {
   const db = await getDb()
   const blobRecs = await db.getAll('blobs')
@@ -115,7 +134,7 @@ export async function importAll(text: string): Promise<ImportResult> {
   await bulk('characters', file.characters ?? [])
   await bulk('worldbooks', file.worldbooks ?? [])
   await bulk('groups', file.groups ?? [])
-  await bulk('chats', file.chats ?? [])
+  await bulk('chats', (file.chats ?? []).map(stripMemIndex))
   await bulk('messages', file.messages ?? [])
 
   if (file.settings) await db.put('settings', toPlain(file.settings) as never)

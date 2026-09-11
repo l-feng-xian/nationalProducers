@@ -38,6 +38,20 @@ export interface MemorySettings {
   dialogueCharLimit: number
   /** 状态卡的深度注入位置。2 = 注入后仍有 2 条真实消息，贴近回复且不破坏前缀缓存 */
   depth: number
+  /** 向量召回（二期）。关闭时一个字节的模型都不会下载 */
+  vector: {
+    enabled: boolean
+    /** 召回几条 */
+    topK: number
+    /** 相似度下限。见 search.ts 里 minScore 的实测说明 */
+    minScore: number
+    /** 召回片段的注入深度。比状态卡(2)靠前，因为它是「曾经」不是「此刻」 */
+    recallDepth: number
+    /** 用最近几条消息作为查询 */
+    queryWindow: number
+    /** 首次回填只做最近这么多条；全历史给显式按钮 */
+    backfillLimit: number
+  }
   /**
    * 提炼专用模型，空 = 沿用主对话模型。
    * 主聊用推理模型时把提炼切到普通模型能省一半以上成本。
@@ -196,6 +210,14 @@ export function defaultSettings(): Settings {
       dialogueCharLimit: 3000,
       depth: 2,
       model: '',
+      vector: {
+        enabled: false,
+        topK: 3,
+        minScore: 0.4,
+        recallDepth: 6,
+        queryWindow: 2,
+        backfillLimit: 400,
+      },
     },
     constraint: {
       solo: { enabled: true, text: DEFAULT_SOLO_CONSTRAINT, depth: 0, role: 0, order: 200 },

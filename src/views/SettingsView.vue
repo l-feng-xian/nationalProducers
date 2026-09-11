@@ -615,6 +615,66 @@ async function testConnection() {
             </label>
           </div>
 
+          <div class="cbx-divider" />
+          <div class="switchrow">
+            <label class="cbx-switch swopt">
+              <input v-model="mem.vector.enabled" type="checkbox" @change="settings.touch()" />
+              <span class="cbx-switch__track" />
+              <span>向量召回（本地模型，首次约 24MB）</span>
+            </label>
+          </div>
+          <p v-if="mem.vector.enabled" class="note">
+            在本机浏览器里跑一个 24MB 的中文向量模型，把早期对话按**语义**召回。
+            不联网、不上传任何内容。模型随应用发布，只在第一次用到时加载。
+            它擅长「同义改写」的召回（你说「那把断了的刀」也能找到「缺口长刀」），
+            但**无法表达「已经不成立」** —— 那由上面的状态卡负责。
+          </p>
+          <div v-if="mem.vector.enabled" class="grid2">
+            <label class="cbx-field">
+              <span class="cbx-field__label">召回条数</span>
+              <input
+                v-model.number="mem.vector.topK"
+                class="cbx-input"
+                type="number"
+                min="1"
+                max="8"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">相似度下限</span>
+              <input
+                v-model.number="mem.vector.minScore"
+                class="cbx-input"
+                type="number"
+                step="0.05"
+                min="0"
+                max="1"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">召回注入深度</span>
+              <input
+                v-model.number="mem.vector.recallDepth"
+                class="cbx-input"
+                type="number"
+                min="0"
+                @change="settings.touch()"
+              />
+            </label>
+            <label class="cbx-field">
+              <span class="cbx-field__label">首次回填条数</span>
+              <input
+                v-model.number="mem.vector.backfillLimit"
+                class="cbx-input"
+                type="number"
+                min="50"
+                @change="settings.touch()"
+              />
+            </label>
+          </div>
+
           <label class="cbx-field cbx-field--md">
             <span class="cbx-field__label">提炼专用模型（留空 = 用主对话模型）</span>
             <input
