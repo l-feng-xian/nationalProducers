@@ -13,6 +13,7 @@ import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
 import { createPlaceholderRig } from './rig'
+import { createSpineRig, loadSpine, type SpineAssetPaths } from './spineRig'
 
 /** 移动速度，格/秒 */
 const SPEED = 5.2
@@ -26,10 +27,14 @@ const MAX_DT = 0.05
 
 /** 角色的碰撞半径（格）。比 0.5 小，免得贴着岸边就卡住 */
 const RADIUS = 0.28
+/** 玩家立绘高度（格） */
+const PLAYER_H = 1.7
 
 export interface EngineHandle {
   readonly scene: SceneHandle
   readonly input: InputHandle
+  /** 玩家实际用的是哪种渲染，UI 上要能看出来是不是降级了 */
+  readonly playerRigKind: 'spine' | 'placeholder'
   /** 玩家当前格坐标（浮点，已回绕） */
   position(): { x: number; y: number }
   /** 本帧是否在移动，UI 上要显示 */
@@ -47,6 +52,8 @@ export interface CreateEngineArgs {
   /** 初始位置，不给就找一块靠近世界中心的陆地 */
   start?: { x: number; y: number }
   forceWebGL?: boolean
+  /** 玩家的 Spine 资源。不给、或加载失败，都自动退回程序化占位小人 */
+  playerSpine?: SpineAssetPaths
 }
 
 /**
@@ -82,7 +89,20 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   let py = spawn.y
   let isMoving = false
 
-  const player: CharacterRig = createPlaceholderRig({ THREE: scene.THREE, pitch: scene.pitch })
+  // Spine 优先，失败静默退回占位 —— 角色渲染不起来不该把整个场景带崩
+  let playerRigKind: 'spine' | 'placeholder' = 'placeholder'
+  let player: CharacterRig
+  const spineLoad = args.playerSpine ? await loadSpine(args.playerSpine, scene.THREE) : null
+  if (spineLoad) {
+    player = createSpineRig(spineLoad, {
+      THREE: scene.THREE,
+      pitch: scene.pitch,
+      height: PLAYER_H,
+    })
+    playerRigKind = 'spine'
+  } else {
+    player = createPlaceholderRig({ THREE: scene.THREE, pitch: scene.pitch })
+  }
   scene.addRig(player)
 
   // 窗口/容器尺寸变化要跟着走，否则转屏后画面被拉伸
@@ -111,6 +131,7 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   const handle: EngineHandle = {
     scene,
     input,
+    playerRigKind,
     position: () => ({ x: px, y: py }),
     moving: () => isMoving,
     start() {
