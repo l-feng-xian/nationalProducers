@@ -137,12 +137,19 @@ async function testConnection() {
   }
   testing.value = true
   try {
-    const out = await chatOnce(await cfg(), {
-      model: p.model,
-      messages: [{ role: 'user', content: '说"连接成功"四个字' }],
-      stream: false,
-      maxTokens: 32,
-    })
+    const out = await chatOnce(
+      await cfg(),
+      {
+        model: p.model,
+        messages: [{ role: 'user', content: '说"连接成功"四个字' }],
+        stream: false,
+        maxTokens: 32,
+      },
+      undefined,
+      // 这颗按钮要的是**快速结论**：只发 32 token，正常几秒内就回。
+      // 用默认的 5 分钟意味着服务不通时要转五分钟圈才告诉用户，还不如直接判超时
+      60_000,
+    )
     toast.success(`连接成功：${out.slice(0, 40)}`)
   } catch (e) {
     toast.error(e instanceof ProviderError ? e.message : String(e))

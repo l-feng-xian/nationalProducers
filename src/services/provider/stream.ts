@@ -16,8 +16,15 @@ interface DeltaShape {
   error?: { message?: string; type?: string }
 }
 
-/** 把 Response 的 SSE 流解析成一系列 StreamChunk */
-export async function* parseSSE(res: Response): AsyncGenerator<StreamChunk> {
+/**
+ * 把 Response 的 SSE 流解析成一系列 StreamChunk。
+ *
+ * @param onBytes 每读到一批**字节**就回调一次，用于给停滞守卫续期。
+ *   ⚠️ 必须按字节而不是按 yield 出去的 chunk 算「有进展」：很多网关用 SSE
+ *   注释（`: ping`）做保活，那种行在下面被 `startsWith(':')` 跳过、一个 chunk
+ *   都不 yield；按 chunk 判活的话，一条只发心跳的**健康**连接会被当成卡死掐掉。
+ */
+export async function* parseSSE(res: Response, onBytes?: () => void): AsyncGenerator<StreamChunk> {
   const body = res.body
   if (!body) throw new ProviderError('parse', '响应没有 body')
   const reader = body.getReader()
@@ -28,6 +35,7 @@ export async function* parseSSE(res: Response): AsyncGenerator<StreamChunk> {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      onBytes?.()
       buf += decoder.decode(value, { stream: true })
 
       // SSE 事件以空行分隔；保留最后一段不完整的

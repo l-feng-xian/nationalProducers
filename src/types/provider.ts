@@ -50,6 +50,8 @@ export type ProviderErrorKind =
   | 'bad_request'
   | 'server'
   | 'aborted'
+  /** 长时间没有任何响应，被停滞守卫掐掉。与 aborted 的区别是**用户没按停止** */
+  | 'timeout'
   | 'parse'
   | 'unknown'
 

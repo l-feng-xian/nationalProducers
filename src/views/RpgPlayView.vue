@@ -107,7 +107,17 @@ function openTalk(npc: RpgNpc) {
   bar.value?.focus()
 }
 
+/**
+ * ✕ 就是「不聊了」：还在生成就顺手掐掉。
+ *
+ * ⚠️ 不掐的话这条请求会继续占着 `gen.busy` —— 那是**全局**的，整个应用只有一个。
+ * 而对话条一卸载「停止」按钮就跟着没了，玩家再没有任何入口去停它：表现是
+ * 之后走到每个 NPC 面前都回「上一句还没说完」，连聊天页的输入框也一起变哑，
+ * 且界面上找不到任何原因。已经流出来的字不会丢 —— 管线按 chatId 落库，
+ * 中断会连同 stopped 标记一起写下去。
+ */
 function closeTalk() {
+  if (rpg.pending) stopTalking()
   rpg.closeDialogue()
   void rpg.save()
 }
@@ -159,6 +169,9 @@ function onNpcsChanged() {
 }
 
 onBeforeUnmount(() => {
+  // 同 closeTalk：离开本页后 RPG 侧再也没有停止入口，不掐就会把全局 busy
+  // 一直占着，殃及聊天页
+  if (rpg.pending) stopTalking()
   // 位置与 chatId 都要留住
   void rpg.save()
   engine.value?.dispose()

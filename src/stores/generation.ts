@@ -353,27 +353,45 @@ export const useGenerationStore = defineStore('generation', () => {
       return
     }
 
-    // 检索必须在 build() 之前：build() 是同步的，拿不到 await
-    await prepareRecall(meta.id)
-    const built = build({
-      ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
-      ...(opts.speakerOverride ? { speakerOverride: opts.speakerOverride } : {}),
-    })
-    if (!built) return
-
-    const char = resolveSpeaker(meta, opts.speakerOverride)
-    const row = await chats.appendAi(char.data.name, char.id)
-    if (!row) return
-
+    /**
+     * ⚠️ busy 与 controller 必须在**第一个 await 之前**立起来，两件事都靠它：
+     *  ① 原先 prepareRecall / appendAi 在闸门之后、置位之前 await，两次快点击
+     *     能双双通过 `!busy.value`，同一轮发两遍请求、留两条 assistant；
+     *  ② 这段时间 controller 还是 null，stop() 是**空操作**。聊天页的停止按钮
+     *     `v-if="busy"` 此刻还没出现所以看不出来，但 RPG 页的停止按钮盯的是
+     *     rpg.pending（在 talkToNpc 之前就置位了），按下去毫无反应。
+     * 从守卫到这里之间只许留同步代码。
+     */
     busy.value = true
-    controller = new AbortController()
-    await chats.markTainted()
+    const ctl = new AbortController()
+    controller = ctl
+    /** 只有真的建了占位行才算「这一轮生成过」，收尾动作全挂在它上面 */
+    let generated = false
+    let row: Awaited<ReturnType<typeof chats.appendAi>> = null
 
     const started = Date.now()
     let text = ''
     let reasoning = ''
 
     try {
+      // 检索必须在 build() 之前：build() 是同步的，拿不到 await
+      await prepareRecall(meta.id)
+      // 预检期间用户按了停止：此刻还没有占位行，干净退出即可
+      if (ctl.signal.aborted) return
+
+      const built = build({
+        ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
+        ...(opts.speakerOverride ? { speakerOverride: opts.speakerOverride } : {}),
+      })
+      if (!built) return
+
+      const char = resolveSpeaker(meta, opts.speakerOverride)
+      row = await chats.appendAi(char.data.name, char.id)
+      if (!row) return
+      await chats.markTainted()
+      generated = true
+      // ↑ 之后再按停止不必单独判：fetch 对已中断的信号会立刻 reject，
+      //   走下面 catch 的 aborted 分支，空占位行会被 removeRowFrom 删掉
       const cfg = await providerConfig()
       const req = {
         model: p.model,
@@ -387,7 +405,9 @@ export const useGenerationStore = defineStore('generation', () => {
 
       if (p.stream) {
         let lastFlush = 0
-        for await (const chunk of streamChat(cfg, req, controller.signal)) {
+        // ⚠️ 用捕获的 ctl 而不是模块字段 controller：stop() 会把 controller
+        // 置 null，而正在飞的这一轮仍然需要自己的 signal
+        for await (const chunk of streamChat(cfg, req, ctl.signal)) {
           if (chunk.delta) text += chunk.delta
           if (chunk.reasoningDelta) reasoning += chunk.reasoningDelta
           // 节流刷新，避免每个 token 触发一次整列表重渲染
@@ -398,7 +418,7 @@ export const useGenerationStore = defineStore('generation', () => {
           }
         }
       } else {
-        text = await chatOnce(cfg, req, controller.signal)
+        text = await chatOnce(cfg, req, ctl.signal)
       }
 
       // 按 chatId 写回，不看用户现在开着哪段会话（切走了也不能丢回复）
@@ -419,7 +439,10 @@ export const useGenerationStore = defineStore('generation', () => {
       }
     } catch (e) {
       const err = e instanceof ProviderError ? e : new ProviderError('unknown', String(e))
-      if (err.kind === 'aborted') {
+      // 预检阶段就抛了（还没有占位行）：没什么可收拾的，报一声即可
+      if (!row) {
+        if (err.kind !== 'aborted') toast.error(err.message)
+      } else if (err.kind === 'aborted') {
         // 一个字都没出就被中断（首字之前按停止很常见，带思维链的模型 TTFB 好几秒），
         // 留着就是一条永久空白的 assistant，还会被塞进之后每一轮提示词
         if (!text) await chats.removeRowFrom(meta.id, row)
@@ -429,20 +452,31 @@ export const useGenerationStore = defineStore('generation', () => {
         toast.error(err.message)
         // 生成失败：把空的占位消息删掉，别在历史里留残骸
         if (!text) await chats.removeRowFrom(meta.id, row)
-        else await chats.writeRow(meta.id, row, { mes: text })
+        // 超时同样是「话说到一半被掐」，打上 stopped 让气泡显示「已中断」，
+        // 别让一条被截断的回复看起来像是模型自己说完了
+        else
+          await chats.writeRow(meta.id, row, {
+            mes: text,
+            ...(err.kind === 'timeout' ? { extra: { ...row.extra, stopped: true } } : {}),
+          })
       }
     } finally {
       busy.value = false
-      controller = null
-      // 会话变量可能被 {{setvar}} 改过；世界书定时效果（sticky/cooldown）也要落盘
-      await chatsRepo.patchMetadata(meta.id, {
-        variables: meta.chat_metadata.variables,
-        timedWorldInfo: meta.chat_metadata.timedWorldInfo,
-      })
-      await chats.refreshMeta(meta.id)
-      // fire-and-forget：提炼要十几秒，不能卡住 UI 收尾
-      void maybeExtractMemory(meta.id)
-      void catchUpIndex(meta.id)
+      // 只有还是自己那一个才清：防止将来这里加了 await 之后清掉下一轮的
+      if (controller === ctl) controller = null
+      // ⚠️ 下面全部由 generated 把门。预检阶段返回的那几条路**什么都没生成**，
+      //    此时提炼记忆等于「用户点了发送、发现没配好，结果后台照样烧一次 API」
+      if (generated) {
+        // 会话变量可能被 {{setvar}} 改过；世界书定时效果（sticky/cooldown）也要落盘
+        await chatsRepo.patchMetadata(meta.id, {
+          variables: meta.chat_metadata.variables,
+          timedWorldInfo: meta.chat_metadata.timedWorldInfo,
+        })
+        await chats.refreshMeta(meta.id)
+        // fire-and-forget：提炼要十几秒，不能卡住 UI 收尾
+        void maybeExtractMemory(meta.id)
+        void catchUpIndex(meta.id)
+      }
     }
   }
 
@@ -502,7 +536,12 @@ export const useGenerationStore = defineStore('generation', () => {
       return
     }
 
+    // ⚠️ 上面那句 `if (busy.value) return` 到这里之间一行 await 都不许有，
+    // 否则就是 send() 里那个 TOCTOU：两次快点击双双通过闸门
     busy.value = true
+    // 预检期间也要有东西可掐。每个发言者随后会在 generateOne 里换上自己的，
+    // 这一个纯粹是为了覆盖 markTainted / prepareRecall 这段窗口
+    controller = new AbortController()
     const genId = Date.now()
     await chats.markTainted()
 
@@ -512,10 +551,12 @@ export const useGenerationStore = defineStore('generation', () => {
 
     try {
       for (const id of speakers) {
+        // ⚠️ 判在**进入**循环体时。原先只判在末尾：用户在 prepareRecall 期间
+        // 按停止，aborted 已经是 true，第一个发言者却还是会完整生成一遍
+        if (aborted) break
         const char = charById.get(id)
         if (!char) continue
         await generateOne({ group: g, speakerChar: char, members: charById, genId })
-        if (aborted) break
       }
     } finally {
       busy.value = false
@@ -586,7 +627,8 @@ export const useGenerationStore = defineStore('generation', () => {
     if (!row) return
     chats.patchLocal(row.id, { extra: { ...row.extra, gen_id: genId } })
 
-    controller = new AbortController()
+    const ctl = new AbortController()
+    controller = ctl
     const p = settings.settings.provider
     let text = ''
     try {
@@ -602,7 +644,7 @@ export const useGenerationStore = defineStore('generation', () => {
       }
       if (p.stream) {
         let lastFlush = 0
-        for await (const chunk of streamChat(cfg, req, controller.signal)) {
+        for await (const chunk of streamChat(cfg, req, ctl.signal)) {
           if (chunk.delta) text += chunk.delta
           const now = Date.now()
           if (now - lastFlush >= settings.settings.chat.streamFlushMs) {
@@ -611,33 +653,41 @@ export const useGenerationStore = defineStore('generation', () => {
           }
         }
       } else {
-        text = await chatOnce(cfg, req, controller.signal)
+        text = await chatOnce(cfg, req, ctl.signal)
       }
       // 兜底：模型仍然替别人续写时，从那里截断
       const cleaned = cleanGroupMessage(text, char.data.name, allNames)
-      chats.patchLocal(row.id, {
+      // 按 chatId 写回，不看用户现在开着哪段会话（与 send() 同理）
+      await chats.writeRow(meta.id, row, {
         mes: cleaned,
         extra: { ...row.extra, gen_id: genId, model: p.model },
       })
-      await chats.persist(row.id)
     } catch (e) {
       const err = e instanceof ProviderError ? e : new ProviderError('unknown', String(e))
       if (err.kind === 'aborted') {
         aborted = true
-        chats.patchLocal(row.id, {
-          mes: text,
-          extra: { ...row.extra, gen_id: genId, stopped: true },
-        })
-        await chats.persist(row.id)
+        if (!text) await chats.removeRowFrom(meta.id, row)
+        else
+          await chats.writeRow(meta.id, row, {
+            mes: text,
+            extra: { ...row.extra, gen_id: genId, stopped: true },
+          })
       } else {
         toast.error(err.message)
         aborted = true
-        if (!text) await chats.removeTail(1)
-        else {
-          chats.patchLocal(row.id, { mes: text })
-          await chats.persist(row.id)
-        }
+        if (!text) await chats.removeRowFrom(meta.id, row)
+        else
+          await chats.writeRow(meta.id, row, {
+            mes: text,
+            ...(err.kind === 'timeout'
+              ? { extra: { ...row.extra, gen_id: genId, stopped: true } }
+              : {}),
+          })
       }
+    } finally {
+      // ⚠️ 只清自己那一个。controller 是全局单例、每个发言者都会重新赋值，
+      // 无条件置 null 会把下一位刚建好的那个抹掉 —— 于是整轮里只有第一位能被停止
+      if (controller === ctl) controller = null
     }
   }
 
