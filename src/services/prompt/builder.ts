@@ -116,6 +116,14 @@ export interface BuildPromptInput {
    * 两项留空等于不覆盖：resolvePersona 用的是 `|| fallback`，空串照样回落。
    */
   personaOverride?: { name: string; description: string }
+  /**
+   * 追加在【场景】最前面的一段设定。RPG 用它送「世界简介」。
+   *
+   * 刻意是**追加**而不是替换：角色卡自带的 scenario 是作者写的相遇情境，
+   * 顶掉它就等于悄悄丢掉卡的一部分。世界简介说的是「这是个什么地方」，
+   * 卡的 scenario 说的是「你们怎么碰上的」，两件事并不冲突。
+   */
+  scenarioPrefix?: string
   isGroup: boolean
   speaker: SpeakerLite
   /** 1vN 全体成员（含静音）；1v1 = [speaker] */
@@ -191,6 +199,11 @@ function roleByName(r: string): 0 | 1 | 2 {
  * 那样传一个两项都空的覆盖会解析成「空身份」，而不是回落到全局人设。
  * 空串必须继续往下落，这与 GroupPersona 的既有语义一致（group.ts 用 `||`）。
  */
+/** 世界简介拼在角色卡 scenario 前面，两段都可能为空 */
+function withScenarioPrefix(prefix: string, scenario: string): string {
+  return [prefix.trim(), scenario.trim()].filter(Boolean).join('\n\n')
+}
+
 function effectivePersona(input: BuildPromptInput): { name: string; description: string } {
   const base = resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
   const o = input.personaOverride
@@ -277,7 +290,10 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const card = {
     description: joined ? joined.description : base(c.data.description),
     personality: joined ? joined.personality : base(c.data.personality),
-    scenario: joined ? joined.scenario : base(c.data.scenario),
+    scenario: withScenarioPrefix(
+      base(input.scenarioPrefix ?? ''),
+      joined ? joined.scenario : base(c.data.scenario),
+    ),
     mesExample: joined ? joined.mesExample : base(c.data.mes_example),
     persona: base(persona.description),
     systemPrompt: base(c.data.system_prompt),

@@ -12,6 +12,7 @@ import { computed } from 'vue'
 import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
 import { useSettingsStore } from '@/stores/settings'
+import { nativeIdentity } from '@/types/rpg'
 
 const emit = defineEmits<{ close: []; changed: [] }>()
 
@@ -29,6 +30,9 @@ const effectiveMe = computed(() => {
     description: p?.description?.trim() || settings.settings.persona.description || '（未填写）',
   }
 })
+
+/** 不填简介时实际会进提示词的那句，直接显示出来，别让用户猜 */
+const nativeHint = computed(() => nativeIdentity(world.value?.name))
 
 function onChange() {
   emit('changed')
@@ -51,6 +55,24 @@ function removeNpc(id: string) {
         </header>
 
         <div v-if="world" class="cbx-modal__body cbx-scroll">
+          <!-- 世界简介 -->
+          <section class="sec">
+            <span class="cbx-field__label">🌍 世界简介</span>
+            <p class="cbx-field__hint">
+              这是个什么地方、什么年代、有什么规矩。会作为【场景】进入这个世界里
+              每一段对话，角色卡自带的情境不会被顶掉，两段并存。
+            </p>
+            <textarea
+              v-model="world.description"
+              class="cbx-textarea"
+              rows="3"
+              placeholder="例：艾尔王国，战后第三年。魔法被教会垄断，边境村镇仍有游荡的残兵。"
+              @change="onChange"
+            />
+          </section>
+
+          <div class="cbx-divider" />
+
           <!-- 玩家身份 -->
           <section class="sec">
             <div class="sec__head">
@@ -123,6 +145,9 @@ function removeNpc(id: string) {
                     placeholder="它是谁、什么身份、说话什么调子 —— 这段会进提示词"
                     @change="onChange"
                   />
+                  <span v-if="!npc.description.trim()" class="cbx-field__hint">
+                    留空则默认是{{ nativeHint }}
+                  </span>
                 </label>
               </template>
               <p v-else class="cbx-field__hint">

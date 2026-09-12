@@ -185,7 +185,12 @@ export const useChatsStore = defineStore('chats', () => {
     const meta = current.value
     if (!meta) return null
     const settings = useSettingsStore()
-    const who = nameOverride?.trim() || settings.settings.persona.name
+    // 没显式传就看会话自带的 RPG 身份 —— 从聊天页发言时调用方并不知道
+    // 这是一段游戏里的对话，不兜住的话又会记成全局人设的名字
+    const who =
+      nameOverride?.trim() ||
+      meta.chat_metadata.rpg?.persona.name?.trim() ||
+      settings.settings.persona.name
     const row = await messagesRepo.append(meta.id, newUserMessage(meta.id, who, text))
     messages.value = [...messages.value, row]
     await refreshMeta(meta.id)

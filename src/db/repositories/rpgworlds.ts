@@ -19,6 +19,8 @@ import { emptyWorld, type RpgWorld } from '@/types/rpg'
 function normalize(w: RpgWorld): RpgWorld {
   if (!Array.isArray(w.npcs)) w.npcs = []
   if (!w.persona) w.persona = { name: '', description: '' }
+  // 世界简介是后加的字段，本模块上线前存的世界都没有它
+  if (typeof w.description !== 'string') w.description = ''
   return w
 }
 

@@ -12,6 +12,8 @@ import { selectSpeakers } from '@/services/group/activation'
 import { cleanGroupMessage, groupStopStrings } from '@/services/group/cards'
 import { group_activation_strategy, type Group } from '@/types/group'
 import type { Character } from '@/types/character'
+import type { ChatMeta } from '@/types/chat'
+import { synthNpcCard } from '@/types/rpg'
 import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
@@ -213,6 +215,40 @@ export const useGenerationStore = defineStore('generation', () => {
     return cfg
   }
 
+  /**
+   * 会话自带的 RPG 身份（玩家是谁、对面是谁、身处哪个世界）。
+   *
+   * ⚠️ 这一层的存在意义：NPC 会话就是普通 solo 会话，侧栏点得进去。玩家在
+   * 聊天页接着聊、或者点 ↻ 重新生成，走的都不是 dialogue.ts，一个 override
+   * 都传不进来。身份记在会话上、在这里同步取出，所有入口才会一致。
+   *
+   * 必须同步：build() 拿不到 await（见下方检索那段注释），所以绑定里存的是
+   * 自包含的数据，不去查世界存档。
+   */
+  function rpgBinding(meta: ChatMeta) {
+    const b = meta.chat_metadata.rpg
+    if (!b) return null
+    const chars = useCharactersStore()
+    // 有卡以**卡**为准：卡改了立刻跟着变。查不到（卡被删了）就退回自填身份
+    const card = b.characterId ? chars.byId(b.characterId) : undefined
+    return {
+      persona: b.persona,
+      scenarioPrefix: b.worldDescription ?? '',
+      speaker: card ?? synthNpcCard(b.npcId, b.npcName ?? '', b.npcDescription ?? '', b.worldName),
+    }
+  }
+
+  /** 本轮发言者。build() 与 send() 必须算出同一个人，所以只此一处 */
+  function resolveSpeaker(meta: ChatMeta, override?: Character): Character {
+    const chars = useCharactersStore()
+    return (
+      override ??
+      rpgBinding(meta)?.speaker ??
+      chars.byId(meta.characterId) ??
+      defaultAssistantCharacter()
+    )
+  }
+
   /** 组装本轮提示词（dryRun 也走这里，用于预览面板） */
   function build(
     opts: {
@@ -238,7 +274,8 @@ export const useGenerationStore = defineStore('generation', () => {
     const meta = chats.current
     if (!meta) return null
 
-    const char = opts.speakerOverride ?? chars.byId(meta.characterId) ?? defaultAssistantCharacter()
+    const bind = rpgBinding(meta)
+    const char = resolveSpeaker(meta, opts.speakerOverride)
     const speaker = { id: char.id, name: char.data.name, char }
 
     // 需求 5：全局世界书只在全局配置启用；角色世界书随角色带入
@@ -269,8 +306,12 @@ export const useGenerationStore = defineStore('generation', () => {
       ? toPlain(meta.chat_metadata.timedWorldInfo)
       : meta.chat_metadata.timedWorldInfo
 
+    // 显式传参优先；没传就用会话自带的绑定（聊天页 / ↻ 重新生成走的是这条）
+    const persona = opts.personaOverride ?? bind?.persona
+    const scenarioPrefix = bind?.scenarioPrefix ?? ''
     const built = buildChatPrompt({
-      ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
+      ...(persona ? { personaOverride: persona } : {}),
+      ...(scenarioPrefix ? { scenarioPrefix } : {}),
       isGroup: false,
       speaker,
       members: [speaker],
@@ -320,7 +361,7 @@ export const useGenerationStore = defineStore('generation', () => {
     })
     if (!built) return
 
-    const char = opts.speakerOverride ?? chars.byId(meta.characterId) ?? defaultAssistantCharacter()
+    const char = resolveSpeaker(meta, opts.speakerOverride)
     const row = await chats.appendAi(char.data.name, char.id)
     if (!row) return
 

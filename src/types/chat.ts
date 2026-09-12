@@ -91,6 +91,37 @@ export interface ChatMetadata {
   stateCard?: StateCard
   /** 会话记忆 · 向量索引水位线（二期） */
   memIndex?: MemIndexState
+  /** RPG 出身。只有由游戏里的 NPC 对话创建的会话才有 */
+  rpg?: RpgChatBinding
+}
+
+/**
+ * 一段会话与某个 RPG NPC 的绑定。
+ *
+ * ⚠️ 为什么必须记在**会话自己**身上，而不是靠调用方传参：
+ * NPC 会话就是一段普通的 `kind:'solo'` 会话，侧栏里点得进去。玩家完全可能
+ * 走出游戏、在聊天页接着跟这个 NPC 聊，或者点 ↻ 重新生成 —— 那两条路都
+ * 不经过 dialogue.ts，拿不到 `personaOverride`/`speakerOverride`。
+ * 于是同一段对话里，前半截对着「旅人阿柚」说，后半截突然变成全局人设；
+ * 全局人设的 description 为空时，整个【用户设定】段还会直接消失；
+ * 无卡 NPC 更会退回「一个乐于助人的 AI 助手」。
+ *
+ * 身份存在会话上，`build()` 就能同步取到，所有入口一视同仁。
+ */
+export interface RpgChatBinding {
+  worldId: string
+  npcId: string
+  /** 世界名。无卡 NPC 的「原住民」兜底身份要用它 */
+  worldName?: string
+  /** 世界简介。作为【场景】进提示词，与角色卡自带的 scenario 并存 */
+  worldDescription?: string
+  /** 玩家在该世界的身份。两项留空按 `||` 回落全局人设，与 effectivePersona 同层 */
+  persona: { name: string; description: string }
+  /** 关联的角色卡。有卡就以**卡**为准（卡改了立刻跟着变，不存快照） */
+  characterId?: string
+  /** 无卡 NPC 的自填身份 —— 这种 NPC 只存在于存档里，只能随会话带一份 */
+  npcName?: string
+  npcDescription?: string
 }
 
 /** 向量索引的进度。换模型时整会话作废重建 */

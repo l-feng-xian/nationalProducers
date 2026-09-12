@@ -11,7 +11,7 @@
 
 import { watch } from 'vue'
 import { chatsRepo, rpgWorldsRepo } from '@/db/repositories'
-import { emptyCharacter, type Character } from '@/types/character'
+import type { RpgChatBinding } from '@/types/chat'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useSettingsStore } from '@/stores/settings'
@@ -33,6 +33,26 @@ export interface TalkResult {
  * 普通聊天页跟同一个角色的对话也捞进来，NPC 会莫名其妙接上另一段历史。
  * 而且纯游戏 NPC（没有 characterId）根本进不了那个索引。
  */
+/**
+ * 这一段会话的 RPG 身份，写进 chat_metadata。
+ *
+ * 每轮都重写一遍（而不是建会话时写一次）：世界简介、玩家身份、NPC 关联的卡
+ * 都可以在 NpcEditor 里随时改，而 chatId 不会作废。不刷新的话，从聊天页
+ * 或 ↻ 发起的那一轮用的就是过期身份。
+ */
+function bindingOf(world: RpgWorld, npc: RpgNpc): RpgChatBinding {
+  return {
+    worldId: world.id,
+    npcId: npc.id,
+    worldName: world.name,
+    worldDescription: world.description ?? '',
+    persona: { name: world.persona.name, description: world.persona.description },
+    ...(npc.characterId ? { characterId: npc.characterId } : {}),
+    npcName: npc.name,
+    npcDescription: npc.description,
+  }
+}
+
 async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> {
   const chats = useChatsStore()
   const chars = useCharactersStore()
@@ -40,32 +60,20 @@ async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> 
   // 会话可能已被「数据管理」页删掉。陈旧 id 是条**静默死路**：
   // chats.open() 对不存在的 id 只是把 current 置 null，随后 send() 直接 return，
   // 全程不报错，表现为「按了没反应」。所以必须先验一次。
-  if (npc.chatId && (await chatsRepo.get(npc.chatId))) return npc.chatId
+  if (npc.chatId && (await chatsRepo.get(npc.chatId))) {
+    await chatsRepo.patchMetadata(npc.chatId, { rpg: bindingOf(world, npc) })
+    return npc.chatId
+  }
 
   const card = chars.byId(npc.characterId)
-  const { name } = resolveNpc(npc, card)
+  const { name } = resolveNpc(npc, card, world.name)
   const meta = await chats.createSolo(npc.characterId, `${world.name} · ${name}`)
+  await chatsRepo.patchMetadata(meta.id, { rpg: bindingOf(world, npc) })
   npc.chatId = meta.id
   // ⚠️ 必须落库。只改内存的话重进游戏 chatId 又是空的，于是**每次说话都新建
   // 一段会话** —— NPC 永远记不住上一句，而且会话列表被刷屏。
   await rpgWorldsRepo.save(world)
   return meta.id
-}
-
-/**
- * 没有关联角色卡的 NPC，用它自填的名字与简介**合成一张临时卡**。
- *
- * 不这么做的话，管线里 `chars.byId(undefined)` 查不到，会静默回落成
- * 「一个乐于助人的 AI 助手」—— 用户在 NPC 编辑器里写的简介一个字都进不了
- * 提示词，而这恰恰是需求里明确要求的「不关联也要能设置人物简介」。
- *
- * 这张卡只在本轮生成里存在，不落库、不进角色列表。
- */
-function synthCard(npc: RpgNpc): Character {
-  const { name, description } = resolveNpc(npc, undefined)
-  const c = emptyCharacter(`__rpg_npc_${npc.id}__`, name)
-  c.data.description = description
-  return c
 }
 
 /**
@@ -126,18 +134,10 @@ export async function talkToNpc(
     // 名字也要用世界人设：提示词走的是 personaOverride，历史记录若还记全局人设的
     // 名字，玩家在聊天页翻这段会看到「阿明」在跟 NPC 说话
     await chats.appendUser(text, world.persona.name)
-    // 玩家在这个世界里的身份。两项留空会在 effectivePersona 里回落到全局人设
-    // ⚠️ 发言者**无条件**显式传入，关联了卡也要传。
-    // 不传的话 builder 会退回 `chars.byId(meta.characterId)` —— 那是建会话
-    // 当时冻结的一份副本，而 NpcEditor 允许随时改绑角色卡且不会作废 chatId。
-    // 改绑之后两者就分叉：提示词正文、角色世界书（含 constant 常驻条目）、
-    // 落库时的发言者名字全都还认**旧卡**，编辑器上却显示着新卡的名字。
-    const linked = npc.characterId ? chars.byId(npc.characterId) : undefined
-    await gen.send({
-      personaOverride: world.persona,
-      // 关联了卡就走卡；没关联就用自填简介合成的临时卡
-      speakerOverride: linked ?? synthCard(npc),
-    })
+    // 身份不再靠参数传递：ensureChat 刚把它写进了 chat_metadata.rpg，
+    // build() 会自己取。这样游戏里、聊天页、↻ 重新生成走的是同一份身份，
+    // 不会因为入口不同而分叉（这正是之前聊天页会丢掉世界人设的原因）。
+    await gen.send()
   } catch (e) {
     stop()
     return { ok: false, text: out, error: e instanceof Error ? e.message : String(e) }
