@@ -115,7 +115,7 @@ export function autoRoutine(
   anchor: { x: number; y: number },
 ): RpgRoutine {
   const marks = scanLandmarks(world, anchor.x, anchor.y)
-  // ⚠️ 问世界，不要嗅 describeArea 的字面量：村名后缀有 村/庄/集/屯/铺/寨 六种，
+  // ⚠️ 问世界，不要嗅 describeArea 的字面量：村名后缀有 村/庄/屯/寨/坞/铺/集 七种（names.ts VILLAGE_SUFFIX），
   // `includes('村')` 只认得出其中一种，剩下五种的村民会被判成「游荡者」——
   // 而游荡者没有社交时段，整个村子于是白天各走各的、傍晚也不串门
   const inVillage = world.villageAt(anchor.x, anchor.y) !== null

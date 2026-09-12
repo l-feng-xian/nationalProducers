@@ -80,7 +80,11 @@ const YAW_DEG = 42.4
 const TILE_SCREEN_PX = 43.2
 /** chunk 边长（格）。32 → 256² 的世界共 64 块，兼顾客机剔除与构建粒度 */
 const CHUNK = 32
-/** 背景色：参考图那种米白天空 */
+/**
+ * 背景色：参考图那种米白天空。与 SKY_KEYS 的 480 分关键帧同值 ——
+ * `new THREE.Color(hex)` 的 setHex 按 sRGB 解释并转成线性，与 `skyAt(480).sky`
+ * 走的 hexToLinear 得到的是同一个三元组，所以第一帧不会跳。
+ */
 const BACKGROUND = 0xece9df
 /** 水面顶色的 alpha */
 const WATER_ALPHA = 0.62

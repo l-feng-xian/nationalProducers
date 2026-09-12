@@ -19,8 +19,8 @@ import { useToast } from '@/composables/useToast'
 import { createWorld, worldParamsOf } from '@/services/rpg/world'
 import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
-import { resolveNpc, type RpgNpc } from '@/types/rpg'
-import { TALK_MINUTES, formatClock } from '@/services/rpg/time'
+import { NPC_MAX, ROUTINE_KIND_LABEL, resolveNpc, type RpgNpc } from '@/types/rpg'
+import { TALK_MINUTES, formatClock, formatTimeOfDay } from '@/services/rpg/time'
 
 defineOptions({ name: 'RpgPlayView' })
 
@@ -38,6 +38,8 @@ const bootError = ref('')
 const backend = ref('')
 const nearName = ref('')
 const clockText = ref('')
+/** 窄屏只显示时刻。390px 下「第 2 天 05:03」会折成三行，把标题挤成一条缝 */
+const clockShort = ref('')
 const editorOpen = ref(false)
 
 /** 玩家位置每帧都在变，但只有跨格时才值得落盘 —— 否则一秒写几十次 IDB */
@@ -117,6 +119,7 @@ function onTick() {
   const c = eng.clock()
   w.worldMinutes = c.total
   clockText.value = formatClock(c)
+  clockShort.value = formatTimeOfDay(c.minuteOfDay)
   // 时刻主要搭既有落盘的顺风车（跨格 / 关对话 / 离开页面）。但只靠顺风车不行：
   // 站着不动看风景半小时再关掉标签页，onBeforeUnmount 在硬刷新/关页时并不保证
   // 跑得到，下次进来世界时间就**倒流**回上一次存档。所以再补一道粗粒度的兜底，
@@ -200,6 +203,12 @@ function onPad(x: number, y: number) {
 function placeNpc() {
   const eng = engine.value
   if (!eng) return
+  // ⚠️ 先查上限再找落点。反过来的话，满编时用户会先收到「附近找不到能站人的
+  // 地方」—— 一个**假原因**，他会跑去别处一遍遍试
+  if (rpg.npcFull) {
+    toast.error(`一个世界最多 ${NPC_MAX} 个 NPC，先删掉一个再放`)
+    return
+  }
   const p = eng.position()
   // 脚下未必能站人(浅水/房子里) —— 先找最近的有效落点
   const spot = eng.findNpcSpot(p.x, p.y)
@@ -220,6 +229,22 @@ function onNpcsChanged() {
   void rpg.save()
 }
 
+/**
+ * 重新推导某个 NPC 的作息。
+ *
+ * 由引擎来做而不是编辑器自己算：引擎手里才有 World，也只有它能把运行时的
+ * 段号清掉让改动立刻生效（见 engine.rederiveRoutine 的说明）。
+ */
+function onRederive(id: string) {
+  const r = engine.value?.rederiveRoutine(id)
+  if (!r) {
+    toast.error('这个 NPC 还没在世界里挂载，先回到世界里待一会儿')
+    return
+  }
+  void rpg.save()
+  toast.success(`已按当前位置重新推导：${ROUTINE_KIND_LABEL[r.kind]}`)
+}
+
 onBeforeUnmount(() => {
   // 同 closeTalk：离开本页后 RPG 侧再也没有停止入口，不掐就会把全局 busy
   // 一直占着，殃及聊天页
@@ -237,10 +262,25 @@ onBeforeUnmount(() => {
   <div class="page">
     <AppTopbar :title="rpg.current?.name ?? '世界'">
       <template #actions>
-        <span v-if="clockText" class="chip">{{ clockText }}</span>
-        <span v-if="backend" class="chip">{{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}</span>
+        <span v-if="clockText" class="chip">
+          <span class="wide">{{ clockText }}</span
+          ><span class="narrow">{{ clockShort }}</span>
+        </span>
+        <!-- 窄屏缩成 GPU/GL：390px 的顶栏要同时塞下时钟、后端、两颗按钮和标题，
+             全称会把标题挤成「【…」。后端不能整个藏掉 —— 它正是移动端回退路径
+             (?webgl=1) 唯一的观测点 -->
+        <span v-if="backend" class="chip">
+          <span class="wide">{{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}</span>
+          <span class="narrow">{{ backend === 'webgpu' ? 'GPU' : 'GL' }}</span>
+        </span>
         <!-- 窄屏放不下全称：390px 下两颗全称按钮会把标题挤成一条缝 -->
-        <button class="cbx-btn cbx-btn--ghost sm" @click="placeNpc">
+        <!-- 满编就先灰掉：点了才被拒绝是最差的一种反馈 -->
+        <button
+          class="cbx-btn cbx-btn--ghost sm"
+          :disabled="rpg.npcFull"
+          :title="rpg.npcFull ? `已达上限 ${NPC_MAX} 个` : ''"
+          @click="placeNpc"
+        >
           <span class="wide">在脚下放 NPC</span><span class="narrow">＋NPC</span>
         </button>
         <button class="cbx-btn cbx-btn--ghost sm" @click="editorOpen = true">
@@ -275,7 +315,12 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <NpcEditor v-if="editorOpen" @close="editorOpen = false" @changed="onNpcsChanged" />
+    <NpcEditor
+      v-if="editorOpen"
+      @close="editorOpen = false"
+      @changed="onNpcsChanged"
+      @rederive="onRederive"
+    />
   </div>
 </template>
 
@@ -344,6 +389,8 @@ onBeforeUnmount(() => {
   background: var(--cbx-bg-secondary);
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-secondary);
+  /* 时钟每分钟变宽变窄,不钉住就会在窄屏上折行并把标题挤没 */
+  white-space: nowrap;
 }
 .narrow {
   display: none;

@@ -90,7 +90,7 @@ export interface World {
    * 这一格在不在某个村子的影响范围内（在的话返回那个村）。
    *
    * ⚠️ **判断「在不在村里」只能用它**，绝不能去嗅 `describeArea` 的字面量。
-   * 村名的后缀有 村/庄/集/屯/铺/寨 六种，`includes('村')` 只认得出其中一种 ——
+   * 村名的后缀有 村/庄/屯/寨/坞/铺/集 七种（names.ts VILLAGE_SUFFIX），`includes('村')` 只认得出其中一种 ——
    * 作息就是这么把十个村民里的八个判成了「游荡者」的。
    */
   villageAt(x: number, y: number): Village | null

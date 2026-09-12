@@ -18,6 +18,20 @@ export const RPG_WORLD_SIZE = 256
 export const DEFAULT_TIME_SCALE = 1
 
 /**
+ * 一个世界最多放多少个 NPC。
+ *
+ * 20 是按**渲染与仿真成本**定的，不是拍脑袋：每个 NPC 一个程序化方块小人，
+ * 实测是 10 个 mesh（不是 figureRig 注释里说的 6：躯干/背带/头/眼/发或帽/
+ * 双臂/双腿/贴地阴影），20 个就是 200 个 draw call —— 已经和整张地形的可见
+ * chunk 数同一量级了。仿真侧每个移动中的 NPC 每帧至少两次 canStand，
+ * 作息又让它们比以前走得多得多。
+ *
+ * ⚠️ 这个上限**只挡新建**，绝不在读档时截断 —— 老存档里超编的 NPC 宁可留着
+ * 掉帧，也不能因为我们改了个常量就把用户的角色连同对话历史一起抹掉。
+ */
+export const NPC_MAX = 20
+
+/**
  * 一个 NPC。
  *
  * `characterId` 关联到角色卡：关联了就用卡里的名字与简介，没关联就用自填的
@@ -149,6 +163,19 @@ export interface RpgRoutineSlot {
 }
 
 export type RpgRoutineKind = 'farmer' | 'villager' | 'keeper' | 'wanderer'
+
+/**
+ * 作息类别的中文名，给编辑器显示。
+ *
+ * 放在 types/ 而不是 routine.ts：后者 import 了 world.ts → noise.ts → simplex-noise，
+ * 一个只想显示「农夫」两个字的弹窗没必要把整套地形生成器拖进自己的分包。
+ */
+export const ROUTINE_KIND_LABEL: Record<RpgRoutineKind, string> = {
+  farmer: '农夫',
+  villager: '村民',
+  keeper: '守摊人',
+  wanderer: '游荡者',
+}
 
 export interface RpgRoutine {
   kind: RpgRoutineKind

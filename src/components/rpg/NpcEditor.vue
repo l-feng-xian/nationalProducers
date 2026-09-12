@@ -12,10 +12,18 @@ import { computed } from 'vue'
 import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
 import { useSettingsStore } from '@/stores/settings'
-import { nativeIdentity } from '@/types/rpg'
+import {
+  nativeIdentity,
+  NPC_MAX,
+  ROUTINE_KIND_LABEL,
+  type RpgPoi,
+  type RpgRoutine,
+  type RpgRoutineKind,
+} from '@/types/rpg'
+import { formatTimeOfDay } from '@/services/rpg/time'
 import { confirmDialog } from '@/composables/useConfirm'
 
-const emit = defineEmits<{ close: []; changed: [] }>()
+const emit = defineEmits<{ close: []; changed: []; rederive: [id: string] }>()
 
 const rpg = useRpgStore()
 const chars = useCharactersStore()
@@ -35,6 +43,17 @@ const effectiveMe = computed(() => {
 /** 不填简介时实际会进提示词的那句，直接显示出来，别让用户猜 */
 const nativeHint = computed(() => nativeIdentity(world.value?.name))
 
+/**
+ * 超编：NPC 比上限还多。
+ *
+ * 上限只挡「在脚下放 NPC」这一条路，而导入备份（services/io/backup.ts）与设备
+ * 同步（services/sync/session.ts）都是**零校验原样回写**的，所以超编世界确实存在。
+ * 读档时不截断是有意的：normalize 不回写，真截断了也要等某次无关的 save 才落盘，
+ * 而这个页面每跨一格就 save 一次 —— 用户会在打开世界几十秒后，
+ * 莫名其妙少掉几个从没动过的 NPC，连同他们的对话历史一起失去线索。
+ */
+const overCap = computed(() => (world.value?.npcs.length ?? 0) > NPC_MAX)
+
 function onChange() {
   emit('changed')
 }
@@ -43,6 +62,44 @@ async function removeNpc(id: string) {
   if (!(await confirmDialog({ text: '删除这个 NPC？它的对话历史会保留在会话列表里。' }))) return
   rpg.removeNpc(id)
   emit('changed')
+}
+
+/**
+ * 一天的行程，按时刻排好。
+ *
+ * 直接渲染 `routine.slots` 就够了吗 —— 不够：`slots[i].poi` 是索引，
+ * 界面上要显示的是那个点叫什么、在那儿干嘛。这里一次性拼好，
+ * 顺便把索引越界（导入的存档可能被手改过）挡掉。
+ */
+function scheduleOf(r: RpgRoutine) {
+  return r.slots.map((s) => {
+    const poi = r.pois[s.poi]
+    return {
+      at: formatTimeOfDay(s.from),
+      label: poi?.label ?? '（这一段指向了不存在的地点）',
+      act: poi?.act ?? '',
+    }
+  })
+}
+
+/** 导入的存档可能带着一个本版本不认识的 kind，别渲染成一片空白 */
+function kindLabel(k: RpgRoutineKind): string {
+  return ROUTINE_KIND_LABEL[k] ?? k
+}
+
+/**
+ * 活动半径：失焦时一次性写入一个**校验过的数字**。
+ *
+ * ⚠️ 刻意不用 `v-model.number`。它在输入框被清空的那一刻就把 `''` 写进
+ * `poi.r`，而引擎每游戏分钟读一次、存档每 3 秒写一次 —— 那个空串会真的进仿真
+ * （`'' ?? 2` 还是 `''`，兜底根本不触发），也会真的落进 IndexedDB。
+ * 改成只在 change（失焦）时从 DOM 取值、夹进 [1,12] 再写回，模型里永远是数字。
+ */
+function onPoiR(poi: RpgPoi, e: Event) {
+  const raw = (e.target as HTMLInputElement).value
+  const v = Number.parseFloat(raw)
+  poi.r = Number.isFinite(v) ? Math.min(12, Math.max(1, v)) : 2
+  onChange()
 }
 </script>
 
@@ -106,7 +163,20 @@ async function removeNpc(id: string) {
 
           <!-- NPC -->
           <section class="sec">
-            <span class="cbx-field__label">NPC（{{ world.npcs.length }}）</span>
+            <div class="sec__head">
+              <span class="cbx-field__label">NPC（{{ world.npcs.length }} / {{ NPC_MAX }}）</span>
+              <span v-if="rpg.npcFull" class="cbx-badge">{{ overCap ? '超编' : '已满' }}</span>
+            </div>
+            <!--
+              超编只可能来自导入备份 / 设备同步（那两条路是零校验原样回写的）。
+              这里只提醒，**绝不自动删** —— 每个 NPC 都挂着一段真实的对话历史，
+              替用户砍掉他从没动过的角色是不可接受的
+            -->
+            <p v-if="overCap" class="cbx-field__hint warn">
+              这个世界有 {{ world.npcs.length }} 个 NPC，超过建议上限 {{ NPC_MAX }}
+              个（多半是导入备份或设备同步带进来的）。不会自动删任何一个，但同屏人越多越吃帧，
+              卡的话可以手动删掉几个。
+            </p>
             <p v-if="!world.npcs.length" class="cbx-field__hint">
               还没有 NPC。回到世界里走到想放的位置，点顶栏的「在脚下放 NPC」。
             </p>
@@ -154,6 +224,89 @@ async function removeNpc(id: string) {
               <p v-else class="cbx-field__hint">
                 当前用「{{ chars.byId(npc.characterId)?.data.name ?? '（卡已删除）' }}」这张卡
               </p>
+
+              <!-- 作息 -->
+              <details class="rt">
+                <summary>
+                  作息 ·
+                  {{ npc.routine ? kindLabel(npc.routine.kind) : '进入世界后自动生成' }}
+                </summary>
+
+                <!--
+                  ⚠️ 内容必须自己包一层 div，不能靠 `.rt { display:flex; gap }`。
+                  现代 Chrome 把 <details> 的非 summary 子节点整个塞进
+                  ::details-content 这个匿名块盒里（实测 Chrome 152：display:block），
+                  于是 gap 只作用在 [summary, ::details-content] 之间 ——
+                  各行之间实测间距是 0，末尾的按钮和说明还会挤成一行。
+                -->
+                <div class="rt__body">
+                  <template v-if="npc.routine">
+                    <p class="cbx-field__hint">
+                      按它出生那一带有什么（田、水井、房子……）推导出来的，只推一次并存进存档 ——
+                      往后算法再怎么改，这个人的家也不会悄悄搬走。
+                    </p>
+                    <p class="cbx-field__hint">
+                      「在做什么」会<b>逐字进提示词</b>（「正打铁」），改成贴角色的说法通常比默认的好；
+                      地点名只在它<b>正赶过去、或者没能过去</b>时出现（「正赶去铁匠铺」）——
+                      已经到了的时候，提示词报的是它<b>实际站在哪</b>，由地形决定，不会因为改了这里就变。
+                    </p>
+
+                    <div v-for="(poi, i) in npc.routine.pois" :key="i" class="poi">
+                      <span class="poi__pos">({{ poi.x }}, {{ poi.y }})</span>
+                      <input
+                        v-model="poi.label"
+                        class="cbx-input"
+                        aria-label="地点名"
+                        placeholder="地点名，如：铁匠铺"
+                        @change="onChange"
+                      />
+                      <input
+                        v-model="poi.act"
+                        class="cbx-input"
+                        aria-label="在做什么"
+                        placeholder="在做什么，如：打铁"
+                        @change="onChange"
+                      />
+                      <label class="poi__r">
+                        <span>范围</span>
+                        <!-- 刻意不用 v-model.number：它在输入框被清空的那一刻就把空串
+                           写进 poi.r，而引擎每游戏分钟读一次、存档每 3 秒写一次。
+                           改成失焦时一次性写入校验过的数字 -->
+                        <input
+                          class="cbx-input"
+                          type="number"
+                          min="1"
+                          max="12"
+                          step="0.5"
+                          aria-label="活动半径（格）"
+                          :value="poi.r ?? 2"
+                          @change="onPoiR(poi, $event)"
+                        />
+                      </label>
+                    </div>
+
+                    <ol class="sched">
+                      <li v-for="(s, i) in scheduleOf(npc.routine)" :key="i">
+                        <span class="sched__at">{{ s.at }}</span>
+                        <span
+                          >{{ s.label }}<span v-if="s.act"> · {{ s.act }}</span></span
+                        >
+                      </li>
+                    </ol>
+
+                    <button class="cbx-btn cbx-btn--ghost sm" @click="emit('rederive', npc.id)">
+                      按当前位置重新推导
+                    </button>
+                    <span class="cbx-field__hint">
+                      会以它<b>此刻站的地方</b>为新家重新找一遍地标 —— 把人挪到别的村子之后用这个。
+                      自己改过的地点名与「在做什么」会被覆盖。
+                    </span>
+                  </template>
+                  <p v-else class="cbx-field__hint">
+                    这个 NPC 还没在世界里挂载过。回到世界里待一会儿，它会自己生成一份作息。
+                  </p>
+                </div>
+              </details>
             </div>
           </section>
         </div>
@@ -199,9 +352,103 @@ async function removeNpc(id: string) {
 .danger {
   color: var(--cbx-error);
 }
+/*
+ * 超编提示。
+ *
+ * ⚠️ 不要写成 `color: var(--cbx-warning)` —— 那是 #fab005，12px 字压在白底上
+ * 实测对比度只有 1.86:1（WCAG AA 小字要 4.5），几乎读不出来。琥珀色用来做
+ * 底色与左边条，字仍用正文色：既有警示感，又是全对比度。
+ */
+.warn {
+  color: var(--cbx-text-secondary);
+  background: var(--cbx-warning-light);
+  border-left: 3px solid var(--cbx-warning);
+  border-radius: var(--cbx-radius-sm);
+  padding: var(--cbx-space-2);
+}
+
+/* ── 作息 ── */
+/*
+ * ⚠️ 排版必须落在 .rt__body 上，不能落在 <details> 本身。
+ * 现代 Chrome 把非 summary 的子节点整个塞进 ::details-content 匿名块盒
+ * （实测 Chrome 152：display:block），`.rt { display:flex; gap }` 只作用在
+ * [summary, ::details-content] 之间 —— 各行实测间距是 0，末尾的说明还会
+ * 反向压到按钮上（-25px）。
+ */
+.rt__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-2);
+  padding-bottom: var(--cbx-space-2);
+}
+/* 按钮别被拉成整行宽 */
+.rt__body > .cbx-btn {
+  align-self: flex-start;
+}
+.rt summary {
+  cursor: pointer;
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+  padding: var(--cbx-space-2) 0;
+}
+/* 一行装下坐标 + 两个文本框 + 范围；窄屏换行成两行 */
+.poi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cbx-space-2);
+}
+.poi .cbx-input {
+  flex: 1 1 8rem;
+  min-width: 0; /* 不写这条,flex 子项的 min-width:auto 会把行撑出容器 */
+}
+.poi__pos {
+  font-family: var(--cbx-font-mono);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  flex: 0 0 auto;
+}
+.poi__r {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-1);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  flex: 0 0 auto;
+}
+.poi__r .cbx-input {
+  width: 4.5rem;
+  flex: 0 0 auto;
+}
+.sched {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-1);
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+}
+.sched li {
+  display: flex;
+  gap: var(--cbx-space-2);
+}
+.sched__at {
+  font-family: var(--cbx-font-mono);
+  color: var(--cbx-text-tertiary);
+  flex: 0 0 auto;
+}
 @media (max-width: 767px) {
   .npc .cbx-btn {
     min-height: var(--cbx-tap-min);
+  }
+  /* 390px 下三个输入框并排每个只剩 60px,不如直接摞起来。
+     ⚠️ 必须是直接子选择器：`.poi .cbx-input` 会连 .poi__r 里那个数字框一起选中，
+     而它的 flex 容器是 .poi__r 不是 .poi，flex-basis:100% 的参照物整个不对 ——
+     现在看着正常纯属巧合，换个字号就散架 */
+  .poi > .cbx-input {
+    flex-basis: 100%;
   }
 }
 </style>

@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { rpgWorldsRepo } from '@/db/repositories'
-import { resolveNpc, type RpgNpc, type RpgWorld } from '@/types/rpg'
+import { NPC_MAX, resolveNpc, type RpgNpc, type RpgWorld } from '@/types/rpg'
 import { fnv1a } from '@/services/hash'
 import { useCharactersStore } from './characters'
 
@@ -87,9 +87,15 @@ export const useRpgStore = defineStore('rpg', () => {
   }
 
   // ── NPC 增删改 ──
+  /** 还能不能再放。UI 要据此提前禁用按钮，而不是等用户点了才说不行 */
+  const npcFull = computed(() => (current.value?.npcs.length ?? 0) >= NPC_MAX)
+
   function addNpc(x: number, y: number): RpgNpc | null {
     const w = current.value
     if (!w) return null
+    // ⚠️ 这里也要挡一道，不能只靠调用方。返回 null 的语义是「没放成」，
+    // 调用方本来就得处理；漏挡的话超编只会表现为掉帧，查起来毫无线索
+    if (w.npcs.length >= NPC_MAX) return null
     const id = crypto.randomUUID()
     const npc: RpgNpc = {
       id,
@@ -141,6 +147,7 @@ export const useRpgStore = defineStore('rpg', () => {
     lines,
     pending,
     dialogueError,
+    npcFull,
     load,
     create,
     createFrom,

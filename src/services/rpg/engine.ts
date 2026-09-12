@@ -23,7 +23,7 @@ import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
 import { createFigureRig } from './figureRig'
-import { NPC_REACH, nearestNpc, type RpgNpc } from '@/types/rpg'
+import { NPC_REACH, nearestNpc, type RpgNpc, type RpgRoutine } from '@/types/rpg'
 import { fnv1a } from '@/services/hash'
 
 /** 移动速度，格/秒 */
@@ -63,6 +63,17 @@ export interface EngineHandle {
   findNpcSpot(x: number, y: number): { x: number; y: number } | null
   /** NPC 此刻的处境一句话（在哪、在干什么），拼进对话提示词的【场景】 */
   npcStateText(id: string): string
+  /**
+   * 按 NPC **当前所在位置**重新推导一份作息，写回 npc.routine 并立即生效。
+   *
+   * ⚠️ 必须由引擎来做，不能让 UI 自己算完塞进 npc.routine：运行时还记着
+   * `rt.slot`，而 `enterSlot` 在 `idx === rt.slot` 时直接 return —— 换了新
+   * routine 却不清 slot 的话，「重新推导」要等到下一个时段才看得出效果，
+   * 在用户眼里就是**点了没反应**。这里把 slot 归零，下一帧必然重新进段。
+   *
+   * 找不到这个 NPC（比如刚被删）返回 null。
+   */
+  rederiveRoutine(id: string): RpgRoutine | null
   /** 当前世界时刻 */
   clock(): WorldClock
   /** 对话期间冻结时钟 —— 见 time.ts 的 TALK_MINUTES */
@@ -136,6 +147,18 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     ty: number
     /** 当前生效的作息段。只在游戏分钟变化时才重算，不是每帧 */
     slot: number
+    /**
+     * 上次进段时那个 POI 的格心坐标。**只用来判断「POI 变没变」**。
+     *
+     * ⚠️ 不能拿 `hx/hy` 来判：那对字段是**共用槽位** —— 卡死阶梯放弃时会把它
+     * 改写成「就地漫游的锚点」（当前浮点坐标）。用它判身份的话，放弃之后
+     * `poi.x + 0.5 !== rt.hx` 恒成立，下一个游戏分钟 enterSlot 就会当成
+     * 「POI 变了」重新进段：`stranded` 被清、重新 travel —— 「体面放弃」变成
+     * 「放弃一秒后无限重试」，而 npcStateText 那句诚实的「本想去…一时没能过去」
+     * 成了死代码。
+     */
+    poiX: number
+    poiY: number
     /** 连续多少次检查都没靠近目标 —— 卡死阶梯用 */
     stuck: number
     /** 上次测距时离目标多远，配合 stuck 判定「有没有进展」 */
@@ -237,6 +260,9 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       tx: fx,
       ty: fy,
       slot: -1, // -1 = 还没定过，首帧必然触发一次换段
+      // NaN 与任何数都不相等 —— 首次进段必然走完整分支
+      poiX: NaN,
+      poiY: NaN,
       stuck: 0,
       lastD: Infinity,
       detour: null,
@@ -256,13 +282,38 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     const routine = n.routine
     if (!routine) return
     const idx = slotIndexAt(routine, minuteOfDay)
-    if (idx === rt.slot) return
-    rt.slot = idx
     const poi = routine.pois[idx]
     if (!poi) return
-    rt.hx = poi.x + 0.5
-    rt.hy = poi.y + 0.5
-    rt.roam = poi.r ?? 2
+    const hx = poi.x + 0.5
+    const hy = poi.y + 0.5
+    // ⚠️ 半径要自己校验，`?? 2` 兜不住。编辑器的 `v-model.number` 在输入框被清空
+    // 的那一刻写的是**空串**，而 `'' ?? 2` 还是 `''` —— 拿去比大小会当 0 用，
+    // NPC 当场被拴绳夹到锚点上。导入的存档同理可能带着任何东西
+    const roam = typeof poi.r === 'number' && Number.isFinite(poi.r) && poi.r > 0 ? poi.r : 2
+
+    // ⚠️ 判「POI 变没变」只能用 poiX/poiY，不能用 hx/hy —— 见 NpcRt.poiX 的说明
+    if (idx === rt.slot && hx === rt.poiX && hy === rt.poiY) {
+      // 同一个 POI，那就只可能是**半径**被编辑过了
+      rt.roam = roam
+      // ⚠️ 半径收窄后人可能已经在圈外，这时**必须让它自己走回去**。
+      // 拴绳是一帧到位的夹取（`k = (roam+0.5)/dd`），不是逐帧收敛 ——
+      // 把 12 改成 1，下一帧人就被瞬移十来格
+      if (rt.phase !== 'travel' && torusDist(rt.x, rt.y, rt.hx, rt.hy) > rt.roam) {
+        rt.tx = rt.hx
+        rt.ty = rt.hy
+        rt.detour = null
+        rt.stuck = 0
+        rt.lastD = Infinity
+        rt.phase = 'travel'
+      }
+      return
+    }
+    rt.slot = idx
+    rt.poiX = hx
+    rt.poiY = hy
+    rt.hx = hx
+    rt.hy = hy
+    rt.roam = roam
     rt.detour = null
     rt.stuck = 0
     rt.lastD = Infinity
@@ -374,6 +425,27 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       else if (poi && phaseOf(c.minuteOfDay) === 'lateNight' && rt.slot === 0) act = '已经歇下'
       else act = poi ? `正${poi.act}` : '正站在原地歇脚'
       return `此刻是${when}，对方在${area}，${act}。你走上前与它搭话。`
+    },
+    rederiveRoutine(id: string): RpgRoutine | null {
+      const n = npcs.find((x) => x.id === id)
+      const rt = npcRt.get(id)
+      if (!n || !rt) return null
+      // 以**此刻站的地方**为锚点，而不是 homeX/homeY：用户按这个键，多半正是
+      // 因为把 NPC 挪到了新地方，想让它按新邻里过日子
+      const anchor = { x: Math.floor(rt.x), y: Math.floor(rt.y) }
+      n.homeX = anchor.x
+      n.homeY = anchor.y
+      n.routine = autoRoutine(world, n, anchor) ?? fallbackRoutine(world, anchor)
+      rt.slot = -1
+      rt.poiX = NaN
+      rt.poiY = NaN
+      rt.detour = null
+      rt.stuck = 0
+      rt.lastD = Infinity
+      rt.stranded = false
+      rt.phase = 'idle'
+      rt.t = 0.2
+      return n.routine
     },
     clock: () => clockOf(clockTotal),
     setClockPaused(v: boolean) {
