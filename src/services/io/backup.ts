@@ -324,11 +324,30 @@ export async function applyBackup(
         const meta = await db.get('chats', id)
         if (!meta) continue
         const range = chatRange(id)
+        /**
+         * ⚠️ 向量块必须跟着一起清。
+         *
+         * stripMemIndex 已经把水位线抹掉了（见它的说明），接收方会从头重建索引；
+         * 但**本机原有的 memchunks 一块没删**。而导入会覆盖这段会话的消息正文，
+         * 于是那些块描述的是**已经不存在的文本**。
+         *
+         * 重建也救不回来：新索引 ord 从 0 重新编号，只覆盖得住前 N 块，
+         * ord ≥ N 的旧块原样留着；而 loadIndex 是按会话整取、不做任何过滤的，
+         * 那些幽灵块会照常被召回、照常进提示词。
+         *
+         * 「消息没了，基于消息建的索引也必须一起清」这条不变量，数据管理页的
+         * 手动清理（clearChat + memIndex: undefined 成对出现）写得明明白白，
+         * 导入这条路上一直漏着。memchunks 的主键是 [chatId, kindRank, ord]，
+         * number < array，所以 chatRange 原样复用（见 schema.ts 的说明）。
+         */
+        await db.delete('memchunks', range)
         const count = await db.count('messages', range)
         const last = await db.transaction('messages').store.openCursor(range, 'prev')
         const maxSeq = Array.isArray(last?.key) ? (last.key[1] as unknown) : undefined
         const nextSeq =
           typeof maxSeq === 'number' && Number.isFinite(maxSeq) ? maxSeq + 1 : meta.nextSeq
+        // 注意：上面的 memchunks 清理在这个 early-return 之前，
+        // 否则「计数恰好没变」的会话就会漏掉清理
         if (meta.messageCount === count && meta.nextSeq >= nextSeq) continue
         meta.messageCount = count
         // 只增不减 —— seq 复用会让游标与分页错乱（见 messages 仓储开头的说明）

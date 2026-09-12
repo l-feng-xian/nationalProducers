@@ -83,6 +83,19 @@ export interface SessionHooks {
   onApplied?: (r: ImportResult) => void
 }
 
+const SCOPE_KEYS = ['characters', 'worldbooks', 'groups', 'chats', 'settings', 'rpgworlds'] as const
+
+/** 两份范围取交集：只有双方都要的才留下 */
+function intersectScope(a: SyncScope, b: SyncScope): SyncScope {
+  const out = {} as SyncScope
+  for (const k of SCOPE_KEYS) out[k] = a[k] && b[k]
+  return out
+}
+
+function sameScope(a: SyncScope, b: SyncScope): boolean {
+  return SCOPE_KEYS.every((k) => a[k] === b[k])
+}
+
 function waitGather(pc: RTCPeerConnection): Promise<void> {
   return new Promise((res) => {
     if (pc.iceGatheringState === 'complete') return res()
@@ -102,10 +115,12 @@ export class SyncSession {
   #hooks: SessionHooks
   #closed = false
 
-  /** 收包缓冲。只在接收期间非空 */
-  #rx: { chunks: Uint8Array[]; got: number; manifest: Manifest } | null = null
+  /** 收包缓冲。只在接收期间非空。`scope` 是**实际允许落地**的范围（已取过交集） */
+  #rx: { chunks: Uint8Array[]; got: number; manifest: Manifest; scope: SyncScope } | null = null
   /** 我方主动 pull 时置位：对端回来的 manifest 无需再问用户 */
   #pullPending = false
+  /** 我方 pull 时**请求**的范围。对端声明得比它多就要退回确认页 */
+  #pullScope: SyncScope | null = null
   #doneWaiters: ((r: ImportResult) => void)[] = []
   #failWaiters: ((e: Error) => void)[] = []
   #stallTimer: ReturnType<typeof setTimeout> | null = null
@@ -353,7 +368,18 @@ export class SyncSession {
       this.#send({ t: 'hello', version: PROTOCOL_VERSION })
       this.#hooks.onOpen?.()
     })
-    dc.addEventListener('close', () => this.#hooks.onClose?.('通道已关闭'))
+    /**
+     * ⚠️ 通道关闭必须走 #fail，不能只通知一下 UI 就完事。
+     *
+     * 原先这里是 `() => this.#hooks.onClose?.('通道已关闭')` —— 绕开了所有收尾：
+     * 不清停滞定时器、不清 #rx、**也不唤醒 #failWaiters**。而 push()/pull() 的
+     * 返回值正是挂在那些 waiter 上的：传到一半对端掉线，那个 Promise
+     * **永远不会 settle**，界面就一直停在「传输中」，既不报错也不结束。
+     *
+     * 正常收尾不会被误报成错误：close() 先置 #closed，#fail 开头就挡掉了；
+     * 而 store 侧的 onClose 对 step==='done' 也另有一道判断。
+     */
+    dc.addEventListener('close', () => this.#fail(new Error('通道已关闭')))
     dc.addEventListener('message', (e) => {
       void this.#onMessage(e.data)
     })
@@ -436,14 +462,29 @@ export class SyncSession {
         return
       }
       case 'manifest': {
-        const ok = this.#pullPending ? true : ((await this.#hooks.onIncoming?.(f)) ?? false)
+        const declared = this.#sanitizeScope(f.scope)
+        /**
+         * 我方主动 pull 时不再弹确认页 —— 是我自己要的，没必要再问一遍。
+         *
+         * ⚠️ 但「我要的」只是**请求**，包是对端攒的：它完全可以在 manifest 里
+         * 声明比我要的更多。所以这里与 `#pullScope` 取交集，并且只有在
+         * **对端没有超额**时才算「我已经同意过了」；一旦它多塞了类别，
+         * 就退回去走确认页，让用户自己看见多出来的是什么。
+         */
+        const asked = this.#pullScope
+        const eff = asked ? intersectScope(declared, asked) : declared
+        const overreach = asked !== null && !sameScope(eff, declared)
+        const preApproved = asked !== null && !overreach
+        this.#pullScope = null
         this.#pullPending = false
-        if (!ok) {
+        const ok = preApproved ? true : ((await this.#hooks.onIncoming?.(f)) ?? false)
+        if (!ok || !Object.values(eff).some(Boolean)) {
           this.#send({ t: 'reject', reason: '对方拒绝了本次同步' })
           this.#rx = null
           return
         }
-        this.#rx = { chunks: [], got: 0, manifest: f }
+        // 落地用的是交集，不是对端声明的那份
+        this.#rx = { chunks: [], got: 0, manifest: f, scope: eff }
         this.#hooks.onProgress?.({ loaded: 0, total: f.bytes })
         this.#armStall()
         this.#send({ t: 'accept' })
@@ -459,10 +500,7 @@ export class SyncSession {
         // ⚠️ 必须把 manifest 里那份 scope 传下去。用户在确认页上点「接收」，同意的是
         // **manifest 声明的范围**；不兜这一道的话，声明不含 settings 却在包里塞一份，
         // 照样会把本机的接口地址、模型、人设整包盖掉
-        const result = await applyBackup(
-          file as Parameters<typeof applyBackup>[0],
-          rx.manifest.scope,
-        )
+        const result = await applyBackup(file as Parameters<typeof applyBackup>[0], rx.scope)
         this.#hooks.onApplied?.(result)
         this.#send({ t: 'done', result })
         return
@@ -554,6 +592,8 @@ export class SyncSession {
     const dc = this.#dc
     if (!dc || dc.readyState !== 'open') throw new Error('尚未连接')
     this.#pullPending = true
+    // 记下**我要的**。对端攒包时完全可以多塞，回来的 manifest 要跟它取交集
+    this.#pullScope = this.#sanitizeScope(scope)
     const applied = new Promise<ImportResult>((res, rej) => {
       const prev = this.#hooks.onApplied
       this.#hooks.onApplied = (r) => {
@@ -607,11 +647,26 @@ export class SyncSession {
     this.#stallTimer = null
   }
 
+  /**
+   * 本次会话失败：唤醒等待者、通知 UI，并**真的把通道关掉**。
+   *
+   * ⚠️ 以前这里只清了定时器就走了 —— 不置 `#closed`、不关 dc、不清 `#rx`。
+   * 于是「同步失败」那个界面背后，连接其实还活着，对端仍能继续发帧：
+   *  - 发 `{"t":"pull"}` → 照样触发导出（现在有确认页挡着，但本不该走到那一步）；
+   *  - 发一个新的 `manifest` → `step` 从 'error' 被翻回 'confirm'，
+   *    弹出一个用户根本没发起过的确认页；
+   *  - 继续发二进制分片 → 残留的 `#rx` 会接着往下攒。
+   * 用户以为「什么都没发生」，而通道是开的。失败就该是终态。
+   *
+   * 复用 close()：它本来就做了「置 #closed → 关 dc/pc/信令 → 通知对端」这一整套，
+   * 另写一份迟早会漏掉其中一步。
+   */
   #fail(e: Error): void {
     if (this.#closed) return
-    this.#clearStall()
     const waiters = this.#failWaiters
     this.#failWaiters = []
+    this.#rx = null
+    this.close()
     for (const w of waiters) w(e)
     this.#hooks.onClose?.(e.message)
   }
