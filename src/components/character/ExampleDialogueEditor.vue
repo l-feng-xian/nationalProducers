@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { confirmDialog } from '@/composables/useConfirm'
 import {
   emptyExampleBlock,
   parseExampleBlocks,
@@ -40,7 +41,8 @@ function addBlock() {
   blocks.value.push(emptyExampleBlock())
   flush()
 }
-function removeBlock(i: number) {
+async function removeBlock(i: number) {
+  if (!(await confirmDialog({ text: '删除这组对话示例？' }))) return
   blocks.value.splice(i, 1)
   flush()
 }
@@ -48,7 +50,8 @@ function addTurn(bi: number, who: 'user' | 'char') {
   blocks.value[bi]?.turns.push({ who, text: '' })
   flush()
 }
-function removeTurn(bi: number, ti: number) {
+async function removeTurn(bi: number, ti: number) {
+  if (!(await confirmDialog({ text: '删除示例中的这一句？' }))) return
   blocks.value[bi]?.turns.splice(ti, 1)
   flush()
 }

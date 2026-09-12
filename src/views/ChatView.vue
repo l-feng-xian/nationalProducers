@@ -14,6 +14,7 @@ import { useAutoScroll } from '@/composables/useAutoScroll'
 import { useToast } from '@/composables/useToast'
 import { messagesRepo } from '@/db/repositories'
 import { accentOf } from '@/utils/charAccent'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -109,9 +110,14 @@ async function onEdit(id: string, text: string) {
   await chats.editMessage(id, text)
 }
 async function onRemove(id: string) {
+  if (!(await confirmDialog({ text: '删除这条消息？' }))) return
   await chats.deleteMessage(id)
 }
 async function onRemoveFrom(id: string) {
+  if (
+    !(await confirmDialog({ text: '删除这条消息以及它之后的全部消息？此操作不可撤销。' }))
+  )
+    return
   await chats.deleteFrom(id)
 }
 async function onBranch(id: string) {

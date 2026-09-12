@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import { useModelsStore } from '@/stores/models'
 import { formatBytes, storageEstimate } from '@/services/io/backup'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const models = useModelsStore()
 const usage = ref<{ usage: number; quota: number } | null>(null)
@@ -35,6 +36,13 @@ async function download(id: string) {
   await refreshUsage()
 }
 async function remove(id: string) {
+  if (
+    !(await confirmDialog({
+      text: '删除这个已下载的模型文件？下次使用时需要重新下载。',
+      confirmText: '删除文件',
+    }))
+  )
+    return
   await models.remove(id)
   await refreshUsage()
 }

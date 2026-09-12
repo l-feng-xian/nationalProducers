@@ -7,6 +7,7 @@ import { useWorldsStore } from '@/stores/worlds'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { world_info_position, type WorldInfoEntry } from '@/types/worldinfo'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,6 +74,7 @@ function onEntryChange() {
 async function removeEntry(u: number) {
   const b = book.value
   if (!b) return
+  if (!(await confirmDialog({ text: '删除这条词条？' }))) return
   await worlds.removeEntry(b.id, u)
   if (uid.value === u) await router.push(`/worlds/${b.id}`)
 }
@@ -80,7 +82,7 @@ async function removeEntry(u: number) {
 async function removeBook() {
   const b = book.value
   if (!b) return
-  if (!confirm(`确定删除世界书「${b.name}」？`)) return
+  if (!(await confirmDialog({ text: `确定删除世界书「${b.name}」？` }))) return
   await worlds.remove(b.id)
   toast.success('已删除')
   await router.push('/worlds')

@@ -27,7 +27,8 @@ const { items, dismiss } = useToast()
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(var(--cbx-space-6) + var(--cbx-safe-b));
+  /* 页面上方：顶栏之下、随系统安全区避让刘海 */
+  top: calc(var(--cbx-topbar-h) + var(--cbx-space-3) + env(safe-area-inset-top, 0px));
   z-index: 200;
   display: flex;
   flex-direction: column;
@@ -65,7 +66,8 @@ const { items, dismiss } = useToast()
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(8px);
+  /* 从上方滑入 / 向上方滑出 —— 与「提示在顶部」的方向一致 */
+  transform: translateY(-8px);
 }
 .toast-enter-active,
 .toast-leave-active {

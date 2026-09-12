@@ -22,6 +22,7 @@ import { downloadBlob, safeFileName } from '@/utils/download'
 import { MORPH_VT_NAME } from '@/constants/app'
 import { toPlain } from '@/utils/plain'
 import { DEPTH_PROMPT_DEPTH_DEFAULT, type Character } from '@/types/character'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -305,7 +306,12 @@ async function back() {
 
 async function remove() {
   if (!model.value) return
-  if (!confirm(`确定删除角色「${model.value.data.name}」？其全部对话也会一并删除。`)) return
+  if (
+    !(await confirmDialog({
+      text: `确定删除角色「${model.value.data.name}」？其全部对话也会一并删除。`,
+    }))
+  )
+    return
   await chars.remove(model.value.id)
   toast.success('已删除')
   await router.push('/characters')

@@ -8,6 +8,7 @@ import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useToast } from '@/composables/useToast'
 import type { Group } from '@/types/group'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const router = useRouter()
 const groups = useGroupsStore()
@@ -50,7 +51,10 @@ async function create() {
  * 删群聊会连带删掉它的全部对话，这一点必须在确认框里讲明。
  */
 async function remove(g: Group) {
-  if (!confirm(`确定删除群聊「${g.name}」？其全部对话也会一并删除。`)) return
+  if (
+    !(await confirmDialog({ text: `确定删除群聊「${g.name}」？其全部对话也会一并删除。` }))
+  )
+    return
   await groups.remove(g.id)
   toast.success(`已删除「${g.name}」`)
 }

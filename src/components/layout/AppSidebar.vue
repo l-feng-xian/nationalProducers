@@ -7,6 +7,7 @@ import { APP_NAME } from '@/constants/app'
 
 const BASE_URL = import.meta.env.BASE_URL
 import type { ChatMeta } from '@/types/chat'
+import { confirmDialog } from '@/composables/useConfirm'
 
 defineProps<{ open: boolean }>()
 
@@ -41,7 +42,8 @@ const groups = computed(() => {
   return out.filter((g) => g.items.length > 0)
 })
 
-async function remove(id: string) {
+async function remove(id: string, title: string) {
+  if (!(await confirmDialog({ text: `删除会话「${title}」？其全部消息将一并删除。` }))) return
   await chats.removeChat(id)
   if (route.params['id'] === id) await router.push('/chat')
 }
@@ -88,7 +90,7 @@ function newChat() {
           @click="router.push(`/chat/${c.id}`)"
         >
           <span class="item__title">{{ c.title }}</span>
-          <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id)">✕</button>
+          <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id, c.title)">✕</button>
         </div>
       </template>
     </div>

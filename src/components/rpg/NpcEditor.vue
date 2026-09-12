@@ -13,6 +13,7 @@ import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
 import { useSettingsStore } from '@/stores/settings'
 import { nativeIdentity } from '@/types/rpg'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const emit = defineEmits<{ close: []; changed: [] }>()
 
@@ -38,8 +39,11 @@ function onChange() {
   emit('changed')
 }
 
-function removeNpc(id: string) {
-  if (!confirm('删除这个 NPC？它的对话历史会保留在会话列表里。')) return
+async function removeNpc(id: string) {
+  if (
+    !(await confirmDialog({ text: '删除这个 NPC？它的对话历史会保留在会话列表里。' }))
+  )
+    return
   rpg.removeNpc(id)
   emit('changed')
 }

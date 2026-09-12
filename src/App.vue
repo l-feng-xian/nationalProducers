@@ -3,6 +3,7 @@ import { KeepAlive, watch } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import CbxToastHost from '@/components/ui/CbxToastHost.vue'
+import CbxConfirmHost from '@/components/ui/CbxConfirmHost.vue'
 import NewChatSheet from '@/components/chat/NewChatSheet.vue'
 import { useUiStore } from '@/stores/ui'
 
@@ -42,6 +43,7 @@ const KEEP_ALIVE = ['CharactersView']
       </RouterView>
     </main>
     <CbxToastHost />
+    <CbxConfirmHost />
     <NewChatSheet v-if="ui.newChatOpen" />
   </div>
 </template>

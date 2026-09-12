@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { confirmDialog } from '@/composables/useConfirm'
 
 /**
  * 多条开场白（需求 2）。
@@ -32,7 +33,8 @@ function setAt(i: number, v: string) {
 function add() {
   commit([...all.value, ''])
 }
-function removeAt(i: number) {
+async function removeAt(i: number) {
+  if (!(await confirmDialog({ text: '删除这条开场白？' }))) return
   const next = [...all.value]
   next.splice(i, 1)
   commit(next.length ? next : [''])

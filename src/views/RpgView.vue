@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import { useRpgStore } from '@/stores/rpg'
 import { useToast } from '@/composables/useToast'
+import { confirmDialog } from '@/composables/useConfirm'
 
 defineOptions({ name: 'RpgView' })
 
@@ -34,7 +35,12 @@ async function create() {
 }
 
 async function remove(id: string, name: string) {
-  if (!confirm(`删除世界「${name}」？其中的 NPC 配置会一并删除，此操作不可撤销。`)) return
+  if (
+    !(await confirmDialog({
+      text: `删除世界「${name}」？其中的 NPC 配置会一并删除，此操作不可撤销。`,
+    }))
+  )
+    return
   await rpg.remove(id)
   toast.success('已删除')
 }

@@ -9,6 +9,7 @@ import {
   type Pt,
 } from '@/utils/graphGeometry'
 import type { GroupNodeLayout, GroupRelation } from '@/types/group'
+import { confirmDialog } from '@/composables/useConfirm'
 
 /**
  * 关系图谱画布（需求 3）。
@@ -255,6 +256,13 @@ function startLink(id: string) {
  * 再 emit('change') 让父级落盘。
  */
 const editing = ref<GroupRelation | null>(null)
+
+async function removeRelation() {
+  const cur = editing.value
+  if (!cur) return
+  if (!(await confirmDialog({ text: '删除这条角色关系？' }))) return
+  emit('remove-relation', cur.id)
+}
 /** 气泡锚点（画布坐标；viewBox 与 CSS 像素 1:1，可直接当 left/top 用） */
 const anchor = ref<Pt>({ x: 0, y: 0 })
 
@@ -426,7 +434,7 @@ const ghost = computed(() => {
         </button>
         <button
           class="cbx-btn cbx-btn--ghost sm pop__del"
-          @click="emit('remove-relation', editing.id)"
+          @click="removeRelation"
         >
           删除
         </button>

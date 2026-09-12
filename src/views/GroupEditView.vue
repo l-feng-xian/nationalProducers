@@ -18,6 +18,7 @@ import {
   type GroupRelation,
 } from '@/types/group'
 import { useSettingsStore } from '@/stores/settings'
+import { confirmDialog } from '@/composables/useConfirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -198,7 +199,10 @@ async function startChat() {
 async function removeGroup() {
   const m = model.value
   if (!m) return
-  if (!confirm(`确定删除群聊「${m.name}」？其全部对话也会一并删除。`)) return
+  if (
+    !(await confirmDialog({ text: `确定删除群聊「${m.name}」？其全部对话也会一并删除。` }))
+  )
+    return
   await groups.remove(m.id)
   toast.success('已删除')
   await router.push('/groups')
