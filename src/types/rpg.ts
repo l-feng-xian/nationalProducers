@@ -48,6 +48,57 @@ export interface RpgPersona {
   description: string
 }
 
+/**
+ * 地形生成参数。
+ *
+ * ⚠️ 每个字段的「旧值」就是引入本接口之前生成器里写死的那个常量（见 LEGACY_GEN）。
+ * 这不是随便挑的默认值 —— 存档里只有种子，地形是每次进游戏现算的，参数一变，
+ * 玩家回到自己的世界会发现海岸线和村子全挪了位置。
+ */
+export interface RpgGenParams {
+  /** 海平面。越高水越多；同时整块陆地的台阶等级会一起降（levelAt 以它为基准） */
+  seaLevel: number
+  /** 环面半径（地貌尺度）。越大绕一圈经过的噪声越多，大陆碎成群岛 */
+  radius: number
+  /** 湿度偏置。>0 更多森林，<0 更多荒原与沙 */
+  moistureBias: number
+  /** 聚落场门限。越低越多大区够格出村 */
+  districtGate: number
+  /** 每个区域的落村概率 */
+  villageChance: number
+}
+
+/** 引入 gen 字段之前那一版生成器的行为。老存档一律回填成它 */
+export const LEGACY_GEN: RpgGenParams = {
+  seaLevel: -0.08,
+  radius: 1.6,
+  moistureBias: 0,
+  districtGate: 0.1,
+  villageChance: 0.62,
+}
+
+/** 新建世界的默认值。目前与 LEGACY_GEN 完全一致 */
+export const DEFAULT_GEN: RpgGenParams = { ...LEGACY_GEN }
+
+/**
+ * 逐字段兜底。
+ *
+ * ⚠️ 不能写成 `{ ...LEGACY_GEN, ...raw }`：导入的存档可能只有一半字段，
+ * 展开运算符会把 `undefined` 也一并铺进去，把好好的默认值盖成空。
+ */
+export function normalizeGen(raw: unknown): RpgGenParams {
+  const g = (raw ?? {}) as Partial<RpgGenParams>
+  const num = (v: unknown, d: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : d
+  return {
+    seaLevel: num(g.seaLevel, LEGACY_GEN.seaLevel),
+    radius: num(g.radius, LEGACY_GEN.radius),
+    moistureBias: num(g.moistureBias, LEGACY_GEN.moistureBias),
+    districtGate: num(g.districtGate, LEGACY_GEN.districtGate),
+    villageChance: num(g.villageChance, LEGACY_GEN.villageChance),
+  }
+}
+
 export interface RpgWorld {
   id: string
   name: string
@@ -62,6 +113,8 @@ export interface RpgWorld {
   seed: number
   width: number
   height: number
+  /** 地形生成参数。老存档由 rpgworlds 仓储的 normalize 回填成 LEGACY_GEN */
+  gen: RpgGenParams
   /** 玩家上次站的位置，进游戏时从这里续上 */
   playerX: number
   playerY: number
@@ -81,6 +134,7 @@ export function emptyWorld(id: string, name = '新世界', seed?: number): RpgWo
     seed: seed ?? crypto.getRandomValues(new Uint32Array(1))[0] ?? 1,
     width: RPG_WORLD_SIZE,
     height: RPG_WORLD_SIZE,
+    gen: { ...DEFAULT_GEN },
     // -1 表示「还没进去过」，首次进入时由引擎找一块陆地
     playerX: -1,
     playerY: -1,

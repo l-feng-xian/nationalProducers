@@ -9,7 +9,7 @@
  */
 
 import type { World } from './world'
-import { wrapDelta } from './world'
+import { findSpawn, findStandSpot, wrapDelta } from './world'
 import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
@@ -71,28 +71,6 @@ export interface CreateEngineArgs {
   npcs?: RpgNpc[]
 }
 
-/**
- * 找一块可以站人的地。
- *
- * 从中心开始按螺旋外扩 —— 直接用中心点的话，种子一换很可能开局站在海里。
- */
-function findSpawn(world: World): { x: number; y: number } {
-  const cx = Math.floor(world.params.width / 2)
-  const cy = Math.floor(world.params.height / 2)
-  for (let r = 0; r < 160; r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        // 只看当前这一圈的边，内圈上一轮已经查过了
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
-        const x = cx + dx
-        const y = cy + dy
-        if (world.walkableAt(x, y)) return { x: x + 0.5, y: y + 0.5 }
-      }
-    }
-  }
-  return { x: cx + 0.5, y: cy + 0.5 }
-}
-
 export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle> {
   const { world, host } = args
   const scene = await createScene({ world, forceWebGL: args.forceWebGL === true })
@@ -141,27 +119,19 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   const torusDist = (ax: number, ay: number, bx: number, by: number): number =>
     Math.hypot(wrapDelta(ax - bx, W), wrapDelta(ay - by, H))
 
+  /**
+   * 找 NPC 落点。实现搬到了 world.ts（创建向导要在没有引擎、没有 WebGPU 的
+   * 情况下也能定位 NPC），这里只补上「避开别的 NPC」所需的实时坐标。
+   *
+   * ⚠️ 传的是 npcRt 里的**浮点**位置而不是落盘的整数格：NPC 在漫游，
+   * 用整数格判拥挤会在它走到半格时误判。
+   */
   function findNpcSpot(x: number, y: number): { x: number; y: number } | null {
-    const gx = Math.floor(x)
-    const gy = Math.floor(y)
-    for (let r = 0; r <= 12; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
-          const tx = (((gx + dx) % W) + W) % W
-          const ty = (((gy + dy) % H) + H) % H
-          if (!canStand(tx + 0.5, ty + 0.5)) continue
-          // 别跟别的 NPC 叠罗汉
-          const crowded = npcs.some((n) => {
-            const rt = npcRt.get(n.id)
-            return rt ? torusDist(rt.x, rt.y, tx + 0.5, ty + 0.5) < 1.5 : false
-          })
-          if (crowded) continue
-          return { x: tx, y: ty }
-        }
-      }
-    }
-    return null
+    return findStandSpot(world, x, y, {
+      maxR: 12,
+      avoid: [...npcRt.values()],
+      minDist: 1.5,
+    })
   }
 
   /** 首次挂载一个 NPC 的运行时：校正非法落点、补默认锚点与漫游半径 */

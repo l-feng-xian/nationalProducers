@@ -16,7 +16,7 @@ import TouchPad from '@/components/rpg/TouchPad.vue'
 import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
 import { useToast } from '@/composables/useToast'
-import { createWorld } from '@/services/rpg/world'
+import { createWorld, worldParamsOf } from '@/services/rpg/world'
 import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { resolveNpc, type RpgNpc } from '@/types/rpg'
@@ -57,7 +57,7 @@ onMounted(async () => {
   }
 
   try {
-    const world = createWorld({ width: w.width, height: w.height, seed: w.seed })
+    const world = createWorld(worldParamsOf(w))
     const el = host.value
     if (!el) return
     const eng = await createEngine({

@@ -7,7 +7,7 @@
 
 import { getDb } from '../schema'
 import { toPlain } from '../plain'
-import { emptyWorld, type RpgWorld } from '@/types/rpg'
+import { emptyWorld, normalizeGen, type RpgWorld } from '@/types/rpg'
 
 /**
  * 补齐可能缺失的字段。
@@ -21,6 +21,9 @@ function normalize(w: RpgWorld): RpgWorld {
   if (!w.persona) w.persona = { name: '', description: '' }
   // 世界简介是后加的字段，本模块上线前存的世界都没有它
   if (typeof w.description !== 'string') w.description = ''
+  // 地形参数同样是后加的。逐字段兜底成 LEGACY_GEN —— 也就是参数化之前那版
+  // 生成器的行为，老世界因此逐格不变。⚠️ 这里是整个向后兼容故事的落点
+  w.gen = normalizeGen(w.gen)
   return w
 }
 

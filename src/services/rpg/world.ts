@@ -27,6 +27,7 @@ import {
   type WorldSampler,
 } from './noise'
 import { fnv1a } from '@/services/hash'
+import type { RpgGenParams } from '@/types/rpg'
 
 /** 场景装饰物的种类 */
 export type PropKind =
@@ -77,6 +78,13 @@ export interface World {
   describeArea(x: number, y: number): string
   /** 某格的内容签名，用于「绕一圈回到同一处」的断言 */
   signatureAt(x: number, y: number): number
+  /**
+   * 全世界的村庄。结果走既有的区域缓存，重复调用不重算。
+   *
+   * 一处添加服务三个用途：创建向导的缩略图标点与数量读数、NPC 按角色落点、
+   * 以及地名。
+   */
+  listVillages(): readonly Village[]
 }
 
 /**
@@ -113,6 +121,31 @@ export function hashTile(seed: number, x: number, y: number): number {
 }
 
 /**
+ * 把存档翻成生成参数。
+ *
+ * **唯一的翻译点** —— 别在各调用处自己展开 gen，那样加一个旋钮就要改 N 处，
+ * 而漏掉的那一处会静默地用回默认值（表现为「同一个世界在不同入口长得不一样」）。
+ */
+export function worldParamsOf(w: {
+  seed: number
+  width: number
+  height: number
+  gen: RpgGenParams
+}): WorldParams {
+  return {
+    width: w.width,
+    height: w.height,
+    seed: w.seed,
+    seaLevel: w.gen.seaLevel,
+    r1: w.gen.radius,
+    r2: w.gen.radius,
+    moistureBias: w.gen.moistureBias,
+    districtGate: w.gen.districtGate,
+    villageChance: w.gen.villageChance,
+  }
+}
+
+/**
  * 环面上的最短位移：把 d 折进 [-m/2, m/2)。
  *
  * 世界是环面，所以「两点差多少」这件事在本模块里到处都要问一遍：碰撞、
@@ -130,7 +163,7 @@ export function wrapDelta(d: number, m: number): number {
 /** 村落的区域边长（格）。村子半径 ≤ 8，一个村子最多伸进相邻区域一格 */
 const REGION = 24
 
-interface Village {
+export interface Village {
   /** 村心（水井所在格，已回绕） */
   cx: number
   cy: number
@@ -150,6 +183,10 @@ export function createWorld(p: WorldParams): World {
 
   const torusDx = (x: number, cx: number): number => wrapDelta(x - cx, W)
   const torusDy = (y: number, cy: number): number => wrapDelta(y - cy, H)
+
+  // 村庄的两个旋钮。默认值就是参数化之前写死的那两个数，见 noise.ts DEFAULTS 的说明
+  const districtGate = p.districtGate ?? 0.1
+  const villageChance = p.villageChance ?? 0.62
 
   // ── 村落：按区域惰性求值并缓存 ──
 
@@ -181,7 +218,7 @@ export function createWorld(p: WorldParams): World {
     const h = hashTile(seed ^ 0x3f1a2b, rx, ry)
     // 聚落场门控：只有「文明大区」里的区域才掷骰子
     const gate = sampler.district(wrapX(rx * REGION + REGION / 2), wrapY(ry * REGION + REGION / 2))
-    if (gate > 0.1 && (h >>> 8) / 0x1000000 < 0.62) {
+    if (gate > districtGate && (h >>> 8) / 0x1000000 < villageChance) {
       const ox = rx * REGION + 4 + ((h >>> 3) & 0xf)
       const oy = ry * REGION + 4 + ((h >>> 19) & 0xf)
       const spot = findVillageSpot(ox, oy)
@@ -197,6 +234,23 @@ export function createWorld(p: WorldParams): World {
     }
     villages.set(key, v)
     return v
+  }
+
+  /**
+   * 全世界的村庄，按区域键升序（确定性 —— NPC 轮转落点要靠这个顺序稳定）。
+   * 走的是 findVillage 的既有缓存，重复调用不重算。
+   */
+  function listVillages(): readonly Village[] {
+    const spanX = Math.max(1, Math.ceil(W / REGION))
+    const spanY = Math.max(1, Math.ceil(H / REGION))
+    const out: Village[] = []
+    for (let ry = 0; ry < spanY; ry++) {
+      for (let rx = 0; rx < spanX; rx++) {
+        const v = findVillage(rx, ry)
+        if (v) out.push(v)
+      }
+    }
+    return out
   }
 
   /** 该格落在哪个村子的影响范围内（查自身 + 八邻区域；村子可能跨区域） */
@@ -550,13 +604,22 @@ export function createWorld(p: WorldParams): World {
     return null
   }
 
+  /**
+   * 一格的内容摘要。绕行闭环断言与「改动前后地形逐格一致」的兼容性预言机都用它。
+   *
+   * ⚠️ 必须把**台阶等级与道具的变体/朝向**也摘进去。原先只摘
+   * `biome:path:propKind`，于是「只改高度不改生态」的格（海平面、内陆湖都属于
+   * 这一类）在旧签名下看起来「一样」—— 拿那个去证明兼容性等于没证。
+   */
   const signatureAt = (x: number, y: number): number => {
     const wx = wrapX(Math.floor(x))
     const wy = wrapY(Math.floor(y))
-    const b = sampler.biomeAt(wx, wy)
     const pr = propAt(wx, wy)
-    const path = pathAt(wx, wy)
-    return fnv1a(`${b}:${path ? 'p' : '-'}:${pr?.kind ?? '-'}`)
+    return fnv1a(
+      `${sampler.biomeAt(wx, wy)}:${sampler.levelAt(wx, wy)}:${pathAt(wx, wy) ? 'p' : '-'}:` +
+        `${pr?.kind ?? '-'}:${pr?.variant ?? -1}:${pr?.rot ?? -1}:` +
+        `${(pr?.ox ?? 0).toFixed(3)}:${(pr?.oy ?? 0).toFixed(3)}`,
+    )
   }
 
   /** 地标优先级：越靠前越是「有故事的地方」,对话情境优先用它 */
@@ -606,5 +669,77 @@ export function createWorld(p: WorldParams): World {
     propAt,
     describeArea,
     signatureAt,
+    listVillages,
   }
+}
+
+/**
+ * 从 (x,y) 螺旋外扩找一块能站人的格。
+ *
+ * 从 engine.ts 搬过来的：它只问世界，不需要引擎、更不需要 WebGPU 上下文 ——
+ * 而创建向导要在地图还没渲染过一帧的时候就给 NPC 定位。
+ *
+ * `avoid` 传的是**格心**浮点坐标，与引擎里 npcRt 的坐标约定一致，搬家后
+ * 引擎那边的行为一格不差。
+ */
+export function findStandSpot(
+  world: World,
+  x: number,
+  y: number,
+  opts: {
+    maxR?: number
+    avoid?: ReadonlyArray<{ x: number; y: number }>
+    minDist?: number
+  } = {},
+): { x: number; y: number } | null {
+  const W = world.params.width
+  const H = world.params.height
+  const maxR = opts.maxR ?? 12
+  const minDist = opts.minDist ?? 0
+  const avoid = opts.avoid ?? []
+  const gx = Math.floor(x)
+  const gy = Math.floor(y)
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        // 只看当前这一圈的边，内圈上一轮已经查过了
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+        const tx = (((gx + dx) % W) + W) % W
+        const ty = (((gy + dy) % H) + H) % H
+        const cx = tx + 0.5
+        const cy = ty + 0.5
+        if (!world.walkableAt(cx, cy) || world.blockedAt(cx, cy)) continue
+        if (minDist > 0) {
+          const crowded = avoid.some(
+            (a) => Math.hypot(wrapDelta(a.x - cx, W), wrapDelta(a.y - cy, H)) < minDist,
+          )
+          if (crowded) continue
+        }
+        return { x: tx, y: ty }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * 找一块可以站人的出生地。
+ *
+ * 从中心开始按螺旋外扩 —— 直接用中心点的话，种子一换很可能开局站在海里。
+ * 与 findStandSpot 的区别：出生点不忌讳道具（站在树边没问题），且搜索半径大得多。
+ */
+export function findSpawn(world: World): { x: number; y: number } {
+  const cx = Math.floor(world.params.width / 2)
+  const cy = Math.floor(world.params.height / 2)
+  for (let r = 0; r < 160; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+        const x = cx + dx
+        const y = cy + dy
+        if (world.walkableAt(x, y)) return { x: x + 0.5, y: y + 0.5 }
+      }
+    }
+  }
+  return { x: cx + 0.5, y: cy + 0.5 }
 }

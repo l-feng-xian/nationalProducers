@@ -57,12 +57,33 @@ export interface WorldParams {
   r2?: number
   /** 海平面。height 噪声低于它就是水 */
   seaLevel?: number
+  /**
+   * 湿度偏置，直接加在湿度场上。>0 更多森林，<0 更多荒原与沙。
+   *
+   * ⚠️ 必须加在 `moisture()` **内部**：湿度有三个消费方（生态判定、道具密度
+   * 分档、describeArea 的地貌措辞），它们必须一起移动，否则会出现
+   * 「明明是森林却按荒原的密度长树」这种自相矛盾的地。
+   */
+  moistureBias?: number
+  /** 聚落场门限。越低越多大区够格出村。村庄相关，噪声层不读它 */
+  districtGate?: number
+  /** 每个区域的落村概率。村庄相关，噪声层不读它 */
+  villageChance?: number
 }
 
+/**
+ * ⚠️ 每个默认值就是引入参数化之前代码里写死的那个常量。
+ *
+ * 这不是随便挑的「合理默认」：存档里只存种子，地形是每次进游戏现算的。
+ * 默认值一变，玩家回到自己那个世界会发现海岸线和村子全挪了位置。
+ * 于是「老世界地形不变」成了**类型签名的性质** —— 调用方不传就等于老行为，
+ * 而不是「记得去回填」的纪律。
+ */
 const DEFAULTS = {
   r1: 1.6,
   r2: 1.6,
   seaLevel: -0.08,
+  moistureBias: 0,
 }
 
 /** 分形叠加的层数与衰减。三层足够出「大陆 + 海湾 + 碎岛」的层次，再多只是白烧 CPU */
@@ -119,6 +140,7 @@ export function createSampler(p: WorldParams): WorldSampler {
   const r1 = p.r1 ?? DEFAULTS.r1
   const r2 = p.r2 ?? DEFAULTS.r2
   const seaLevel = p.seaLevel ?? DEFAULTS.seaLevel
+  const moistureBias = p.moistureBias ?? DEFAULTS.moistureBias
 
   const noiseH = createNoise4D(seededRandom(p.seed))
   // ^ 与 v 两个场必须用不同种子，见上面的说明
@@ -171,7 +193,9 @@ export function createSampler(p: WorldParams): WorldSampler {
   const wrapY = (y: number): number => ((y % height) + height) % height
 
   const height01 = (x: number, y: number): number => fbm(noiseH, x, y)
-  const moisture = (x: number, y: number): number => fbm(noiseM, x, y)
+  // 偏置加在这里而不是各调用处：湿度的三个消费方（生态、道具密度、地貌措辞）
+  // 必须一起移动，否则会长出「按荒原密度长树的森林」
+  const moisture = (x: number, y: number): number => fbm(noiseM, x, y) + moistureBias
   const district = (x: number, y: number): number => fbm(noiseD, x, y, 0.28, 2)
 
   const biomeAt = (x: number, y: number): Biome => {
