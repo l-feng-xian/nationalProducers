@@ -18,6 +18,7 @@
 import type * as THREE_NS from 'three'
 import type { World } from './world'
 import { TILE_PX, buildProp, buildTileAtlas, PROP_SIZE, type PropKind } from './tiles'
+import type { CharacterRig } from './rig'
 
 /**
  * 视窗边长（格）。
@@ -38,7 +39,16 @@ export interface SceneHandle {
   readonly canvas: HTMLCanvasElement
   /** 当前后端，'webgpu' | 'webgl' —— UI 上要显示，也是回退验证的观测点 */
   readonly backend: string
+  /** 相机俯角（弧度）。角色 rig 要按它把 billboard 回正 */
+  readonly pitch: number
+  /** three 名字空间。three 是动态 import 的，外面建 rig 时拿不到，从这里取 */
+  readonly THREE: typeof THREE_NS
   setPlayer(x: number, y: number): void
+  /** 挂一个角色（玩家或 NPC）。重复挂是空操作 */
+  addRig(rig: CharacterRig): void
+  removeRig(rig: CharacterRig): void
+  /** 把某个 rig 摆到格坐标 (x,y)，内部按俯角做 billboard 落地 */
+  placeRig(rig: CharacterRig, x: number, y: number): void
   resize(w: number, h: number): void
   render(): void
   dispose(): void
@@ -159,7 +169,14 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     const list = world.propsAround(playerX, playerY, VIEW_TILES)
     // 池化：复用已有 mesh，只在不够时才新建
     while (propPool.length < list.length) {
-      const m = new THREE.Mesh(propGeo, new THREE.MeshBasicMaterial({ transparent: true }))
+      const m = new THREE.Mesh(
+        propGeo,
+        // ⚠️ 刻意 transparent:false + alphaTest：像素精灵走**不透明通道**，
+        // 深度既测也写，于是「走到树后被挡、走到树前挡住树」完全由深度缓冲决定，
+        // 与绘制顺序无关。改成 transparent:true 会进半透明通道按距离排序，
+        // 精灵互相穿插时顺序会错，而且排序本身还有开销。
+        new THREE.MeshBasicMaterial({ transparent: false, alphaTest: 0.5 }),
+      )
       propPool.push(m)
       propGroup.add(m)
     }
@@ -184,8 +201,6 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
       mesh.scale.set(w, h, 1)
       placeBillboard(mesh, p.x + 0.5 + p.ox, p.y + 0.5 + p.oy, h)
       mesh.visible = true
-      mat.depthWrite = true
-      mat.alphaTest = 0.5 // 像素画用 alphaTest 而不是混合，边缘才是硬的
     }
   }
 
@@ -220,6 +235,25 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     camera.lookAt(playerX + 0.5, 0, playerY + 0.5)
   }
 
+  const rigs = new Set<CharacterRig>()
+
+  function addRig(rig: CharacterRig): void {
+    if (rigs.has(rig)) return
+    rigs.add(rig)
+    scene.add(rig.object)
+  }
+
+  function removeRig(rig: CharacterRig): void {
+    if (!rigs.delete(rig)) return
+    scene.remove(rig.object)
+  }
+
+  /** 与装饰物同一套落地公式，保证角色和树站在同一个平面上 */
+  function placeRig(rig: CharacterRig, x: number, y: number): void {
+    const h = rig.height
+    rig.object.position.set(x, (h / 2) * Math.cos(pitch), y - (h / 2) * Math.sin(pitch))
+  }
+
   function setPlayer(x: number, y: number): void {
     playerX = x
     playerY = y
@@ -249,6 +283,11 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
 
   return {
     canvas,
+    pitch,
+    THREE,
+    addRig,
+    removeRig,
+    placeRig,
     // @types/three 0.185 的 Backend 上没有 isWebGPUBackend 字段（运行时是有的），
     // 用 in 做运行时探测，别为了过类型去断言一个可能不存在的属性
     backend: renderer.backend && 'isWebGPUBackend' in renderer.backend ? 'webgpu' : 'webgl',
