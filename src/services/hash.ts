@@ -29,6 +29,23 @@ export function hashObject(value: unknown): number {
   return fnv1a(stableStringify(value))
 }
 
+/**
+ * 坐标哈希（murmur3 的 fmix32 收尾）。程序化世界里按格取随机数用。
+ *
+ * ⚠️ 这里**不能用 `fnv1a(\`${seed}:${x}:${y}\`)`**，踩过：FNV-1a 对「只差最后
+ * 几位」的短字符串雪崩很差，高位几乎不变，而调用方又恰好取高位 ——
+ * 结果是**同一列上连续七八格同时低于阈值**，树木排成竖直的柱子。
+ *
+ * fmix32 的雪崩足够，相邻坐标的输出完全不相关。顺带把每格一次的字符串拼接
+ * 也省掉了 —— 全世界 256×256 逐格摆放要拼 65536 个字符串，纯属浪费。
+ */
+export function hashTile(seed: number, x: number, y: number): number {
+  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1)
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return (h ^ (h >>> 16)) >>> 0
+}
+
 /** 确定性 PRNG（mulberry32），供 {{pick}} 使用 */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0

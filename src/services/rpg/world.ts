@@ -26,8 +26,9 @@ import {
   type WorldParams,
   type WorldSampler,
 } from './noise'
-import { fnv1a } from '@/services/hash'
+import { fnv1a, hashTile } from '@/services/hash'
 import type { RpgGenParams } from '@/types/rpg'
+import { WILD_REGION, villageName, wildName, type TerrainClass } from './names'
 
 /** 场景装饰物的种类 */
 export type PropKind =
@@ -103,22 +104,10 @@ const BLOCKERS: ReadonlySet<PropKind> = new Set([
   'scarecrow',
 ])
 
-/**
- * 坐标哈希（murmur3 的 fmix32 收尾）。
- *
- * ⚠️ 这里**不能用 `fnv1a(\`${seed}:${x}:${y}\`)`**，踩过：FNV-1a 对「只差最后
- * 几位」的短字符串雪崩很差，高位几乎不变，而我又恰好取 `h >>> 8` 的高 24 位 ——
- * 结果是**同一列上连续七八格同时低于阈值**，树木排成竖直的柱子。
- *
- * fmix32 的雪崩足够，相邻坐标的输出完全不相关。顺带把每格一次的字符串拼接
- * 也省掉了 —— 全世界 256×256 逐格摆放要拼 65536 个字符串，纯属浪费。
- */
-export function hashTile(seed: number, x: number, y: number): number {
-  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1)
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
-  return (h ^ (h >>> 16)) >>> 0
-}
+// hashTile 搬去了 services/hash —— names.ts 也要用它，留在这里会绕成
+// world ⇄ names 的循环依赖（现在能跑只是因为函数声明被提升，改天谁加一行
+// 顶层调用就静默炸）。这里 re-export，既有 import 不用改
+export { hashTile }
 
 /**
  * 把存档翻成生成参数。
@@ -164,6 +153,8 @@ export function wrapDelta(d: number, m: number): number {
 const REGION = 24
 
 export interface Village {
+  /** 村名，如「青柳村」。确定性推导、随村庄一起缓存，零重复开销 */
+  name: string
   /** 村心（水井所在格，已回绕） */
   cx: number
   cy: number
@@ -187,6 +178,24 @@ export function createWorld(p: WorldParams): World {
   // 村庄的两个旋钮。默认值就是参数化之前写死的那两个数，见 noise.ts DEFAULTS 的说明
   const districtGate = p.districtGate ?? 0.1
   const villageChance = p.villageChance ?? 0.62
+
+  /**
+   * 当地地貌属于哪一类 —— 只用来挑地名里的那个特征字。
+   * 判定顺序即优先级：先看有没有水，再看林，再看地势，最后才是平地。
+   */
+  const terrainClassAt = (x: number, y: number): TerrainClass => {
+    const wx = wrapX(Math.floor(x))
+    const wy = wrapY(Math.floor(y))
+    // 附近三格内有水就算「水边」—— 村子挨着湖，名字里该有水
+    for (let dy = -3; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const b = sampler.biomeAt(wrapX(wx + dx), wrapY(wy + dy))
+        if (b === BIOME.water || b === BIOME.shallow) return 'water'
+      }
+    }
+    if (sampler.moisture(wx, wy) > 0.18) return 'forest'
+    return sampler.levelAt(wx, wy) >= 4 ? 'hill' : 'plain'
+  }
 
   // ── 村落：按区域惰性求值并缓存 ──
 
@@ -224,6 +233,7 @@ export function createWorld(p: WorldParams): World {
       const spot = findVillageSpot(ox, oy)
       if (spot) {
         v = {
+          name: villageName(seed, rx, ry, terrainClassAt(spot.x, spot.y)),
           cx: spot.x,
           cy: spot.y,
           r: 5 + ((h >>> 5) & 3),
@@ -634,12 +644,34 @@ export function createWorld(p: WorldParams): World {
     scarecrow: '稻草人旁',
   }
 
+  /**
+   * 相对村心的方位词。给「青柳村西边的麦田」这种说法用。
+   * ⚠️ 中文是**东南/西北**的字序，不是「南东」—— 东西在前，南北在后。
+   */
+  const bearing = (dx: number, dy: number): string => {
+    const we = dx < -1.5 ? '西' : dx > 1.5 ? '东' : ''
+    const ns = dy < -1.5 ? '北' : dy > 1.5 ? '南' : ''
+    return we || ns ? `${we}${ns}边的` : ''
+  }
+
+  /**
+   * 一句话描述该格所在的区域，进对话提示词的【场景】。
+   *
+   * 带上地名是免费的沉浸感：模型收到「青柳村西边的麦田」比收到「农田边」
+   * 能推出多得多的东西，而这一个字的 token 都不用额外花。
+   */
   const describeArea = (x: number, y: number): string => {
     const wx = wrapX(Math.floor(x))
     const wy = wrapY(Math.floor(y))
     const b = sampler.biomeAt(wx, wy)
-    if (b === BIOME.water || b === BIOME.shallow) return '水边'
-    if (pathAt(wx, wy)) return '村道上'
+    const v = villageNear(wx, wy)
+    if (b === BIOME.water || b === BIOME.shallow) {
+      if (v) return `${v.name}外的水边`
+      const gx = Math.floor(wx / WILD_REGION)
+      const gy = Math.floor(wy / WILD_REGION)
+      return `${wildName(seed, gx, gy, 'water')}畔`
+    }
+    if (pathAt(wx, wy)) return v ? `${v.name}的村道上` : '村道上'
     // 半径 2 格内找最近的地标
     for (let r = 1; r <= 2; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -647,15 +679,20 @@ export function createWorld(p: WorldParams): World {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
           const pr = propAt(wrapX(wx + dx), wrapY(wy + dy))
           const mark = pr ? LANDMARKS[pr.kind] : undefined
-          if (mark) return mark
+          if (mark) {
+            return v ? `${v.name}${bearing(torusDx(wx, v.cx), torusDy(wy, v.cy))}${mark}` : mark
+          }
         }
       }
     }
     if (b === BIOME.sand) return '沙滩上'
+    // 野地用比村庄粗得多的网格命名 —— 每走两步换个地名反而出戏
+    const gx = Math.floor(wx / WILD_REGION)
+    const gy = Math.floor(wy / WILD_REGION)
     const m = sampler.moisture(wx, wy)
-    if (m > 0.18) return '森林里'
-    if (m > 0) return '花田草原上'
-    return '荒野中'
+    if (m > 0.18) return `${wildName(seed, gx, gy, 'forest')}中`
+    if (m > 0) return `${wildName(seed, gx, gy, 'plain')}上`
+    return `${wildName(seed, gx, gy, 'hill')}中`
   }
 
   return {
