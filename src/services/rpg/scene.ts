@@ -75,7 +75,11 @@ export interface CreateSceneArgs {
 
 export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   const { world } = args
-  const THREE = await import('three')
+  // ⚠️ 基础类也从 'three/webgpu' 取，**不要**再 import 'three'。
+  // 两个入口共用同一份 three.core.js，类的身份完全一致，但 'three' 会额外
+  // 拖进 three.module.js（含整个 WebGLRenderer，约 365 kB）—— 本模块一行都用不上。
+  // parallax.ts 走的是经典 WebGLRenderer，它那条路由自己去加载，两边互不牵连。
+  const THREE = (await import('three/webgpu')) as unknown as typeof THREE_NS
   const { WebGPURenderer } = (await import('three/webgpu')) as {
     WebGPURenderer: WebGPURendererCtor
   }

@@ -36,6 +36,17 @@ const router = createRouter({
       name: 'worlds',
       component: () => import('@/views/WorldBooksView.vue'),
     },
+    // 同 /groups：列表路由必须排在 :id 之前
+    {
+      path: '/rpg',
+      name: 'rpg',
+      component: () => import('@/views/RpgView.vue'),
+    },
+    {
+      path: '/rpg/:id',
+      name: 'rpg-play',
+      component: () => import('@/views/RpgPlayView.vue'),
+    },
     {
       path: '/models',
       name: 'models',

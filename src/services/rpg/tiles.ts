@@ -101,8 +101,12 @@ function paintProp(ctx: CanvasRenderingContext2D, kind: PropKind): void {
   }
 
   if (kind === 'tree') {
-    px(w / 2 - 3, h - 14, 6, 14, '#6b4a2a') // 树干
-    px(w / 2 - 2, h - 14, 2, 14, '#8a6338') // 树干高光
+    // ⚠️ 树干必须一路顶到伞盖底沿（y=24）以下，中间不能留空 ——
+    // 先画干后画盖，让伞盖压住接缝；写成 h-14 会在 24~34 之间留一段透明，
+    // 远看就是伞盖浮在半空、树干断在下面。
+    const trunkTop = 20
+    px(w / 2 - 3, trunkTop, 6, h - trunkTop, '#6b4a2a') // 树干
+    px(w / 2 - 2, trunkTop, 2, h - trunkTop, '#8a6338') // 树干高光
     // 伞盖：三层梯形，越往上越窄
     px(2, 10, w - 4, 14, '#2f6b2a')
     px(4, 4, w - 8, 12, '#3d8235')
