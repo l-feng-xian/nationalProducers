@@ -360,7 +360,8 @@ export const useGenerationStore = defineStore('generation', () => {
         text = await chatOnce(cfg, req, controller.signal)
       }
 
-      chats.patchLocal(row.id, {
+      // 按 chatId 写回，不看用户现在开着哪段会话（切走了也不能丢回复）
+      await chats.writeRow(meta.id, row, {
         mes: text,
         extra: {
           ...row.extra,
@@ -369,7 +370,6 @@ export const useGenerationStore = defineStore('generation', () => {
           ...(reasoning ? { reasoning } : {}),
         },
       })
-      await chats.persist(row.id)
 
       // 首轮回复后用用户第一句话给会话命名
       if (meta.title === '新对话') {
@@ -379,19 +379,16 @@ export const useGenerationStore = defineStore('generation', () => {
     } catch (e) {
       const err = e instanceof ProviderError ? e : new ProviderError('unknown', String(e))
       if (err.kind === 'aborted') {
-        chats.patchLocal(row.id, {
-          mes: text,
-          extra: { ...row.extra, stopped: true },
-        })
-        await chats.persist(row.id)
+        // 一个字都没出就被中断（首字之前按停止很常见，带思维链的模型 TTFB 好几秒），
+        // 留着就是一条永久空白的 assistant，还会被塞进之后每一轮提示词
+        if (!text) await chats.removeRowFrom(meta.id, row)
+        else
+          await chats.writeRow(meta.id, row, { mes: text, extra: { ...row.extra, stopped: true } })
       } else {
         toast.error(err.message)
         // 生成失败：把空的占位消息删掉，别在历史里留残骸
-        if (!text) await chats.removeTail(1)
-        else {
-          chats.patchLocal(row.id, { mes: text })
-          await chats.persist(row.id)
-        }
+        if (!text) await chats.removeRowFrom(meta.id, row)
+        else await chats.writeRow(meta.id, row, { mes: text })
       }
     } finally {
       busy.value = false

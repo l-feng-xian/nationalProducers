@@ -123,14 +123,20 @@ export async function talkToNpc(
   )
 
   try {
-    await chats.appendUser(text)
+    // 名字也要用世界人设：提示词走的是 personaOverride，历史记录若还记全局人设的
+    // 名字，玩家在聊天页翻这段会看到「阿明」在跟 NPC 说话
+    await chats.appendUser(text, world.persona.name)
     // 玩家在这个世界里的身份。两项留空会在 effectivePersona 里回落到全局人设
+    // ⚠️ 发言者**无条件**显式传入，关联了卡也要传。
+    // 不传的话 builder 会退回 `chars.byId(meta.characterId)` —— 那是建会话
+    // 当时冻结的一份副本，而 NpcEditor 允许随时改绑角色卡且不会作废 chatId。
+    // 改绑之后两者就分叉：提示词正文、角色世界书（含 constant 常驻条目）、
+    // 落库时的发言者名字全都还认**旧卡**，编辑器上却显示着新卡的名字。
+    const linked = npc.characterId ? chars.byId(npc.characterId) : undefined
     await gen.send({
       personaOverride: world.persona,
       // 关联了卡就走卡；没关联就用自填简介合成的临时卡
-      ...(npc.characterId && chars.byId(npc.characterId)
-        ? {}
-        : { speakerOverride: synthCard(npc) }),
+      speakerOverride: linked ?? synthCard(npc),
     })
   } catch (e) {
     stop()

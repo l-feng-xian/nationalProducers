@@ -61,7 +61,16 @@ export async function* streamChat(
     throw wrapFetchError(e)
   }
   if (!res.ok) throw await toProviderError(res)
-  yield* parseSSE(res)
+  // ⚠️ 读流也必须包起来。中断绝大多数发生在**这里**而不是上面的 fetch：
+  // 头一到就开始出字，用户看着字往外蹦才会去按「停止」，此时 abort 是从
+  // reader.read() 抛出裸 DOMException。不翻译的话 generation 那边
+  // `err.kind === 'aborted'` 为 false，主动中断会被当成生成失败 ——
+  // 弹一条英文 DOMException 红字，还告诉用户「模型服务不可用」。
+  try {
+    yield* parseSSE(res)
+  } catch (e) {
+    throw wrapFetchError(e)
+  }
 }
 
 /** 非流式聊天补全 */
@@ -84,8 +93,12 @@ export async function chatOnce(
     throw wrapFetchError(e)
   }
   if (!res.ok) throw await toProviderError(res)
-  const j = (await res.json()) as {
-    choices?: { message?: { content?: string } }[]
+  // 同 streamChat：读 body 期间中断，抛的也是裸 DOMException
+  let j: { choices?: { message?: { content?: string } }[] }
+  try {
+    j = (await res.json()) as typeof j
+  } catch (e) {
+    throw wrapFetchError(e)
   }
   return j.choices?.[0]?.message?.content ?? ''
 }

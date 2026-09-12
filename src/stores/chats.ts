@@ -175,14 +175,18 @@ export const useChatsStore = defineStore('chats', () => {
     list.value = [...list.value].sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  async function appendUser(text: string): Promise<ChatMessage | null> {
+  /**
+   * @param nameOverride 本轮说话人的显示名。RPG 里玩家用的是「世界人设」，
+   *   与全局人设不是一回事 —— 不传的话这条会被记成全局人设的名字，
+   *   提示词里写着「旅人阿柚」、历史里却显示「阿明」。留空按 `||` 回落全局，
+   *   与 effectivePersona 的分层一致。
+   */
+  async function appendUser(text: string, nameOverride?: string): Promise<ChatMessage | null> {
     const meta = current.value
     if (!meta) return null
     const settings = useSettingsStore()
-    const row = await messagesRepo.append(
-      meta.id,
-      newUserMessage(meta.id, settings.settings.persona.name, text),
-    )
+    const who = nameOverride?.trim() || settings.settings.persona.name
+    const row = await messagesRepo.append(meta.id, newUserMessage(meta.id, who, text))
     messages.value = [...messages.value, row]
     await refreshMeta(meta.id)
     return row
@@ -210,6 +214,37 @@ export const useChatsStore = defineStore('chats', () => {
   async function persist(id: string) {
     const row = messages.value.find((m) => m.id === id)
     if (row) await messagesRepo.update(row)
+  }
+
+  /**
+   * 把生成结果写回**指定会话**的那一条消息。
+   *
+   * ⚠️ 收尾**不能**用 patchLocal + persist：两者都从 `messages.value` 里按 id 找行，
+   * 而生成期间用户完全可能已经切走 —— 游戏页刻意不保活，侧栏又一直挂着，
+   * 换会话就是一次点击。切走之后那两个调用是**静默空操作**：不报错、不重试，
+   * 回复直接丢，该 NPC 的历史里永久留下一条空白 assistant，
+   * 之后每轮提示词都会带上这条 `{role:'assistant', content:''}`。
+   */
+  async function writeRow(chatId: string, row: ChatMessage, patch: Partial<ChatMessage>) {
+    await messagesRepo.update({ ...row, ...patch })
+    if (current.value?.id === chatId) {
+      patchLocal(row.id, patch)
+      await refreshMeta(chatId)
+    }
+  }
+
+  /**
+   * 删掉**指定会话**里的某一条（生成失败时清掉空占位）。
+   *
+   * ⚠️ 同样不能用 removeTail：它按 `current.value` 取会话，用户切走之后
+   * 删的是**别人**的最后一条 —— 用户正在读的那段对话会凭空少一句，不可撤销。
+   */
+  async function removeRowFrom(chatId: string, row: ChatMessage) {
+    await messagesRepo.remove(chatId, row.seq)
+    if (current.value?.id === chatId) {
+      messages.value = messages.value.filter((m) => m.id !== row.id)
+      await refreshMeta(chatId)
+    }
   }
 
   async function markTainted() {
@@ -361,6 +396,8 @@ export const useChatsStore = defineStore('chats', () => {
     appendAi,
     patchLocal,
     persist,
+    writeRow,
+    removeRowFrom,
     markTainted,
     removeChat,
     removeTail,
