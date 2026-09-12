@@ -110,6 +110,24 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (p: string) => p.replace(/^\/llm/, ''),
         },
+        /**
+         * 扫码同步的信令服务器（默认 ws://149.30.222.97/ws，那台机器上由
+         * nginx 把 /ws 反代到本地跑的 signal-server.js）。
+         *
+         * 这条代理**不只是图方便，是必需的**：信令服务器只有 http，没有 TLS；
+         * 而 npm run dev:lan 为了让手机能用摄像头必须走 https，https 页面又
+         * 禁止打开 ws:// 连接（混合内容，浏览器直接拦死）。让客户端连同源的
+         * `wss://<vite>/ws`、由 vite 在服务端再转成 ws://，不安全的那一跳就
+         * 发生在浏览器看不见的地方，两个要求才能同时满足。
+         *
+         * 目标可用 VITE_SIGNAL_TARGET 覆盖（比如改回本机的 ws://127.0.0.1:8080）。
+         */
+        '/ws': {
+          target: env['VITE_SIGNAL_TARGET'] || 'ws://149.30.222.97',
+          ws: true,
+          changeOrigin: true,
+          // 信令服务器不看路径（任何路径都 upgrade），所以不做 rewrite
+        },
       },
     },
   }

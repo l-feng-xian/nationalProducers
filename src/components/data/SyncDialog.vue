@@ -189,8 +189,9 @@ onBeforeUnmount(stopCamera)
           <!-- 1 选角色 -->
           <template v-if="sync.step === 'pick'">
             <p class="note">
-              两台设备连同一个 Wi-Fi，扫码直连传数据。 数据在两台设备之间直接走，
-              <strong>不经过任何服务器</strong>；同样不含 API Key 与向量索引。
+              两台设备连同一个 Wi-Fi，扫一次码就能直连传数据。
+              握手借信令服务器牵个线，<strong>数据本身点对点直接走、不经过服务器</strong>； 同样不含
+              API Key 与向量索引。
             </p>
             <div class="acts">
               <button
@@ -205,17 +206,24 @@ onBeforeUnmount(stopCamera)
               </button>
             </div>
             <p class="cbx-field__hint">
-              先在一台设备上点「发起连接」，另一台点「扫码加入」。之后两台设备各扫对方一次。
+              一台点「发起连接」出码，另一台点「扫码加入」扫它 —— 就这一次。
+              信令服务器连不上时会自动退回手动模式（那种要互扫两次）。
             </p>
           </template>
 
           <!-- 2 显示自己的码 -->
           <template v-else-if="sync.step === 'showCode'">
             <p class="note">
-              <template v-if="sync.role === 'host'">
+              <template v-if="sync.relayed">
+                让另一台设备点「扫码加入」，扫下面这个码 —— 扫完就自动连上，不用再扫第二次。
+              </template>
+              <template v-else-if="sync.role === 'host'">
                 第 1 步：让另一台设备点「扫码加入」，扫下面这个码。
               </template>
-              <template v-else> 第 2 步：让发起方扫下面这个应答码，扫完就连上了。 </template>
+              <template v-else>第 2 步：让发起方扫下面这个应答码，扫完就连上了。</template>
+            </p>
+            <p v-if="!sync.relayed && sync.fallbackReason" class="note note--warn">
+              ⚠️ 没连上信令服务器，已退回手动模式（要扫两次码）：{{ sync.fallbackReason }}
             </p>
             <div class="qr">
               <canvas ref="canvas" />
@@ -226,7 +234,8 @@ onBeforeUnmount(stopCamera)
               <code class="code">{{ sync.myCode }}</code>
               <button class="cbx-btn cbx-btn--ghost sm" @click="copyCode">复制配对码</button>
             </details>
-            <div v-if="sync.role === 'host'" class="acts">
+            <!-- 有信令时不需要第二次扫码：对方扫完会自己把握手送上门 -->
+            <div v-if="!sync.relayed && sync.role === 'host'" class="acts">
               <button class="cbx-btn cbx-btn--primary" @click="sync.toScan()">
                 对方扫好了，去扫他的应答码
               </button>

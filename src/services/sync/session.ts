@@ -17,12 +17,22 @@ import {
 } from '@/services/io/backup'
 import { deflateRaw, inflateRaw, fromUtf8, utf8 } from '@/utils/bytes'
 import { packSignal, unpackSignal } from './signal'
+import type { RelayMessage, SignalClient } from './signaling'
 import { decodeFrame, encodeFrame, PROTOCOL_VERSION, type Frame, type Manifest } from './protocol'
 
 /** ICE 收集的等待上限。本地候选是瞬间就有的，超了就按现有候选发车 */
 const GATHER_TIMEOUT = 3000
-/** 连接建立超时。mDNS 解析不通时会一直停在 connecting */
+/** 连接建立超时。两端都已开始协商后才用它 —— mDNS 不通时会停在 connecting */
 const CONNECT_TIMEOUT = 20_000
+/**
+ * 发起方「等人来扫码」的上限。
+ *
+ * 这段等待是**人的节奏**不是网络的节奏：对方要摸出手机、打开应用、点扫码、
+ * 对准屏幕，半分钟一分钟都很正常。一开始这里和 CONNECT_TIMEOUT 共用 20 秒，
+ * 结果二维码刚显示出来没多久就自己报「连接超时，检查 Wi-Fi」—— 既打断了
+ * 正常操作，给的还是个误导性的原因。
+ */
+const SCAN_WAIT_TIMEOUT = 5 * 60_000
 /** 停滞超时：每收到一片就重置。用「多久没动静」而不是「总共跑了多久」判死 */
 const STALL_TIMEOUT = 30_000
 
@@ -75,6 +85,21 @@ export class SyncSession {
   #failWaiters: ((e: Error) => void)[] = []
   #stallTimer: ReturnType<typeof setTimeout> | null = null
 
+  // ── 信令模式（扫一次码）用到的状态 ──
+  #signal: SignalClient | null = null
+  /** 对端在信令服务器上的 id，ICE 候选要发给它 */
+  #peerId = ''
+  /** 配对令牌：同一台信令服务器上别人就算猜到 id 也接不进来 */
+  #token = ''
+  /**
+   * 在 setRemoteDescription 之前到达的 ICE 候选。
+   *
+   * trickle 模式下候选和 SDP 是两条独立的消息，网络上谁先到不一定。
+   * 抢跑的候选直接 addIceCandidate 会抛 InvalidStateError，必须先攒着，
+   * 等远端描述落位再补进去 —— 漏掉这一步的表现是「偶尔连不上」，很难复现。
+   */
+  #pendingIce: RTCIceCandidateInit[] = []
+
   constructor(hooks: SessionHooks = {}) {
     this.#hooks = hooks
     this.pc = new RTCPeerConnection({ iceServers: [] })
@@ -117,17 +142,122 @@ export class SyncSession {
     await this.pc.setRemoteDescription({ type: 'answer', sdp })
   }
 
-  /** 等连接真正可用 */
-  waitOpen(): Promise<void> {
+  // ───────── 信令模式：只需扫一次码 ─────────
+
+  /**
+   * 把 ICE 候选边收集边发给对端（trickle）。
+   *
+   * 无服务器模式必须等候选收集完才能生成二维码；有了信令通道，候选可以
+   * 随时补发，所以这里不再 await 收集完成 —— 连接建立明显更快。
+   */
+  #wireTrickle(): void {
+    this.pc.addEventListener('icecandidate', (e) => {
+      if (!e.candidate || !this.#peerId) return
+      this.#signal?.send({ type: 'ice', to: this.#peerId, candidate: e.candidate.toJSON() })
+    })
+  }
+
+  async #flushIce(): Promise<void> {
+    const queued = this.#pendingIce
+    this.#pendingIce = []
+    for (const c of queued) {
+      try {
+        await this.pc.addIceCandidate(c)
+      } catch {
+        // 单个候选无效不该拖垮整条连接，其它候选仍可能连通
+      }
+    }
+  }
+
+  /** 发起方：连上信令后等对方扫码接入 */
+  hostViaSignal(signal: SignalClient, token: string): void {
+    this.#signal = signal
+    this.#token = token
+    // 通道由扫码方创建，这边只管接住
+    this.pc.addEventListener('datachannel', (e) => this.#bindChannel(e.channel))
+    this.#wireTrickle()
+  }
+
+  /** 扫码方：主动向二维码里的那个 id 发起连接 */
+  async joinViaSignal(signal: SignalClient, targetId: string, token: string): Promise<void> {
+    this.#signal = signal
+    this.#token = token
+    this.#peerId = targetId
+    this.#wireTrickle()
+    const dc = this.pc.createDataChannel('sync', { ordered: true })
+    this.#bindChannel(dc)
+    const offer = await this.pc.createOffer()
+    await this.pc.setLocalDescription(offer)
+    signal.send({ type: 'offer', to: targetId, sdp: offer.sdp ?? '', token })
+  }
+
+  /** 信令服务器转发过来的消息。由 store 接到 SignalClient 的 onRelay 上 */
+  async handleRelay(m: RelayMessage): Promise<void> {
+    try {
+      switch (m.type) {
+        case 'offer': {
+          // 令牌不对就是别人猜到了我的 id，直接不理
+          if (!m.token || m.token !== this.#token) return
+          if (this.#peerId && this.#peerId !== m.from) return // 已经和别人配上了
+          this.#peerId = m.from
+          await this.pc.setRemoteDescription({ type: 'offer', sdp: m.sdp ?? '' })
+          await this.#flushIce()
+          const answer = await this.pc.createAnswer()
+          await this.pc.setLocalDescription(answer)
+          this.#signal?.send({ type: 'answer', to: m.from, sdp: answer.sdp ?? '' })
+          return
+        }
+        case 'answer': {
+          if (m.from !== this.#peerId) return
+          await this.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp ?? '' })
+          await this.#flushIce()
+          return
+        }
+        case 'ice': {
+          if (m.from !== this.#peerId || !m.candidate) return
+          if (!this.pc.remoteDescription) {
+            this.#pendingIce.push(m.candidate)
+            return
+          }
+          try {
+            await this.pc.addIceCandidate(m.candidate)
+          } catch {
+            // 同上：单个候选失败不致命
+          }
+          return
+        }
+        case 'bye':
+          if (m.from === this.#peerId) this.#fail(new Error('对方已断开'))
+          return
+      }
+    } catch (e) {
+      this.#fail(toErr(e))
+    }
+  }
+
+  /**
+   * 等连接真正可用。
+   *
+   * `waitingForScan` 区分两种等待：等人扫码（分钟级，超时文案是「没人扫」）
+   * 与等 ICE 协商完成（秒级，超时文案才该提 Wi-Fi 与 AP 隔离）。
+   * 混用会在二维码刚亮起来时就误报网络故障。
+   */
+  waitOpen(opts: { waitingForScan?: boolean } = {}): Promise<void> {
     if (this.#dc?.readyState === 'open') return Promise.resolve()
+    const scan = opts.waitingForScan === true
     return new Promise((res, rej) => {
-      const t = setTimeout(() => {
-        rej(
-          new Error(
-            '连接超时。请确认两台设备连的是同一个 Wi-Fi；部分访客网络与开启了 AP 隔离的路由器会阻断设备间直连。',
-          ),
-        )
-      }, CONNECT_TIMEOUT)
+      const t = setTimeout(
+        () => {
+          rej(
+            new Error(
+              scan
+                ? '等了 5 分钟没有设备扫码。二维码已失效，请重新发起。'
+                : '连接超时。请确认两台设备连的是同一个 Wi-Fi；部分访客网络与开启了 AP 隔离的路由器会阻断设备间直连。',
+            ),
+          )
+        },
+        scan ? SCAN_WAIT_TIMEOUT : CONNECT_TIMEOUT,
+      )
       const prevOpen = this.#hooks.onOpen
       this.#hooks.onOpen = () => {
         clearTimeout(t)
@@ -370,12 +500,16 @@ export class SyncSession {
     if (this.#closed) return
     this.#closed = true
     this.#clearStall()
+    // 告诉对端我走了，它就能立刻报「对方已断开」而不是干等超时
+    if (this.#peerId) this.#signal?.send({ type: 'bye', to: this.#peerId })
     try {
       this.#dc?.close()
       this.pc.close()
+      this.#signal?.close()
     } catch {
       // 已经关掉了，无所谓
     }
+    this.#signal = null
   }
 }
 

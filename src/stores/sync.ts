@@ -10,6 +10,16 @@ import { computed, ref } from 'vue'
 import { FULL_SCOPE, type ImportResult, type SyncScope } from '@/services/io/backup'
 import { SyncSession } from '@/services/sync/session'
 import type { Manifest } from '@/services/sync/protocol'
+import {
+  isRendezvous,
+  makeToken,
+  packRendezvous,
+  rendezvousUrls,
+  SAME_ORIGIN,
+  signalCandidates,
+  SignalClient,
+  unpackRendezvous,
+} from '@/services/sync/signaling'
 
 /**
  * 步骤：
@@ -56,6 +66,18 @@ export const useSyncStore = defineStore('sync', () => {
   /** 接收方确认页的回调闸门 */
   let confirmGate: ((ok: boolean) => void) | null = null
 
+  /**
+   * 是否走信令服务器。
+   *
+   * 有服务器时**只需扫一次码**：二维码里只放「去哪台服务器找哪个 id」，
+   * SDP 与 ICE 都在 WebSocket 上来回走。服务器没起时自动退回无服务器模式，
+   * 那种要两个码扫两次 —— 功能不会因为服务器没开就整个不可用。
+   */
+  const relayed = ref(true)
+  /** 退回无服务器模式的原因，显示给用户看，免得以为是自己操作错了 */
+  const fallbackReason = ref('')
+  let signal: SignalClient | null = null
+
   /** 默认不勾「设置」—— 它会整包覆盖对方的接口地址、模型与人设 */
   const scope = ref<SyncScope>({ ...FULL_SCOPE, settings: false })
 
@@ -69,7 +91,11 @@ export const useSyncStore = defineStore('sync', () => {
   function reset(): void {
     session?.close()
     session = null
+    signal?.close()
+    signal = null
     confirmGate = null
+    relayed.value = true
+    fallbackReason.value = ''
     step.value = 'pick'
     role.value = 'host'
     error.value = ''
@@ -115,19 +141,65 @@ export const useSyncStore = defineStore('sync', () => {
     return s
   }
 
-  /** 发起方：出码 → 等对方扫 */
+  /**
+   * 连信令服务器。连不上不算失败 —— 退回无服务器模式，只是要多扫一次码。
+   * 返回是否连上。
+   */
+  async function trySignal(name: string): Promise<boolean> {
+    const s = new SignalClient({
+      onRelay: (m) => void session?.handleRelay(m),
+      onClose: (reason) => {
+        // 通道已经建好之后信令断开无所谓，数据是点对点走的
+        if (step.value === 'transfer' || step.value === 'done') return
+        if (step.value === 'showCode' || step.value === 'connecting') fail(new Error(reason))
+      },
+    })
+    try {
+      await s.connectAny(signalCandidates(), name)
+      signal = s
+      relayed.value = true
+      return true
+    } catch (e) {
+      s.close()
+      signal = null
+      relayed.value = false
+      fallbackReason.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 发起方：出码 → 等对方扫。有信令时只出这一个码，扫完直接连上 */
   async function startHost(): Promise<void> {
     try {
       role.value = 'host'
       error.value = ''
-      myCode.value = await makeSession().createOffer()
+      step.value = 'connecting'
+      const s = makeSession()
+
+      if (await trySignal('发起方')) {
+        const token = makeToken()
+        s.hostViaSignal(signal!, token)
+        // url 写 SAME_ORIGIN：扫码方按自己的同源规则去算，
+        // 否则手机会拿到发起方的 localhost 地址，连的是它自己
+        myCode.value = packRendezvous({ url: SAME_ORIGIN, id: signal!.id, token })
+        step.value = 'showCode'
+        // 对方扫码后会自己把 offer 送上门，这里等通道打开即可。
+        // 这一段等的是**人**（掏手机、开应用、对准摄像头），不是网络，
+        // 所以走分钟级的等待，否则二维码刚亮起来就会自己报「连接超时」
+        await s.waitOpen({ waitingForScan: true })
+        step.value = 'ready'
+        return
+      }
+
+      // 无服务器：退回两个码的手动交换
+      myCode.value = await s.createOffer()
       step.value = 'showCode'
     } catch (e) {
       fail(e)
     }
   }
 
-  /** 加入方：先去扫对方的发起码 */
+  /** 加入方：去扫对方的码 */
   function startGuest(): void {
     role.value = 'guest'
     error.value = ''
@@ -143,15 +215,39 @@ export const useSyncStore = defineStore('sync', () => {
     const s = session
     if (!s) return
     try {
+      // 会合码（MJ| 开头）= 有信令服务器，扫这一次就够了
+      if (isRendezvous(code)) {
+        const rv = unpackRendezvous(code)
+        step.value = 'connecting'
+        const sig = new SignalClient({
+          onRelay: (m) => void session?.handleRelay(m),
+          onClose: (reason) => {
+            if (step.value === 'transfer' || step.value === 'done') return
+            if (step.value === 'connecting') fail(new Error(reason))
+          },
+        })
+        await sig.connectAny(rendezvousUrls(rv), '扫码方')
+        signal = sig
+        relayed.value = true
+        await s.joinViaSignal(sig, rv.id, rv.token)
+        await s.waitOpen()
+        step.value = 'ready'
+        return
+      }
+
+      // 无服务器模式：两个码手动交换
+      relayed.value = false
+      let waitingForScan = false
       if (role.value === 'guest') {
         // 应答码要一直显示着让对方扫，所以停在 showCode 等通道打开
         myCode.value = await s.acceptOffer(code)
         step.value = 'showCode'
+        waitingForScan = true
       } else {
         await s.acceptAnswer(code)
         step.value = 'connecting'
       }
-      await s.waitOpen()
+      await s.waitOpen({ waitingForScan })
       step.value = 'ready'
     } catch (e) {
       fail(e)
@@ -211,6 +307,8 @@ export const useSyncStore = defineStore('sync', () => {
     result,
     received,
     incoming,
+    relayed,
+    fallbackReason,
     scope,
     reset,
     startHost,
