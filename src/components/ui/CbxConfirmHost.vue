@@ -38,7 +38,9 @@ watch(state, (s) => {
         </header>
         <div class="cbx-modal__body confirm__text">{{ state.text }}</div>
         <footer class="cbx-modal__foot">
-          <button class="cbx-btn cbx-btn--ghost" @click="settle(false)">{{ state.cancelText }}</button>
+          <button class="cbx-btn cbx-btn--ghost" @click="settle(false)">
+            {{ state.cancelText }}
+          </button>
           <button
             ref="confirmBtn"
             class="cbx-btn confirm__ok"

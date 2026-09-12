@@ -40,10 +40,7 @@ function onChange() {
 }
 
 async function removeNpc(id: string) {
-  if (
-    !(await confirmDialog({ text: '删除这个 NPC？它的对话历史会保留在会话列表里。' }))
-  )
-    return
+  if (!(await confirmDialog({ text: '删除这个 NPC？它的对话历史会保留在会话列表里。' }))) return
   rpg.removeNpc(id)
   emit('changed')
 }

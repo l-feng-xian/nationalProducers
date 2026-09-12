@@ -199,9 +199,7 @@ async function startChat() {
 async function removeGroup() {
   const m = model.value
   if (!m) return
-  if (
-    !(await confirmDialog({ text: `确定删除群聊「${m.name}」？其全部对话也会一并删除。` }))
-  )
+  if (!(await confirmDialog({ text: `确定删除群聊「${m.name}」？其全部对话也会一并删除。` })))
     return
   await groups.remove(m.id)
   toast.success('已删除')

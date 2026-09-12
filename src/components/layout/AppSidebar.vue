@@ -90,7 +90,9 @@ function newChat() {
           @click="router.push(`/chat/${c.id}`)"
         >
           <span class="item__title">{{ c.title }}</span>
-          <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id, c.title)">✕</button>
+          <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id, c.title)">
+            ✕
+          </button>
         </div>
       </template>
     </div>

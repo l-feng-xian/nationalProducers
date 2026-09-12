@@ -147,7 +147,14 @@ async function saveCard() {
 async function clearCard() {
   const id = selectedId.value
   if (!id) return
-  if (!(await confirmDialog({ text: '清除状态卡？下次提炼会从头重建。', confirmText: '清除', danger: false }))) return
+  if (
+    !(await confirmDialog({
+      text: '清除状态卡？下次提炼会从头重建。',
+      confirmText: '清除',
+      danger: false,
+    }))
+  )
+    return
   await chatsRepo.patchMetadata(id, { stateCard: undefined })
   cardText.value = ''
   await refreshSelected()
@@ -158,7 +165,14 @@ async function clearCard() {
 async function clearIndex() {
   const id = selectedId.value
   if (!id) return
-  if (!(await confirmDialog({ text: '清除该会话的向量索引？后续对话会自动重建。', confirmText: '清除', danger: false }))) return
+  if (
+    !(await confirmDialog({
+      text: '清除该会话的向量索引？后续对话会自动重建。',
+      confirmText: '清除',
+      danger: false,
+    }))
+  )
+    return
   await memchunksRepo.clearChat(id)
   // ⚠️ 必须同时抹掉水位线。只删块不删水位线的话，追赶逻辑会认为「已经索引到第 N 条」
   // 而无事可做，于是记忆永远是空的且不报任何错 —— 这个坑在备份导入上踩过一次。
@@ -194,7 +208,14 @@ async function resetTimed() {
 async function clearRelationSnapshot() {
   const id = selectedId.value
   if (!id) return
-  if (!(await confirmDialog({ text: '清除本会话的关系微调？将回落到群组里配置的关系。', confirmText: '清除', danger: false }))) return
+  if (
+    !(await confirmDialog({
+      text: '清除本会话的关系微调？将回落到群组里配置的关系。',
+      confirmText: '清除',
+      danger: false,
+    }))
+  )
+    return
   await chatsRepo.patchMetadata(id, { relationGraph: undefined })
   await refreshSelected()
   toast.success('已回落到群组配置')
@@ -225,9 +246,7 @@ async function clearMessages() {
 async function removeChat() {
   const m = selected.value
   if (!m) return
-  if (
-    !(await confirmDialog({ text: `删除会话「${m.title}」及其全部数据？此操作不可撤销。` }))
-  )
+  if (!(await confirmDialog({ text: `删除会话「${m.title}」及其全部数据？此操作不可撤销。` })))
     return
   await chats.removeChat(m.id)
   selectedId.value = ''

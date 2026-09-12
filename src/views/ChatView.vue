@@ -114,10 +114,7 @@ async function onRemove(id: string) {
   await chats.deleteMessage(id)
 }
 async function onRemoveFrom(id: string) {
-  if (
-    !(await confirmDialog({ text: '删除这条消息以及它之后的全部消息？此操作不可撤销。' }))
-  )
-    return
+  if (!(await confirmDialog({ text: '删除这条消息以及它之后的全部消息？此操作不可撤销。' }))) return
   await chats.deleteFrom(id)
 }
 async function onBranch(id: string) {

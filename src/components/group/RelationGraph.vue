@@ -432,12 +432,7 @@ const ghost = computed(() => {
         <button class="cbx-btn cbx-btn--ghost sm" @click="emit('swap-relation', editing)">
           ⇄ 交换方向
         </button>
-        <button
-          class="cbx-btn cbx-btn--ghost sm pop__del"
-          @click="removeRelation"
-        >
-          删除
-        </button>
+        <button class="cbx-btn cbx-btn--ghost sm pop__del" @click="removeRelation">删除</button>
       </div>
     </div>
   </div>
