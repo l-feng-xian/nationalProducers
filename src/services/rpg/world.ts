@@ -112,6 +112,21 @@ export function hashTile(seed: number, x: number, y: number): number {
   return (h ^ (h >>> 16)) >>> 0
 }
 
+/**
+ * 环面上的最短位移：把 d 折进 [-m/2, m/2)。
+ *
+ * 世界是环面，所以「两点差多少」这件事在本模块里到处都要问一遍：碰撞、
+ * 最近 NPC、村庄距离、渲染时该把地块摆到哪个镜像。此前同一个式子在
+ * world / engine / types 三处各写了一份，改一处漏两处只是时间问题。
+ *
+ * 前提 |d| < 1.5m —— 所有调用方的坐标都已回绕进 [0,m)，自然满足。
+ */
+export function wrapDelta(d: number, m: number): number {
+  if (d > m / 2) return d - m
+  if (d < -m / 2) return d + m
+  return d
+}
+
 /** 村落的区域边长（格）。村子半径 ≤ 8，一个村子最多伸进相邻区域一格 */
 const REGION = 24
 
@@ -133,19 +148,8 @@ export function createWorld(p: WorldParams): World {
   const H = sampler.height
   const seed = p.seed
 
-  /** 环面上的最短位移：|x - cx| 折进 [-W/2, W/2) */
-  const torusDx = (x: number, cx: number): number => {
-    let d = x - cx
-    if (d > W / 2) d -= W
-    if (d < -W / 2) d += W
-    return d
-  }
-  const torusDy = (y: number, cy: number): number => {
-    let d = y - cy
-    if (d > H / 2) d -= H
-    if (d < -H / 2) d += H
-    return d
-  }
+  const torusDx = (x: number, cx: number): number => wrapDelta(x - cx, W)
+  const torusDy = (y: number, cy: number): number => wrapDelta(y - cy, H)
 
   // ── 村落：按区域惰性求值并缓存 ──
 

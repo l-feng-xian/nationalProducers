@@ -9,6 +9,7 @@
  */
 
 import type { World } from './world'
+import { wrapDelta } from './world'
 import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
@@ -137,11 +138,8 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     world.walkableAt(x, y) && !world.blockedAt(x, y)
 
   /** 环面距离（格） */
-  const torusDist = (ax: number, ay: number, bx: number, by: number): number => {
-    const dx = Math.min(Math.abs(ax - bx), W - Math.abs(ax - bx))
-    const dy = Math.min(Math.abs(ay - by), H - Math.abs(ay - by))
-    return Math.hypot(dx, dy)
-  }
+  const torusDist = (ax: number, ay: number, bx: number, by: number): number =>
+    Math.hypot(wrapDelta(ax - bx, W), wrapDelta(ay - by, H))
 
   function findNpcSpot(x: number, y: number): { x: number; y: number } | null {
     const gx = Math.floor(x)
@@ -150,8 +148,8 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       for (let dy = -r; dy <= r; dy++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
-          const tx = ((gx + dx) % W + W) % W
-          const ty = ((gy + dy) % H + H) % H
+          const tx = (((gx + dx) % W) + W) % W
+          const ty = (((gy + dy) % H) + H) % H
           if (!canStand(tx + 0.5, ty + 0.5)) continue
           // 别跟别的 NPC 叠罗汉
           const crowded = npcs.some((n) => {
@@ -226,6 +224,10 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       scene.placeRig(rig, rt.x, rt.y)
     }
   }
+  // ⚠️ 先立锚点再摆人：placeRig 按「离玩家最近的环面镜像」定位，
+  // 而 scene 里的锚点默认在世界中心。start() 走不到（比如启动报错）时，
+  // 首次摆放会永久停在错误的镜像上
+  scene.setPlayer(px, py)
   syncNpcs()
 
   // 窗口/容器尺寸变化要跟着走，否则转屏后画面被拉伸
@@ -317,6 +319,10 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     player.play(dir.active ? 'walk' : 'idle')
     player.update(dt)
 
+    // ⚠️ 必须在 NPC 之前更新渲染锚点：placeRig 要按「离玩家最近的环面镜像」
+    // 摆人，用上一帧的锚点会让接缝附近的 NPC 慢一帧才归位
+    scene.setPlayer(px, py)
+
     // NPC 漫游：锚点半径内走走停停;玩家走近(够得着交谈)就停下转身看你
     for (const n of npcs) {
       const rig = npcRigs.get(n.id)
@@ -326,7 +332,9 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       if (frozen) {
         rt.phase = 'idle'
         rt.t = 1.5 + Math.random() * 2 // 玩家走开后缓一缓再动
-        rig.setFacing(px - rt.x, py - rt.y)
+        // ⚠️ 朝向也要走环面最短位移：接缝对面一格的 NPC，裸差值会是 255，
+        // 它会转身朝**反方向**看一个隔着大半个世界的你
+        rig.setFacing(wrapDelta(px - rt.x, W), wrapDelta(py - rt.y, H))
         rig.play('idle')
       } else if (rt.phase === 'idle') {
         rt.t -= dt
@@ -395,7 +403,6 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     }
     near = nearestNpc(npcs, px, py, world.params.width, world.params.height)
 
-    scene.setPlayer(px, py)
     scene.placeRig(player, px, py)
     scene.render()
     handle.onTick?.(dt)

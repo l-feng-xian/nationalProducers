@@ -14,8 +14,21 @@
  * 3. **岸线泡沫**（createFoamMaterial）：贴陆地的窄条带，alpha 由噪声驱动
  *    不规则地涨落 —— 浪拍岸没有节奏，才是真的浪。
  *
- * 水面与泡沫都是**静态几何**（世界构建时一次生成，永不挪动），片元里的
- * 世界坐标直接可用（positionWorld），不需要 origin 补位。
+ * ## 坐标用哪一个（这里踩过一次，别再退回去）
+ * 水面与泡沫的几何是**建构时的绝对坐标**，而地块会被挪到「离玩家最近的环面
+ * 镜像」（见 scene.ts 的 setPlayer）。于是接缝处两片共享边的水面，一片的
+ * `positionLocal.x` 是 256、另一片是 0 —— 波高按 positionLocal 算的话
+ * `waveY(256) ≠ waveY(0)`，**水面会沿接缝开裂**，最大 ±0.26 世界单位。
+ *
+ * 顶点阶段又**不能**改用 positionWorld：NodeMaterial.setupPosition 里是
+ * `positionLocal.assign(positionNode)`，而 positionWorld 由 positionLocal 推出，
+ * 引用它就成了自引用。要用 `modelPosition` —— 每对象一个 vec3 uniform，取自
+ * matrixWorld 的平移；地块只平移不旋转不缩放，所以它正好就是那次挪动量。
+ *
+ * 片元阶段的 positionWorld 本来就是对的（= modelWorldMatrix × positionLocal，
+ * 自动吃到平移），只需再补一个 noiseOrigin 消掉跨缝那一帧的整体瞬移。
+ *
+ * ⚠️ 水面与泡沫**必须用同一个坐标表达式**，否则泡沫不再骑在浪上。
  *
  * 纯 service：不 import vue/pinia。
  */
@@ -23,6 +36,7 @@
 import {
   Fn,
   float,
+  modelPosition,
   mx_fractal_noise_float,
   mx_noise_float,
   positionLocal,
@@ -34,24 +48,34 @@ import {
   vec4,
 } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
+import type { NoiseOrigin } from './frame.tsl'
+
+/** 顶点阶段的连续坐标：建构时绝对坐标 + 本块的平移 + 噪声原点 */
+function vertexXZ(origin: NoiseOrigin) {
+  return {
+    x: positionLocal.x.add(modelPosition.x).add(origin.x),
+    z: positionLocal.z.add(modelPosition.z).add(origin.y),
+  }
+}
 
 /**
- * 波面位移 —— 世界坐标 + 时间的纯函数。
+ * 波面位移 —— 连续世界坐标 + 时间的纯函数。
  * 正弦两层做大缓浪（±0.04），噪声出碎浪（±0.09），合计 ±0.13。
  */
-function waveY(p: typeof positionLocal) {
-  const swell = sin(p.x.mul(0.5).add(p.z.mul(0.33)).add(time.mul(1.0)))
-    .add(sin(p.x.mul(-0.27).add(p.z.mul(0.55)).sub(time.mul(0.8))))
+function waveY(x: ReturnType<typeof vertexXZ>['x'], z: ReturnType<typeof vertexXZ>['z']) {
+  const swell = sin(x.mul(0.5).add(z.mul(0.33)).add(time.mul(1.0)))
+    .add(sin(x.mul(-0.27).add(z.mul(0.55)).sub(time.mul(0.8))))
     .mul(0.02)
-  const chop = mx_noise_float(vec3(p.x, p.z, time.mul(0.3)).mul(0.45)).mul(0.09)
+  const chop = mx_noise_float(vec3(x, z, time.mul(0.3)).mul(0.45)).mul(0.09)
   return swell.add(chop)
 }
 
 /** 给材质挂上共用的波面顶点位移 */
-function applyWave(material: MeshBasicNodeMaterial): void {
+function applyWave(material: MeshBasicNodeMaterial, origin: NoiseOrigin): void {
+  const p = vertexXZ(origin)
   material.positionNode = vec3(
     positionLocal.x,
-    positionLocal.y.add(waveY(positionLocal)),
+    positionLocal.y.add(waveY(p.x, p.z)),
     positionLocal.z,
   )
 }
@@ -61,6 +85,8 @@ export interface WaterMaterialArgs {
   color: { r: number; g: number; b: number }
   /** 基础不透明度。0.6 左右：能看见海床，又不至于发灰 */
   alpha: number
+  /** 跨接缝那一帧的整体瞬移补偿，见 frame.tsl.ts */
+  origin: NoiseOrigin
 }
 
 export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMaterial {
@@ -68,14 +94,14 @@ export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMater
   material.transparent = true
   // 水面不写深度：不然水下海床的半透明排序会跟地形打起来
   material.depthWrite = false
-  applyWave(material)
+  applyWave(material, args.origin)
 
   const base = vec3(args.color.r, args.color.g, args.color.b)
   const alpha = float(args.alpha)
 
   material.colorNode = Fn(() => {
-    const wx = positionWorld.x
-    const wz = positionWorld.z
+    const wx = positionWorld.x.add(args.origin.x)
+    const wz = positionWorld.z.add(args.origin.y)
     // 骨干：分形噪声以时间为第三维，斑块原地生长消散、形状一直在变
     const n1 = mx_fractal_noise_float(vec3(wx, wz, time.mul(0.45)).mul(0.75), 4)
     // 细碎：高频噪声沿斜向漂移，出小涟漪
@@ -97,15 +123,19 @@ export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMater
  * 岸线泡沫。几何是「贴陆地的窄条带」（见 scene.ts buildChunk），
  * 这里用噪声驱动 alpha 与亮度的涨落 —— 没有节奏的不规则拍岸。
  */
-export function createFoamMaterial(): MeshBasicNodeMaterial {
+export function createFoamMaterial(origin: NoiseOrigin): MeshBasicNodeMaterial {
   const material = new MeshBasicNodeMaterial()
   material.transparent = true
   material.depthWrite = false
-  applyWave(material)
+  applyWave(material, origin)
 
   material.colorNode = Fn(() => {
     const f = mx_noise_float(
-      vec3(positionWorld.x.mul(0.8), positionWorld.z.mul(0.8), time.mul(0.6)),
+      vec3(
+        positionWorld.x.add(origin.x).mul(0.8),
+        positionWorld.z.add(origin.y).mul(0.8),
+        time.mul(0.6),
+      ),
     )
     const pulse = f.mul(0.5).add(0.5)
     const a = pulse.mul(pulse).mul(0.55).add(0.12)

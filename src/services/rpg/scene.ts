@@ -24,7 +24,7 @@
 
 import type * as THREE_NS from 'three'
 import type { World, PropKind } from './world'
-import { hashTile } from './world'
+import { hashTile, wrapDelta } from './world'
 import type { CharacterRig } from './rig'
 import {
   MeshBuilder,
@@ -105,6 +105,21 @@ export interface SceneHandle {
   resize(w: number, h: number): void
   render(): void
   dispose(): void
+  /**
+   * 只读快照 —— 给自动化验收脚本断言「接缝不漏、不重影、游玩期零重建」。
+   * 生产路径一行都不调用。
+   *
+   * ⚠️ ox/oz 刻意从 matrixWorld 读、不从 position 读：这样「改了 position 却
+   * 忘了 updateMatrix」这个静默失败也会被同一条断言抓住。
+   */
+  debugSnapshot(): {
+    originX: number
+    originZ: number
+    viewR: number
+    geometries: number
+    drawCalls: number
+    chunks: ReadonlyArray<{ ox: number; oz: number; cx: number; cz: number; visible: boolean }>
+  }
 }
 
 export interface CreateSceneArgs {
@@ -188,6 +203,10 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   }
   const { createWaterMaterial, createFoamMaterial } = await import('./water.tsl')
   const { createCloudShadowMaterial } = await import('./clouds.tsl')
+  const { createNoiseOrigin } = await import('./frame.tsl')
+  // 水面、泡沫、云影共用一个噪声原点：跨接缝那一帧三者必须同步补偿，
+  // 否则补了的那层和没补的那层在同一帧里对不上，比不补还刺眼
+  const noiseOrigin = createNoiseOrigin()
 
   const canvas = document.createElement('canvas')
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block'
@@ -212,8 +231,12 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
 
   // ── 地形：整张世界一次预生成 ──
   const terrainMat = new THREE.MeshBasicMaterial({ vertexColors: true })
-  const waterMat = createWaterMaterial({ color: TERRAIN.waterDeep, alpha: WATER_ALPHA })
-  const foamMat = createFoamMaterial()
+  const waterMat = createWaterMaterial({
+    color: TERRAIN.waterDeep,
+    alpha: WATER_ALPHA,
+    origin: noiseOrigin,
+  })
+  const foamMat = createFoamMaterial(noiseOrigin)
   // 道具/角色的贴地投影：统一半透明暗色,不写深度
   const shadowMat = new THREE.MeshBasicMaterial({
     color: 0x243038,
@@ -225,8 +248,21 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   const waterGeos: THREE_NS.BufferGeometry[] = []
   const foamGeos: THREE_NS.BufferGeometry[] = []
   const shadowGeos: THREE_NS.BufferGeometry[] = []
-  /** 全部 chunk 层网格及其中心 —— 玩家走动时按距离开关可见性 */
-  const chunkMeshes: Array<{ m: THREE_NS.Mesh; cx: number; cz: number }> = []
+  /**
+   * 一块 chunk 的全部层网格 + 它的中心 + 当前生效的平移量。
+   *
+   * 按 chunk 分组而不是按 mesh 平铺：平移量是**整块共用**的，分组后每帧算 64 次
+   * 而不是 256 次，而且「同一块的四层必须挪到同一个镜像」成了结构上的保证。
+   */
+  interface ChunkEntry {
+    meshes: THREE_NS.Mesh[]
+    cx: number
+    cz: number
+    /** 当前平移量（0 或 ±W/±H）。只在变化时才写矩阵 */
+    ox: number
+    oz: number
+  }
+  const chunks: ChunkEntry[] = []
   /** 泡沫条的顶点色占位 —— 颜色完全由泡沫材质给 */
   const FOAM_COLOR: RGB = { r: 1, g: 1, b: 1 }
 
@@ -327,7 +363,8 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
         }
       }
     }
-    /** 挂一块 chunk 层网格：静态、不自更新矩阵，并登记中心供可见性开关 */
+    const entry: ChunkEntry = { meshes: [], cx: cx0 + cw / 2, cz: cz0 + ch / 2, ox: 0, oz: 0 }
+    /** 挂一块 chunk 层网格：几何固定，位置由 setPlayer 按最近环面镜像改写 */
     const addChunkMesh = (
       g: THREE_NS.BufferGeometry,
       material: THREE_NS.Material,
@@ -335,10 +372,12 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     ): void => {
       const m = new THREE.Mesh(g, material)
       m.renderOrder = order
-      m.matrixAutoUpdate = false // 几何已是世界坐标且永不挪动,冻结矩阵
+      // 矩阵不自更新：位置一年也变不了几次（只在玩家跨越半个世界时），
+      // 每帧 compose 纯属浪费。⚠️ 代价是改了 position 必须自己 updateMatrix()
+      m.matrixAutoUpdate = false
       m.updateMatrix()
       scene.add(m)
-      chunkMeshes.push({ m, cx: cx0 + cw / 2, cz: cz0 + ch / 2 })
+      entry.meshes.push(m)
     }
     if (land.triangles > 0) {
       const g = land.toGeometry(THREE)
@@ -360,6 +399,7 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
       foamGeos.push(g)
       addChunkMesh(g, foamMat, 3)
     }
+    if (entry.meshes.length) chunks.push(entry)
   }
 
   // 每 4 个 chunk 让出一帧，启动遮罩才有机会刷新
@@ -374,7 +414,7 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   // ── 云层阴影：高空覆盖面，最后绘制，压暗下方一切 ──
   // 平面要比世界大一圈：斜视相机下，画面顶部对应的云面位置比地面视野
   // 更「靠相机」约 30/tan(pitch)≈47 格，玩家贴世界边缘时也得盖满
-  const cloudMat = createCloudShadowMaterial()
+  const cloudMat = createCloudShadowMaterial(noiseOrigin)
   const cloudGeo = new THREE.PlaneGeometry(W + 160, H + 160)
   const clouds = new THREE.Mesh(cloudGeo, cloudMat)
   clouds.rotation.x = -Math.PI / 2
@@ -410,28 +450,73 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     scene.remove(rig.object)
   }
 
-  /** 角色直接立在地表顶面上 —— 地形多高人站多高，浅滩则是蹚水 */
+  /**
+   * 角色直接立在地表顶面上 —— 地形多高人站多高，浅滩则是蹚水。
+   *
+   * 传进来的是**逻辑**格坐标；摆到哪里由渲染侧决定 —— 取离玩家最近的那个环面
+   * 镜像，于是「屏幕上的距离」恒等于 nearestNpc 算的环面距离。不这么做的话，
+   * 玩家在 x=254、NPC 在 x=1 时逻辑上贴着脸，渲染却差 253 格：人在屏幕外，
+   * 而「按 E 交谈」的提示照样亮着。
+   */
   function placeRig(rig: CharacterRig, x: number, y: number): void {
-    rig.object.position.set(x, world.heightAt(x, y), y)
+    rig.object.position.set(
+      playerX - wrapDelta(playerX - x, W),
+      world.heightAt(x, y),
+      playerY - wrapDelta(playerY - y, H),
+    )
   }
 
   /**
-   * 可见半径（格）：正交相机在 43px/格 下地面视野约 30×37 格，
-   * 52 格 = 视野 + 一圈余量，保证滚动到屏幕边缘也不露空。
-   * 视锥剔除仍然兜底（半径只是第一道粗筛）。
+   * 可见半径（格）的平方，由视口在 resize 里推导。
+   *
+   * 之前写死 52 是**不够的**：正交相机横向 1:1 落在地面，纵向被俯角拉长
+   * 1/sin(32.4°)≈1.87 倍，1080p 就要 ≈55，4K 要 ≈87 —— 也就是说以前在普通桌面上
+   * 角落的 chunk 已经会闪。给个安全的初值，resize 一到就被改写。
    */
-  const VIEW_R2 = 52 * 52
+  let viewR2 = 64 * 64
 
   function setPlayer(x: number, y: number): void {
-    playerX = x
-    playerY = y
-    // 只渲染可视区域：玩家周围的 chunk 开、其余关。
-    // visible=false 的对象在渲染遍历时被直接跳过,连视锥测试都不做
-    for (const c of chunkMeshes) {
-      const dx = c.cx - (x + 0.5)
-      const dz = c.cz - (y + 0.5)
-      c.m.visible = dx * dx + dz * dz < VIEW_R2
+    // 入参按逻辑坐标回绕 —— 调用方传 256 与传 0 必须完全等价，否则噪声原点会错位
+    const px = ((x % W) + W) % W
+    const py = ((y % H) + H) % H
+
+    // 跨接缝那一帧，「逻辑坐标之差」比玩家真实走的距离整整少一个世界宽。
+    // 把这个差额记进噪声原点，水面与云影就感觉不到这次整体瞬移（见 frame.tsl.ts）
+    const rawX = px - playerX
+    const rawY = py - playerY
+    noiseOrigin.value.x += wrapDelta(rawX, W) - rawX
+    noiseOrigin.value.y += wrapDelta(rawY, H) - rawY
+
+    playerX = px
+    playerY = py
+
+    for (const c of chunks) {
+      // 一次 wrapDelta 同时给出两样东西：剔除用的环面距离，和该块要挪多远
+      const dx = wrapDelta(playerX + 0.5 - c.cx, W)
+      const dz = wrapDelta(playerY + 0.5 - c.cz, H)
+      const ox = playerX + 0.5 - dx - c.cx
+      const oz = playerY + 0.5 - dz - c.cz
+      if (ox !== c.ox || oz !== c.oz) {
+        c.ox = ox
+        c.oz = oz
+        for (const m of c.meshes) {
+          m.position.set(ox, 0, oz)
+          // ⚠️ matrixAutoUpdate=false：改了 position 必须自己 compose。
+          // 漏掉的话 matrix 停在旧值，而 Scene.matrixAutoUpdate 为 true 会强制
+          // 每帧从这个**陈旧的 matrix** 重算 matrixWorld —— 物体静默画在老地方，
+          // 连视锥剔除都拿旧包围球去测，症状是 chunk 莫名其妙闪进闪出
+          m.updateMatrix()
+        }
+      }
+      // 只渲染可视区域：visible=false 的对象在渲染遍历时被直接跳过
+      const visible = dx * dx + dz * dz < viewR2
+      for (const m of c.meshes) m.visible = visible
     }
+
+    // 云影面跟着玩家走 —— 钉在世界中心的话，玩家走到接缝另一侧就盖不住了
+    // （4K 下本来就已经盖不住）。噪声按渲染世界坐标取样，平面滑动不改变采样点，
+    // 云影在画面上依然是不动的
+    clouds.position.set(playerX + 0.5, CLOUD_Y, playerY + 0.5)
     layout()
   }
 
@@ -446,6 +531,12 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     camera.top = halfH
     camera.bottom = -halfH
     camera.updateProjectionMatrix()
+    // 可见半径要罩住相机在地面的取景框（纵向被俯角拉长），再加 chunk 半对角
+    // （判定用的是 chunk 中心）与树高的屏幕外扩。
+    // ⚠️ 上限 (W-CHUNK)/2：越过它，同一块 chunk 的两个镜像就可能同时入画，
+    // 「每块只画离玩家最近的那个镜像」这个前提会塌掉。5K 以内都够不着。
+    const r = Math.hypot(halfW, halfH / Math.sin(pitch)) + CHUNK * 0.71 + 6
+    viewR2 = Math.min(r, (W - CHUNK) / 2) ** 2
   }
 
   layout()
@@ -463,6 +554,24 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     setPlayer,
     resize,
     render: () => renderer.render(scene, camera),
+    debugSnapshot: () => ({
+      originX: noiseOrigin.value.x,
+      originZ: noiseOrigin.value.y,
+      viewR: Math.sqrt(viewR2),
+      geometries: renderer.info.memory.geometries,
+      drawCalls: renderer.info.render.drawCalls,
+      chunks: chunks.map((c) => {
+        const m = c.meshes[0]
+        // 从 matrixWorld 读，见 SceneHandle 上的说明
+        return {
+          ox: m?.matrixWorld.elements[12] ?? 0,
+          oz: m?.matrixWorld.elements[14] ?? 0,
+          cx: c.cx,
+          cz: c.cz,
+          visible: m?.visible === true,
+        }
+      }),
+    }),
     dispose: () => {
       for (const g of solidGeos) g.dispose()
       for (const g of waterGeos) g.dispose()

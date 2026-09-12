@@ -15,8 +15,9 @@
 
 import { Fn, mx_fractal_noise_float, positionWorld, smoothstep, time, vec3, vec4 } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
+import type { NoiseOrigin } from './frame.tsl'
 
-export function createCloudShadowMaterial(): MeshBasicNodeMaterial {
+export function createCloudShadowMaterial(origin: NoiseOrigin): MeshBasicNodeMaterial {
   const material = new MeshBasicNodeMaterial()
   material.transparent = true
   material.depthWrite = false
@@ -27,8 +28,9 @@ export function createCloudShadowMaterial(): MeshBasicNodeMaterial {
   material.colorNode = Fn(() => {
     // 风向（东偏北）推动噪声场；时间作第三维让云形自己缓缓演化。
     // 尺度 0.06 → 云团约 17 格，一屏能同时看见云影与云缝
-    const wx = positionWorld.x.add(time.mul(1.4))
-    const wz = positionWorld.z.add(time.mul(0.85))
+    // origin 消掉玩家跨接缝那一帧的整体瞬移，否则一屏云影会在那一帧全部重掷
+    const wx = positionWorld.x.add(origin.x).add(time.mul(1.4))
+    const wz = positionWorld.z.add(origin.y).add(time.mul(0.85))
     const n = mx_fractal_noise_float(vec3(wx, wz, time.mul(0.1)).mul(0.06), 4)
     // 过半的天空有云：阈值贴着 0 取，宽平滑区间出松软的云边
     const cover = smoothstep(-0.05, 0.4, n)

@@ -65,8 +65,13 @@ onMounted(async () => {
       host: el,
       npcs: w.npcs,
       ...(w.playerX >= 0 ? { start: { x: w.playerX, y: w.playerY } } : {}),
+      // ?webgl=1 强制走 WebGL 后端。这个入参一直都在，只是从没接到视图层 ——
+      // 于是移动端唯一会走的那条回退路径至今**没法验**
+      ...(new URLSearchParams(location.search).get('webgl') === '1' ? { forceWebGL: true } : {}),
     })
     engine.value = eng
+    // 验收脚本要停掉 rAF 自己驱动 setPlayer/render，才能无竞态地断言接缝
+    if (import.meta.env.DEV) (globalThis as Record<string, unknown>)['__rpg'] = eng
     backend.value = eng.scene.backend
     eng.onTick = onTick
     // NPC 漫游跨格时落盘,3 秒节流 —— 不然一群村民能把 IndexedDB 走冒烟
@@ -196,6 +201,7 @@ onBeforeUnmount(() => {
   void rpg.save()
   engine.value?.dispose()
   engine.value = null
+  if (import.meta.env.DEV) delete (globalThis as Record<string, unknown>)['__rpg']
   rpg.reset()
 })
 </script>
