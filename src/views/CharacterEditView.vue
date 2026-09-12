@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -15,6 +15,7 @@ import { useViewTransition } from '@/composables/useViewTransition'
 import { useMorphTarget } from '@/composables/useMorphTarget'
 import { useSettingsStore } from '@/stores/settings'
 import { generateDepth } from '@/services/depth/generate'
+import { attach, detach, move } from '@/services/depth/parallax'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
 import { downloadBlob, safeFileName } from '@/utils/download'
@@ -50,6 +51,65 @@ const TABS = [
   { key: 'examples', label: '对话示例' },
   { key: 'advanced', label: '高级' },
 ] as const
+
+/**
+ * 立绘视差（与列表页同一套实现）。
+ *
+ * 同样的三道闸：只在能 hover 的精确指针设备上、用户没要求减少动效、
+ * 且这张图真的有深度图时才挂 —— 触屏没有 hover，移动端连 three.js 都不会下载。
+ */
+const parallaxAllowed =
+  typeof window !== 'undefined' &&
+  window.matchMedia('(hover: hover) and (pointer: fine)').matches &&
+  !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+let parallaxHost: HTMLElement | null = null
+let hoverRect: DOMRect | null = null
+let liveUrls: string[] = []
+
+async function onAvatarEnter(e: PointerEvent) {
+  const m = model.value
+  if (!parallaxAllowed || !m || !settings.settings.depth.modelId) return
+  // depthBusy 期间深度图正在重算，此刻挂上去用的是旧图，放完还得再摘
+  if (depthBusy.value || !m.avatarBlobId || !m.depthBlobId) return
+  const el = e.currentTarget as HTMLElement
+  hoverRect = el.getBoundingClientRect()
+  parallaxHost = el
+  const [color, depth] = await Promise.all([
+    blobsRepo.get(m.avatarBlobId),
+    blobsRepo.get(m.depthBlobId),
+  ])
+  if (!color || !depth || parallaxHost !== el) return
+  const colorUrl = URL.createObjectURL(color)
+  const depthUrl = URL.createObjectURL(depth)
+  const ok = await attach({ el, colorUrl, depthUrl, aspect: 2 / 3 })
+  if (!ok || parallaxHost !== el) {
+    URL.revokeObjectURL(colorUrl)
+    URL.revokeObjectURL(depthUrl)
+    return
+  }
+  liveUrls = [colorUrl, depthUrl]
+}
+
+function onAvatarMove(e: PointerEvent) {
+  if (!parallaxHost || !hoverRect) return
+  const nx = ((e.clientX - hoverRect.left) / hoverRect.width) * 2 - 1
+  const ny = ((e.clientY - hoverRect.top) / hoverRect.height) * 2 - 1
+  move(nx, ny)
+}
+
+function releaseParallax() {
+  if (!parallaxHost) return
+  detach()
+  parallaxHost = null
+  hoverRect = null
+  for (const u of liveUrls) URL.revokeObjectURL(u)
+  liveUrls = []
+}
+
+// 离开本页时 canvas 是全局单例、会被下一个宿主接着用，但 objectURL 是本页造的，
+// 不收回就是纯泄漏
+onBeforeUnmount(releaseParallax)
 
 const title = computed(() => model.value?.data.name || '编辑角色')
 const greetingCount = computed(() => {
@@ -220,6 +280,9 @@ let leaving = false
  * 真正的新状态快照发生在 vt.run 内部 update + nextTick 之后，那时绑定早已生效。
  */
 async function back() {
+  // 与列表页点进来时同理：画框里此刻盖着视差 canvas，不摘掉的话 VT 拍到的
+  // 「旧」端是 canvas、列表页那端是 <img>，两端对不上，morph 会变成怪异形变
+  releaseParallax()
   const id = model.value?.id
   const go = () => router.push('/characters')
   if (leaving) return
@@ -283,14 +346,24 @@ async function remove() {
       <section v-show="tab === 'basic'" class="pane">
         <div class="head">
           <div class="avatar-col">
-            <!-- 与列表页卡片图共享同一个 view-transition-name，构成共享元素过渡。
+            <!-- 画框：与列表页的 .card__frame 同构（2:3 + 同圆角 + overflow:hidden），
+                 视差 canvas 挂进它内部（absolute inset:0）。
+                 view-transition-name 也挂在画框上，两端配对的才是同一个几何盒子。
                  这一侧是常驻的：本页同一时刻只可能有一个头像，不存在撞名。 -->
-            <CbxAvatar
-              :blob-id="model.avatarBlobId"
-              :name="model.data.name"
-              card
+            <div
+              class="frame"
               :style="{ viewTransitionName: MORPH_VT_NAME }"
-            />
+              @pointerenter="onAvatarEnter"
+              @pointermove="onAvatarMove"
+              @pointerleave="releaseParallax"
+            >
+              <CbxAvatar
+                class="frame__img"
+                :blob-id="model.avatarBlobId"
+                :name="model.data.name"
+                card
+              />
+            </div>
             <button
               class="cbx-btn cbx-btn--ghost full"
               :disabled="depthBusy"
@@ -495,6 +568,25 @@ async function remove() {
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-2);
+}
+/* 与列表页 .card__frame 同构：几何稳定、负责裁切，视差 canvas 挂进它内部
+   （absolute inset:0）。⚠️ 画框自身不能有 transform —— 它是 VT 的配对元素，
+   几何必须和列表页那端一致 */
+.frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--cbx-radius-md);
+  aspect-ratio: 2 / 3;
+}
+.frame__img {
+  width: 100%;
+  height: 100%;
+  /* 画框已经负责圆角与裁切，图片再来一次只会在边缘露出锯齿 */
+  border-radius: 0;
+}
+/* 同列表页：display:block 只给 <img>，不能压到没有立绘时那个 grid 居中的占位块 */
+img.frame__img {
+  display: block;
 }
 .full {
   width: 100%;

@@ -378,6 +378,12 @@ a:hover {
   color: var(--cbx-text-secondary);
   user-select: none;
 }
+/* 卡面占位：默认 16px 的首字摆在 2:3 的大卡里像个误触。
+   卡宽实际在 180~260px 之间浮动（grid 是 auto-fill minmax(180px,1fr)），
+   48px 在整个区间都不显突兀，所以直接给定值，不值得为它开一个 token。 */
+.cbx-avatar--card.cbx-avatar__fallback {
+  font-size: 48px;
+}
 
 /* —— 消息气泡 —— */
 .cbx-bubble {

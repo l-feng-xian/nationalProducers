@@ -285,11 +285,18 @@ async function onImport(e: Event) {
   /* 画框自身不能有 transform —— 它是 VT 的配对元素，几何必须和编辑页那端一致 */
 }
 .card__img {
-  display: block;
   width: 100%;
   height: 100%;
   /* 画框已经负责圆角与裁切，图片再来一次只会在边缘露出锯齿 */
   border-radius: 0;
+}
+/* `display:block` 只对 <img> 有意义（消掉行内元素底部那几 px 基线缝）。
+   ⚠️ 不能写成不限定标签的 `.card__img{display:block}`：没有立绘时 CbxAvatar
+   渲染的是 div 占位块，base.css 靠 `display:grid + place-items:center` 让那个
+   首字居中，而 scoped 选择器自带 [data-v-*]、(0,2,0) 压得过 base.css 的
+   (0,1,0)，于是 grid 被压成 block、字直接贴到左上角。 */
+img.card__img {
+  display: block;
 }
 .card__name {
   font-weight: var(--cbx-fw-medium);
