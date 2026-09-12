@@ -32,7 +32,8 @@ const wi = computed(() => built.value?.debug.worldInfo)
 /** source → 中文标签 */
 const LABEL: Record<string, string> = {
   main: '主提示词',
-  charSystem: '角色主提示词覆盖',
+  // 与 main 互斥：两者只会出现一个，出现哪个就说明本轮是谁占了主提示词槽
+  charSystem: '主提示词（角色卡覆盖）',
   worldInfoBefore: '世界书 ↑卡片',
   charDescription: '角色简介',
   charPersonality: '角色性格',

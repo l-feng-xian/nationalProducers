@@ -2,20 +2,20 @@
  * 提示词组装。输出可直接发给 OpenAI 兼容接口的 messages 数组。
  *
  * 最终顺序（自上而下）：
- *   1  main（全局系统提示词）
- *   2  charSystem（角色卡 system_prompt 覆盖）
- *   3  worldInfoBefore        ← 世界书 position 0
- *   4  charDescription
- *   5  charPersonality
- *   6  scenario
- *   7  worldInfoAfter         ← 世界书 position 1
- *   8  personaDescription
- *   9  [1vN] 其余成员简介块
- *   10 对话示例（EMTop → 卡片 → EMBottom）
- *   11 [开始新的对话] 标记
- *   12 聊天历史（深度注入已 splice 其中）
- *   13 [1vN] group nudge
- *   14 postHistoryInstructions（PHI / 越狱）
+ *   1  主提示词槽：全局 mainPrompt；角色卡 system_prompt 非空时**整块替换**它
+ *        （卡里的 {{original}} 展开成被替换掉的那段全局主提示词）
+ *   2  worldInfoBefore        ← 世界书 position 0
+ *   3  charDescription
+ *   4  charPersonality
+ *   5  scenario
+ *   6  worldInfoAfter         ← 世界书 position 1
+ *   7  personaDescription
+ *   8  [1vN] 其余成员简介块
+ *   9  对话示例（EMTop → 卡片 → EMBottom）
+ *   10 [开始新的对话] 标记
+ *   11 聊天历史（深度注入已 splice 其中）
+ *   12 [1vN] group nudge
+ *   13 postHistoryInstructions（PHI / 越狱）
  */
 
 import { estimateTokens, type TokenCounter } from '../tokens'
@@ -63,9 +63,13 @@ import type { GenerationTrigger } from '@/types/worldinfo'
  * 世界书的标签是**有条件**的，见 `sectionLabels()`。
  *
  * main 不加：它是最顶层的指令，本身就是「开场白」，没有需要与之区分的前文。
+ * charSystem 同理，且理由更硬 —— 角色卡的 system_prompt 是**替换**主提示词而不是
+ * 追加，它一出现就坐在同一个最顶层位置，前面同样什么都没有。何况作者写了
+ * {{original}} 时，那一整块是他自己编排的成品（自定义前言 + 嵌回来的全局提示词
+ * + 补充要求），在头上扣一个【角色专属指令】等于把嵌进去的全局提示词也误标成
+ * 「角色专属」，语义正好反了。
  */
 const SECTION_LABEL: Record<string, string> = {
-  charSystem: '【角色专属指令】',
   charDescription: '【角色设定】',
   charPersonality: '【性格】',
   scenario: '【场景】',
@@ -296,7 +300,8 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     ),
     mesExample: joined ? joined.mesExample : base(c.data.mes_example),
     persona: base(persona.description),
-    systemPrompt: base(c.data.system_prompt),
+    // system_prompt 刻意**不在这里**求值：它要吃 {{original}}，而那个值是
+    // 「已展开的全局主提示词」，要到下面组装主提示词槽时才算得出来。见 `mainText`。
     postHistory: base(c.data.post_history_instructions),
     depthPrompt: base(c.data.extensions.depth_prompt?.prompt ?? ''),
   }
@@ -393,9 +398,40 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
 
   const fmtWI = (t: string) => (t && s.prompt.wiFormat ? s.prompt.wiFormat.replace('{0}', t) : t)
 
+  // ── 主提示词槽：角色卡 system_prompt **整块替换**全局主提示词（对齐 ST） ──
+  //
+  // 顺序是硬约束：{{original}} 要展开成**已求值**的全局主提示词，所以必须先算
+  // mainText，再拿它去求值卡片的覆盖文本。这也是 system_prompt 没跟其它卡片
+  // 字段一起留在上面那个 card 字面量里的原因。
+  // 放在这里还顺带让两段都能用 {{outlet::x}} —— outlet 桶是世界书扫描之后
+  // 才回填进 env 的。
+  const mainText = sub(s.prompt.mainPrompt)
+  const overrideRaw = c.data.system_prompt
+  const overrideText = overrideRaw.trim()
+    ? baseChatReplace(overrideRaw, {
+        ...env,
+        contentHash: fnv1a(overrideRaw),
+        original: mainText,
+        // ⚠️ originalUsed 必须**现场新建**，绝不能用 env 里那个。
+        // 它是个 { value } 对象，而每一次 `{...env}`（base/sub/baseChatReplace/
+        // pickGreeting 全都在展开）都按引用把同一把闸门带走。复用的话，角色简介里
+        // 随手一个 {{original}}（那时 env.original 还是 undefined，只吐空串）
+        // 就会先把闸门关上，轮到这里只剩空串 —— 主提示词凭空消失，不报错、不留痕。
+        // 反向也一样：这里不碰共享闸门，别处 {{original}} 的行为一个字都不变。
+        //
+        // contentHash 对**原文**取：{{pick}} 的稳定性靠它，换成展开后的文本会让
+        // 同一张卡在全局主提示词改动时抽到不同分支。
+        originalUsed: { value: false },
+      })
+    : ''
+
+  // 覆盖文本展开后为空（只写了 {{original}} 而全局也是空的、或整段只有
+  // {{setvar}}）→ 当作**没覆盖**，回落全局。让一段渲染成空的文本把全局提示词
+  // 也一起吃掉的话，用户永远查不出自己为什么突然没了系统提示词。
+  const systemSlot = overrideText.trim() ? S(overrideText, 'charSystem') : S(mainText, 'main')
+
   const mandatory: PromptMessage[] = [
-    ...S(sub(s.prompt.mainPrompt), 'main'),
-    ...S(card.systemPrompt, 'charSystem'),
+    ...systemSlot,
     ...S(fmtWI(wi.worldInfoBefore), 'worldInfoBefore'),
     ...S(card.description, 'charDescription'),
     ...S(card.personality, 'charPersonality'),

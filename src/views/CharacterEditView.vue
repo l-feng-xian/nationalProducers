@@ -32,6 +32,7 @@ const toast = useToast()
 
 /** 模板里要显示字面的宏，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const CHAR_MACRO = '{{char}}'
+const ORIGINAL_MACRO = '{{original}}'
 
 const settings = useSettingsStore()
 const depthBusy = ref(false)
@@ -446,6 +447,10 @@ async function remove() {
         <label class="cbx-field">
           <span class="cbx-field__label">角色专属主提示词（覆盖全局）</span>
           <textarea v-model="model.data.system_prompt" class="cbx-textarea" rows="3" />
+          <span class="cbx-field__hint">
+            留空 = 用设置里的全局主提示词。填了就<b>整块顶掉</b>它；想把全局那段接回来， 在这里写
+            {{ ORIGINAL_MACRO }}（只认第一个）。
+          </span>
         </label>
 
         <label class="cbx-field">
