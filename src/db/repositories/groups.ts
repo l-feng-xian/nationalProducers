@@ -12,6 +12,13 @@ import { emptyGroup, type Group, type GroupRelation, type GroupNodeLayout } from
  */
 function normalize(g: Group): Group {
   if (!g.persona) g.persona = { name: '', description: '' }
+  // persona 之外的这四个同样是裸取的：members/disabled_members/relations 在群聊页、
+  // 提示词组装、关系图谱里一共被解引用近十处，layout 还会被 `delete layout[id]`。
+  // 导入的备份可能缺任意一个（applyBackup 是零校验原样回写）
+  if (!Array.isArray(g.members)) g.members = []
+  if (!Array.isArray(g.disabled_members)) g.disabled_members = []
+  if (!Array.isArray(g.relations)) g.relations = []
+  if (!g.layout || typeof g.layout !== 'object') g.layout = {}
   return g
 }
 

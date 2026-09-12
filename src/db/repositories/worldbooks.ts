@@ -107,12 +107,21 @@ export async function remove(id: string): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(['worldbooks', 'settings', 'characters', 'chats'], 'readwrite')
 
-  await tx.objectStore('worldbooks').delete(id)
-
+  /**
+   * ⚠️ 三段级联都是**裸读别的 store**，拿到的行没经过那个仓储的 normalize
+   * （normalize 在读路径上，事务里够不着），所以每个跨库字段都要自己防一手。
+   *
+   * 另外**先清引用、最后才删书**。原先是反过来的，而 JS 抛错并不会把已经
+   * 自动提交的删除撤回来：实测拿一个 `chat_metadata` 缺失的会话触发，
+   * 书**已经没了**，引用却一处都没清 —— 设置里留着一个指向空书的 id，
+   * 角色卡上挂着一本不存在的世界书，而调用方收到的是一句异常、
+   * 既不 toast 成功也不刷新列表。删除放最后，抛了就整件事都没发生。
+   */
   const sStore = tx.objectStore('settings')
   const s = await sStore.get('app')
-  if (s && s.worldInfo.globalBookIds.includes(id)) {
-    s.worldInfo.globalBookIds = s.worldInfo.globalBookIds.filter((x) => x !== id)
+  const globalIds = s?.worldInfo?.globalBookIds
+  if (s && Array.isArray(globalIds) && globalIds.includes(id)) {
+    s.worldInfo.globalBookIds = globalIds.filter((x) => x !== id)
     s.updatedAt = Date.now()
     await sStore.put(toPlain(s))
   }
@@ -120,7 +129,7 @@ export async function remove(id: string): Promise<void> {
   const cStore = tx.objectStore('characters')
   const chars = await cStore.getAll()
   for (const c of chars) {
-    if (!c.worldBookIds.includes(id)) continue
+    if (!Array.isArray(c.worldBookIds) || !c.worldBookIds.includes(id)) continue
     c.worldBookIds = c.worldBookIds.filter((x) => x !== id)
     c.updatedAt = Date.now()
     await cStore.put(toPlain(c))
@@ -129,11 +138,12 @@ export async function remove(id: string): Promise<void> {
   const chStore = tx.objectStore('chats')
   const chats = await chStore.getAll()
   for (const ch of chats) {
-    if (ch.chat_metadata.worldBookId !== id) continue
+    if (ch.chat_metadata?.worldBookId !== id) continue
     delete ch.chat_metadata.worldBookId
     ch.updatedAt = Date.now()
     await chStore.put(toPlain(ch))
   }
 
+  await tx.objectStore('worldbooks').delete(id)
   await tx.done
 }
