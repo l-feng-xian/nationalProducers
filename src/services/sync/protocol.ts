@@ -70,7 +70,7 @@ export function emptyCounts(): SyncCounts {
 }
 
 /** 「角色 4 · 世界书 2 · 会话 1 · 消息 17」，确认页与结果提示共用 */
-export function describeCounts(c: SyncCounts): string {
+export function describeCounts(c: SyncCounts & { skipped?: number }): string {
   const parts: string[] = []
   if (c.characters) parts.push(`角色 ${c.characters}`)
   if (c.worldbooks) parts.push(`世界书 ${c.worldbooks}`)
@@ -79,5 +79,9 @@ export function describeCounts(c: SyncCounts): string {
   if (c.messages) parts.push(`消息 ${c.messages}`)
   if (c.blobs) parts.push(`图片 ${c.blobs}`)
   if (c.rpgworlds) parts.push(`世界 ${c.rpgworlds}`)
-  return parts.join(' · ') || '空'
+  const s = parts.join(' · ') || '空'
+  // ⚠️ 跳过数必须跟着一起显示。同步完只报「收到 N 条」而不提「另有 M 条没进来」，
+  // 用户是在几天后翻不到某段对话时才发现的 —— 那时早已无从查起。
+  // 这个字段是后加的：老版本对端发来的 done 里没有它，所以按可选处理
+  return c.skipped ? `${s}（另有 ${c.skipped} 行格式不对被跳过）` : s
 }

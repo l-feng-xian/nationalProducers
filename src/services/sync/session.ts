@@ -400,7 +400,13 @@ export class SyncSession {
         if (!rx) throw new Error('没有正在进行的接收')
         const raw = await inflateRaw(concat(rx.chunks))
         const file: unknown = JSON.parse(fromUtf8(raw))
-        const result = await applyBackup(file as Parameters<typeof applyBackup>[0])
+        // ⚠️ 必须把 manifest 里那份 scope 传下去。用户在确认页上点「接收」，同意的是
+        // **manifest 声明的范围**；不兜这一道的话，声明不含 settings 却在包里塞一份，
+        // 照样会把本机的接口地址、模型、人设整包盖掉
+        const result = await applyBackup(
+          file as Parameters<typeof applyBackup>[0],
+          rx.manifest.scope,
+        )
         this.#hooks.onApplied?.(result)
         this.#send({ t: 'done', result })
         return

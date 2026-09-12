@@ -143,6 +143,66 @@ export interface ImportResult {
   messages: number
   blobs: number
   rpgworlds: number
+  /**
+   * 写不进去、被跳过的行数。
+   *
+   * 备份是**零校验原样回写**的（这是有意的：校验在各仓储的读路径 normalize 里）。
+   * 但「不校验」不等于「什么都写得进去」——IndexedDB 自己有一道硬门槛：
+   * 取不出主键的行会直接抛 DataError。缺 id 的世界、缺 seq 的消息（复合主键
+   * `[chatId, seq]`）都属于这一类。
+   *
+   * ⚠️ 以前这里没有 try/catch：**第一行坏数据就会掀掉整次导入**，而前面已经写进去的
+   * 行不会回滚，用户看到的是一句原始的 `Failed to execute 'put' on 'IDBObjectStore'`，
+   * 既不知道进了多少、也不知道是谁坏了。现在改成逐行隔离、继续往下走、最后报总数：
+   * 宁可少进几行并说清楚，也不要半途炸掉还不吭声。
+   */
+  skipped: number
+  /** 跳过的行都出在哪些 store，给 UI 说人话用 */
+  skippedBy: Partial<Record<BackupStore, number>>
+}
+
+type BackupStore =
+  | 'characters'
+  | 'worldbooks'
+  | 'groups'
+  | 'chats'
+  | 'messages'
+  | 'rpgworlds'
+  | 'blobs'
+  | 'settings'
+
+/** 列表读的是 by_updatedAt 索引的那几个 store */
+const INDEXED_BY_UPDATED_AT: ReadonlySet<string> = new Set([
+  'characters',
+  'worldbooks',
+  'groups',
+  'chats',
+  'rpgworlds',
+])
+
+/**
+ * 索引键兜底：`updatedAt` 不是合法键时补一个。
+ *
+ * ⚠️ 这是全仓**唯一一处必须写在导入侧**的校验，不能留给读路径的 normalize ——
+ * 因为读路径**结构上够不着它**：
+ *
+ * IndexedDB 对索引键的处理是「不是合法键就把这行从索引里略过」，而**行本身正常存下**，
+ * 不报错。于是 `updatedAt` 缺失 / 为 null / 为布尔 / 为 NaN 的一行会安静地进库。
+ * 而 characters / worldbooks / groups / chats / rpgworlds 的 list() 全都走
+ * `getAllFromIndex('by_updatedAt')`，`.map(normalize)` 映的是那个查询的**结果** ——
+ * 被索引丢掉的行根本不在数组里，normalize 永远没机会跑。
+ *
+ * 结果就是一行「在库里占着配额、在任何界面上都不存在、也没法删」的幽灵数据：
+ * 导入还会把它算进成功计数，用户看到「导入完成：角色 1」然后角色列表是空的。
+ *
+ * 补的是导入时刻 —— 它是个诚实的「最后一次被动过」，顺带让这行排在列表最前面，
+ * 用户一眼就能看见刚进来的东西。
+ */
+function fixIndexKey(store: string, row: unknown): unknown {
+  if (!INDEXED_BY_UPDATED_AT.has(store) || !row || typeof row !== 'object') return row
+  const u = (row as { updatedAt?: unknown }).updatedAt
+  if (typeof u === 'number' && Number.isFinite(u)) return row
+  return { ...(row as object), updatedAt: Date.now() }
 }
 
 /** 合并导入：同 id 覆盖，不清空现有数据 */
@@ -159,8 +219,23 @@ export async function importAll(text: string): Promise<ImportResult> {
  *
  * 与 importAll 的区别只在于**不做 format 校验**：扫码同步的数据是从对端
  * 直接构造出来的对象，不经过文件，校验在握手阶段就做过了。
+ *
+ * @param scope 只允许写这些类别。**接收方必须传**自己确认过的那份 scope ——
+ *   见下方说明。不传表示全收（文件导入就是这种：文件是用户自己选的）。
  */
-export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResult> {
+export async function applyBackup(
+  file: Partial<BackupFile>,
+  scope?: Partial<SyncScope>,
+): Promise<ImportResult> {
+  /**
+   * ⚠️ 范围必须在**接收侧**兜住，不能只信发送侧。
+   *
+   * 同步握手里，接收方看到的是对端 manifest 声明的 scope，并据此点「接收」——
+   * 但此前 eof 分支是把收到的整包原样 applyBackup 的。声明 `settings: false`
+   * 却在包里塞一份 settings，照样会把接收方的接口地址、模型、人设整包盖掉，
+   * 而用户以为自己拒绝了这一项。**用户同意的是 manifest，落地的必须也是它。**
+   */
+  const allow: SyncScope = scope ? { ...FULL_SCOPE, ...scope } : FULL_SCOPE
   const db = await getDb()
   const out: ImportResult = {
     characters: 0,
@@ -170,19 +245,42 @@ export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResu
     messages: 0,
     blobs: 0,
     rpgworlds: 0,
+    skipped: 0,
+    skippedBy: {},
   }
 
-  // Blob 先还原，角色记录才有头像可指
-  for (const b of file.blobs ?? []) {
-    const data = await dataUrlToBlob(b.dataUrl)
-    await db.put('blobs', {
-      id: b.id,
-      mime: b.mime,
-      size: data.size,
-      data,
-      createdAt: Date.now(),
-    })
-    out.blobs++
+  /**
+   * 记一行跳过。
+   *
+   * 只对每个 store 的头 3 行打 console —— 一份被截断的备份可能有上千行坏数据，
+   * 全打出来只会把控制台刷爆，反而看不见别的。总数在返回值里，UI 会显示。
+   */
+  const skip = (store: BackupStore, err: unknown) => {
+    out.skipped++
+    const n = (out.skippedBy[store] ?? 0) + 1
+    out.skippedBy[store] = n
+    if (n <= 3) console.warn(`[导入] 跳过一行 ${store}：`, err)
+  }
+
+  // Blob 先还原，角色记录才有头像可指。
+  // 它不是独立的一类，而是依附于角色/群/人设的 —— 三者都不在范围内就没人指向它了
+  const wantBlobs = allow.characters || allow.groups || allow.settings
+  for (const b of wantBlobs ? (file.blobs ?? []) : []) {
+    try {
+      // ⚠️ dataUrlToBlob 走的是 fetch()，一个被手改坏的 data URL 会直接 reject。
+      // 不接住的话，一张坏头像就能让整次导入前功尽弃
+      const data = await dataUrlToBlob(b.dataUrl)
+      await db.put('blobs', {
+        id: b.id,
+        mime: b.mime,
+        size: data.size,
+        data,
+        createdAt: Date.now(),
+      })
+      out.blobs++
+    } catch (e) {
+      skip('blobs', e)
+    }
   }
 
   const bulk = async (
@@ -190,19 +288,32 @@ export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResu
     rows: unknown[],
   ) => {
     for (const r of rows) {
-      // 各 store 的 value 类型不同，这里是按备份文件原样回写，用 never 绕过联合类型收窄
-      await db.put(store, toPlain(r) as never)
-      out[store]++
+      try {
+        // 各 store 的 value 类型不同，这里是按备份文件原样回写，用 never 绕过联合类型收窄。
+        // 语义校验一律交给各仓储读路径的 normalize，这里只负责两件读路径够不着的事：
+        // 「写不进去的别连累别人」，以及下面这条索引键兜底
+        await db.put(store, fixIndexKey(store, toPlain(r)) as never)
+        out[store]++
+      } catch (e) {
+        skip(store, e)
+      }
     }
   }
-  await bulk('characters', file.characters ?? [])
-  await bulk('worldbooks', file.worldbooks ?? [])
-  await bulk('groups', file.groups ?? [])
-  await bulk('chats', (file.chats ?? []).map(stripMemIndex))
-  await bulk('messages', file.messages ?? [])
-  await bulk('rpgworlds', file.rpgworlds ?? [])
+  await bulk('characters', allow.characters ? (file.characters ?? []) : [])
+  await bulk('worldbooks', allow.worldbooks ? (file.worldbooks ?? []) : [])
+  await bulk('groups', allow.groups ? (file.groups ?? []) : [])
+  // messages 跟着 chats 走：光有消息没有会话是一堆挂不上的孤儿（见 SyncScope 的说明）
+  await bulk('chats', allow.chats ? (file.chats ?? []).map(stripMemIndex) : [])
+  await bulk('messages', allow.chats ? (file.messages ?? []) : [])
+  await bulk('rpgworlds', allow.rpgworlds ? (file.rpgworlds ?? []) : [])
 
-  if (file.settings) await db.put('settings', toPlain(file.settings) as never)
+  if (allow.settings && file.settings) {
+    try {
+      await db.put('settings', toPlain(file.settings) as never)
+    } catch (e) {
+      skip('settings', e)
+    }
+  }
   return out
 }
 
