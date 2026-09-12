@@ -54,6 +54,18 @@ export const useRpgStore = defineStore('rpg', () => {
     return w
   }
 
+  /**
+   * 用向导攒好的草稿直接建世界。
+   *
+   * 不复用 create()：那个只收一个名字，而向导要把种子、尺寸、生成参数、玩家身份
+   * 一次性定下来。仓储的 save() 本来就会 toPlain + 打 updatedAt，不必再加一个方法。
+   */
+  async function createFrom(draft: RpgWorld): Promise<RpgWorld> {
+    await rpgWorldsRepo.save(draft)
+    list.value = [draft, ...list.value]
+    return draft
+  }
+
   async function open(id: string): Promise<RpgWorld | null> {
     const w = await rpgWorldsRepo.get(id)
     current.value = w ?? null
@@ -131,6 +143,7 @@ export const useRpgStore = defineStore('rpg', () => {
     dialogueError,
     load,
     create,
+    createFrom,
     open,
     save,
     remove,

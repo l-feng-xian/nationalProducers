@@ -5,7 +5,7 @@
  * 每个世界只是「一个种子 + 一份 NPC 名单 + 玩家身份」，所以新建很轻 ——
  * 地形不占存储，同一个种子必然长出同一个世界。
  */
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import { useRpgStore } from '@/stores/rpg'
@@ -17,21 +17,14 @@ defineOptions({ name: 'RpgView' })
 const rpg = useRpgStore()
 const router = useRouter()
 const toast = useToast()
-const busy = ref(false)
 
 onMounted(() => {
   if (!rpg.loaded) void rpg.load()
 })
 
-async function create() {
-  if (busy.value) return
-  busy.value = true
-  try {
-    const w = await rpg.create()
-    await router.push(`/rpg/${w.id}`)
-  } finally {
-    busy.value = false
-  }
+function create() {
+  // 先配置再生成：种子与地貌在向导里定，定完才建世界
+  void router.push('/rpg/new')
 }
 
 async function remove(id: string, name: string) {
@@ -54,9 +47,7 @@ function fmt(ts: number) {
   <div class="page">
     <AppTopbar title="世界">
       <template #actions>
-        <button class="cbx-btn cbx-btn--primary" :disabled="busy" @click="create">
-          ＋ 新建世界
-        </button>
+        <button class="cbx-btn cbx-btn--primary" @click="create">＋ 新建世界</button>
       </template>
     </AppTopbar>
 

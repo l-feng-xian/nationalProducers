@@ -15,18 +15,13 @@
  */
 
 import type * as THREE_NS from 'three'
+// 配色拆去了 palette.ts —— 创建向导的缩略预览也要用同一套颜色，
+// 但不该为四个颜色把这 26 KB 的几何构建器拖进那个路由。这里原样 re-export，
+// 既有 import 一个都不用改
+import { TERRAIN, rgb, type RGB } from './palette'
 
-/** 颜色，分量 0..1 */
-export interface RGB {
-  r: number
-  g: number
-  b: number
-}
-
-export function rgb(hex: string): RGB {
-  const n = parseInt(hex.slice(1), 16)
-  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 }
-}
+export { TERRAIN, rgb }
+export type { RGB }
 
 // ── 太阳方向（指向光源）。相机带 45° 偏航，可见立面是 +X 与 +Z：
 // 把光源偏向 +X，两个可见面一亮一暗，菱形视角的立体感主要靠这一档差 ──
@@ -393,35 +388,6 @@ export class MeshBuilder {
 // ── 调色板：参考图那套低饱和「温馨农场」色 ──
 
 /** 草地顶色按台阶等级渐变：山上更亮更黄，梯田的层次感就出来了 */
-const GRASS_LEVEL_HEX = [
-  '#7eb468',
-  '#86bb70',
-  '#8ec279',
-  '#96c981',
-  '#9ed08a',
-  '#a6d793',
-  '#aede9b',
-  '#b6e5a4',
-  '#beecad',
-]
-
-export const TERRAIN = {
-  grassLevels: GRASS_LEVEL_HEX.map(rgb),
-  /** 地块侧面（土崖） */
-  dirt: rgb('#c8a06e'),
-  /** 水下海床（隔着水面看） */
-  waterBed: rgb('#b3a878'),
-  /** 浅滩海床 */
-  shallowBed: rgb('#d0c493'),
-  sand: rgb('#e6d7a8'),
-  /** 村道 */
-  path: rgb('#d9c39a'),
-  /** 深水水面 */
-  waterDeep: rgb('#9fd4cf'),
-  /** 浅滩水面 */
-  waterShallow: rgb('#b8e4dd'),
-}
-
 const WOOD = rgb('#8a5a33')
 const WOOD_LIGHT = rgb('#a97e4f')
 /** 树干用浅木色方柱 —— 参考图的特征：短粗、奶黄 */
