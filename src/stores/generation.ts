@@ -233,7 +233,8 @@ export const useGenerationStore = defineStore('generation', () => {
     const card = b.characterId ? chars.byId(b.characterId) : undefined
     return {
       persona: b.persona,
-      scenarioPrefix: b.worldDescription ?? '',
+      // 世界简介说「这是哪」,situation 说「此刻在哪、在干什么」—— 两行拼进同一个【场景】
+      scenarioPrefix: [b.worldDescription, b.situation].filter(Boolean).join('\n'),
       speaker: card ?? synthNpcCard(b.npcId, b.npcName ?? '', b.npcDescription ?? '', b.worldName),
     }
   }

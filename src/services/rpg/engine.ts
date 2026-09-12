@@ -12,12 +12,16 @@ import type { World } from './world'
 import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
-import { createPlaceholderRig } from './rig'
-import { createSpineRig, loadSpine, type SpineAssetPaths } from './spineRig'
-import { nearestNpc, type RpgNpc } from '@/types/rpg'
+import { createFigureRig } from './figureRig'
+import { NPC_REACH, nearestNpc, type RpgNpc } from '@/types/rpg'
+import { fnv1a } from '@/services/hash'
 
 /** 移动速度，格/秒 */
 const SPEED = 5.2
+/** NPC 漫游速度。明显慢于玩家 —— 村民散步,不是赶路 */
+const NPC_SPEED = 1.6
+/** NPC 的落点判定半径(格),比玩家略小,贴着树走不至于卡死 */
+const NPC_RADIUS = 0.2
 /**
  * 单帧最大步进。
  *
@@ -28,14 +32,10 @@ const MAX_DT = 0.05
 
 /** 角色的碰撞半径（格）。比 0.5 小，免得贴着岸边就卡住 */
 const RADIUS = 0.28
-/** 玩家立绘高度（格） */
-const PLAYER_H = 1.7
 
 export interface EngineHandle {
   readonly scene: SceneHandle
   readonly input: InputHandle
-  /** 玩家实际用的是哪种渲染，UI 上要能看出来是不是降级了 */
-  readonly playerRigKind: 'spine' | 'placeholder'
   /** 玩家当前格坐标（浮点，已回绕） */
   position(): { x: number; y: number }
   /** 本帧是否在移动，UI 上要显示 */
@@ -44,6 +44,15 @@ export interface EngineHandle {
   nearNpc(): RpgNpc | null
   /** NPC 增删改后重新挂载 */
   setNpcs(npcs: RpgNpc[]): void
+  /**
+   * 从 (x,y) 螺旋找最近一块能站 NPC 的格（陆地、无实体道具、离别的 NPC
+   * 至少 1.5 格）。找不到返回 null。放 NPC 前先问它,别把人放进水里
+   */
+  findNpcSpot(x: number, y: number): { x: number; y: number } | null
+  /** NPC 此刻的处境一句话（在哪、在干什么），拼进对话提示词的【场景】 */
+  npcStateText(id: string): string
+  /** 任一 NPC 跨过格边界时回调（store 侧节流落盘用） */
+  onNpcMoved?: (() => void) | undefined
   start(): void
   stop(): void
   dispose(): void
@@ -57,8 +66,6 @@ export interface CreateEngineArgs {
   /** 初始位置，不给就找一块靠近世界中心的陆地 */
   start?: { x: number; y: number }
   forceWebGL?: boolean
-  /** 玩家的 Spine 资源。不给、或加载失败，都自动退回程序化占位小人 */
-  playerSpine?: SpineAssetPaths
   /** 世界里的 NPC。位置是格坐标 */
   npcs?: RpgNpc[]
 }
@@ -96,39 +103,107 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   let py = spawn.y
   let isMoving = false
 
-  // Spine 优先，失败静默退回占位 —— 角色渲染不起来不该把整个场景带崩
-  let playerRigKind: 'spine' | 'placeholder' = 'placeholder'
-  let player: CharacterRig
-  const spineLoad = args.playerSpine ? await loadSpine(args.playerSpine, scene.THREE) : null
-  if (spineLoad) {
-    player = createSpineRig(spineLoad, {
-      THREE: scene.THREE,
-      pitch: scene.pitch,
-      height: PLAYER_H,
-    })
-    playerRigKind = 'spine'
-  } else {
-    player = createPlaceholderRig({ THREE: scene.THREE, pitch: scene.pitch })
-  }
+  // 玩家固定草帽农夫造型；NPC 按 id 哈希取配色
+  const player: CharacterRig = createFigureRig({ THREE: scene.THREE, player: true })
   scene.addRig(player)
 
   // ── NPC ──
-  // ⚠️ SkeletonData 可以共用，但每个 NPC 必须各建一份 Skeleton 与 AnimationState，
-  // 否则所有 NPC 会同步做一模一样的动作（连呼吸都同频，非常出戏）
+  // 每个 NPC 一份独立 rig（配色由 id 派生）+ 一份漫游运行时状态。
+  // 运行时只留内存（位置写回 npc.x/y 落盘），动画相位在 rig 内部随机
+  interface NpcRt {
+    /** 浮点中心坐标。npc.x/y 是它向下取整的落盘投影 */
+    x: number
+    y: number
+    /** 漫游锚点中心 */
+    hx: number
+    hy: number
+    roam: number
+    phase: 'idle' | 'walk'
+    /** idle 剩余秒数 / walk 的目标点 */
+    t: number
+    tx: number
+    ty: number
+  }
   const npcRigs = new Map<string, CharacterRig>()
+  const npcRt = new Map<string, NpcRt>()
   let npcs: RpgNpc[] = args.npcs ?? []
   let near: RpgNpc | null = null
 
-  function makeNpcRig(): CharacterRig {
-    if (spineLoad) {
-      return createSpineRig(spineLoad, {
-        THREE: scene.THREE,
-        pitch: scene.pitch,
-        height: PLAYER_H,
-      })
+  const W = world.params.width
+  const H = world.params.height
+
+  /** 能站人：陆地且没有实体道具 */
+  const canStand = (x: number, y: number): boolean =>
+    world.walkableAt(x, y) && !world.blockedAt(x, y)
+
+  /** 环面距离（格） */
+  const torusDist = (ax: number, ay: number, bx: number, by: number): number => {
+    const dx = Math.min(Math.abs(ax - bx), W - Math.abs(ax - bx))
+    const dy = Math.min(Math.abs(ay - by), H - Math.abs(ay - by))
+    return Math.hypot(dx, dy)
+  }
+
+  function findNpcSpot(x: number, y: number): { x: number; y: number } | null {
+    const gx = Math.floor(x)
+    const gy = Math.floor(y)
+    for (let r = 0; r <= 12; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+          const tx = ((gx + dx) % W + W) % W
+          const ty = ((gy + dy) % H + H) % H
+          if (!canStand(tx + 0.5, ty + 0.5)) continue
+          // 别跟别的 NPC 叠罗汉
+          const crowded = npcs.some((n) => {
+            const rt = npcRt.get(n.id)
+            return rt ? torusDist(rt.x, rt.y, tx + 0.5, ty + 0.5) < 1.5 : false
+          })
+          if (crowded) continue
+          return { x: tx, y: ty }
+        }
+      }
     }
-    // 占位 NPC 换个色，好和玩家区分开
-    return createPlaceholderRig({ THREE: scene.THREE, pitch: scene.pitch, tint: '#4a7fd9' })
+    return null
+  }
+
+  /** 首次挂载一个 NPC 的运行时：校正非法落点、补默认锚点与漫游半径 */
+  function initRt(n: RpgNpc): NpcRt {
+    let rt = npcRt.get(n.id)
+    if (rt) return rt
+    let fx = n.x + 0.5
+    let fy = n.y + 0.5
+    // 旧版本放的 NPC 可能站在水里/房里 —— 挪到最近可站点
+    if (!canStand(fx, fy)) {
+      const spot = findNpcSpot(fx, fy)
+      if (spot) {
+        fx = spot.x + 0.5
+        fy = spot.y + 0.5
+        n.x = spot.x
+        n.y = spot.y
+      }
+    }
+    if (n.homeX === undefined || n.homeY === undefined) {
+      n.homeX = Math.floor(fx)
+      n.homeY = Math.floor(fy)
+    }
+    if (n.roamR === undefined) n.roamR = 3 + (fnv1a(n.id) % 4)
+    rt = {
+      x: fx,
+      y: fy,
+      hx: n.homeX + 0.5,
+      hy: n.homeY + 0.5,
+      roam: n.roamR,
+      phase: 'idle',
+      t: 1 + Math.random() * 3,
+      tx: fx,
+      ty: fy,
+    }
+    npcRt.set(n.id, rt)
+    return rt
+  }
+
+  function makeNpcRig(npc: RpgNpc): CharacterRig {
+    return createFigureRig({ THREE: scene.THREE, seed: fnv1a(npc.id) })
   }
 
   function syncNpcs(): void {
@@ -138,15 +213,17 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       scene.removeRig(rig)
       rig.dispose()
       npcRigs.delete(id)
+      npcRt.delete(id)
     }
     for (const n of npcs) {
       let rig = npcRigs.get(n.id)
       if (!rig) {
-        rig = makeNpcRig()
+        rig = makeNpcRig(n)
         npcRigs.set(n.id, rig)
         scene.addRig(rig)
       }
-      scene.placeRig(rig, n.x + 0.5, n.y + 0.5)
+      const rt = initRt(n)
+      scene.placeRig(rig, rt.x, rt.y)
     }
   }
   syncNpcs()
@@ -177,13 +254,20 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   const handle: EngineHandle = {
     scene,
     input,
-    playerRigKind,
     position: () => ({ x: px, y: py }),
     moving: () => isMoving,
     nearNpc: () => near,
     setNpcs(list) {
       npcs = list
       syncNpcs()
+    },
+    findNpcSpot,
+    npcStateText(id: string): string {
+      const rt = npcRt.get(id)
+      if (!rt) return ''
+      const area = world.describeArea(rt.x, rt.y)
+      const act = rt.phase === 'walk' ? '正在附近踱步' : '正站在原地歇脚'
+      return `【当前情形】对方此刻在${area},${act},你走上前与它交谈。`
     },
     start() {
       if (running) return
@@ -204,6 +288,7 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         rig.dispose()
       }
       npcRigs.clear()
+      npcRt.clear()
       scene.removeRig(player)
       player.dispose()
       input.dispose()
@@ -220,19 +305,93 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     const dir = input.direction()
     isMoving = dir.active
     if (dir.active) {
-      tryMove(px + dir.x * SPEED * dt, py + dir.y * SPEED * dt)
-      player.setFacing(dir.x, dir.y)
+      // 输入是屏幕方向（W=屏幕上方），相机带着 45° 偏航 —— 旋进世界坐标后
+      // 角色才真正朝屏幕上方走。旋转矩阵与 scene 的 yaw 同源，手感与视角解耦
+      const cy = Math.cos(scene.yaw)
+      const sy = Math.sin(scene.yaw)
+      const wx = dir.x * cy + dir.y * sy
+      const wy = -dir.x * sy + dir.y * cy
+      tryMove(px + wx * SPEED * dt, py + wy * SPEED * dt)
+      player.setFacing(wx, wy)
     }
     player.play(dir.active ? 'walk' : 'idle')
     player.update(dt)
 
-    // NPC 原地待机。朝向玩家，好让「走过去搭话」时它是看着你的
+    // NPC 漫游：锚点半径内走走停停;玩家走近(够得着交谈)就停下转身看你
     for (const n of npcs) {
       const rig = npcRigs.get(n.id)
-      if (!rig) continue
-      rig.setFacing(px - (n.x + 0.5), 0)
-      rig.play('idle')
+      const rt = npcRt.get(n.id)
+      if (!rig || !rt) continue
+      const frozen = torusDist(rt.x, rt.y, px, py) < NPC_REACH
+      if (frozen) {
+        rt.phase = 'idle'
+        rt.t = 1.5 + Math.random() * 2 // 玩家走开后缓一缓再动
+        rig.setFacing(px - rt.x, py - rt.y)
+        rig.play('idle')
+      } else if (rt.phase === 'idle') {
+        rt.t -= dt
+        if (rt.t <= 0) {
+          let picked = false
+          for (let i = 0; i < 6 && !picked; i++) {
+            const a = Math.random() * Math.PI * 2
+            const d = Math.random() * rt.roam
+            const gx = rt.hx + Math.cos(a) * d
+            const gy = rt.hy + Math.sin(a) * d
+            if (canStand(gx, gy)) {
+              rt.tx = gx
+              rt.ty = gy
+              rt.phase = 'walk'
+              picked = true
+            }
+          }
+          if (!picked) rt.t = 1 + Math.random() * 2
+        }
+        rig.play('idle')
+      } else {
+        // 轴分离试探（与玩家同一套手感：贴墙会滑行）;撞墙的分量直接放弃
+        const step = Math.min(NPC_SPEED * dt, 0.2)
+        const mdx = rt.tx - rt.x
+        const mdy = rt.ty - rt.y
+        const mx = Math.abs(mdx) < 0.03 ? 0 : Math.sign(mdx) * Math.min(step, Math.abs(mdx))
+        const my = Math.abs(mdy) < 0.03 ? 0 : Math.sign(mdy) * Math.min(step, Math.abs(mdy))
+        if (mx !== 0) {
+          if (canStand(rt.x + mx + Math.sign(mx) * NPC_RADIUS, rt.y)) rt.x += mx
+          else rt.tx = rt.x
+        }
+        if (my !== 0) {
+          if (canStand(rt.x, rt.y + my + Math.sign(my) * NPC_RADIUS)) rt.y += my
+          else rt.ty = rt.y
+        }
+        if (Math.abs(rt.tx - rt.x) <= 0.05 && Math.abs(rt.ty - rt.y) <= 0.05) {
+          rt.phase = 'idle'
+          rt.t = 2 + Math.random() * 4
+          rig.play('idle')
+        } else {
+          rig.setFacing(mx || mdx, my || mdy)
+          rig.play('walk')
+        }
+        // 硬拴绳:无论怎么撞怎么滑,绝不离开锚点半径(+半格容差)
+        const ddx = rt.x - rt.hx
+        const ddy = rt.y - rt.hy
+        const dd = Math.hypot(ddx, ddy)
+        if (dd > rt.roam + 0.5) {
+          const k = (rt.roam + 0.5) / dd
+          rt.x = rt.hx + ddx * k
+          rt.y = rt.hy + ddy * k
+          rt.phase = 'idle'
+          rt.t = 1
+        }
+      }
       rig.update(dt)
+      scene.placeRig(rig, rt.x, rt.y)
+      // 跨格才写回落盘对象 —— nearestNpc/编辑器读的都是格坐标
+      const tileX = Math.floor(rt.x)
+      const tileY = Math.floor(rt.y)
+      if (tileX !== n.x || tileY !== n.y) {
+        n.x = tileX
+        n.y = tileY
+        handle.onNpcMoved?.()
+      }
     }
     near = nearestNpc(npcs, px, py, world.params.width, world.params.height)
 

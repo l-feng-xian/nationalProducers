@@ -17,9 +17,17 @@ export const RPG_WORLD_SIZE = 256
  */
 export interface RpgNpc {
   id: string
-  /** 格坐标（整数） */
+  /** 格坐标（整数）。NPC 漫游时引擎会就近更新它 */
   x: number
   y: number
+  /**
+   * 漫游锚点（出生格，整数）。NPC 只在锚点半径内活动 —— 角色扮演世界里
+   * 村民不该瞬移到大陆另一头。旧存档没有这两个字段时,引擎把当前格当锚点
+   */
+  homeX?: number
+  homeY?: number
+  /** 漫游半径（格）。缺省由 id 哈希派生 3..6 */
+  roamR?: number
   /** 关联的角色卡 id。留空表示这是一个只在游戏里存在的 NPC */
   characterId?: string
   /** 未关联角色卡时使用 */

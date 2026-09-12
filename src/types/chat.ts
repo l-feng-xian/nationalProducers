@@ -122,6 +122,12 @@ export interface RpgChatBinding {
   /** 无卡 NPC 的自填身份 —— 这种 NPC 只存在于存档里，只能随会话带一份 */
   npcName?: string
   npcDescription?: string
+  /**
+   * NPC 此刻的处境（在哪、在干什么）。每轮对话前由引擎按实时位置重写,
+   * 与 worldDescription 拼进【场景】—— 让模型知道「你们是在哪、什么状态下
+   * 碰上的」,而不是每次都当作初次见面
+   */
+  situation?: string
 }
 
 /** 向量索引的进度。换模型时整会话作废重建 */

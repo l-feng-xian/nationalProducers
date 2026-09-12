@@ -70,6 +70,20 @@ const OCTAVES = 3
 const LACUNARITY = 2
 const GAIN = 0.5
 
+// ── 立体方块地形的量化参数 ──
+/** 一级台阶的世界高度（格）。参考图里悬崖的「一格」就是这个厚度 */
+export const BLOCK_H = 0.3
+/** 高度噪声每升多少幅度抬一级台阶。0.09 × 上限 ~0.8 ≈ 最多 9 级梯田 */
+const LEVEL_STEP = 0.09
+/** 台阶等级上限。fBm 归一化后动态范围有限，封顶防止极个别尖塔 */
+const MAX_LEVEL = 9
+/** 深水海床的顶面高度。隔着半透明水面看到的就是它 */
+export const WATER_BED_Y = -0.72
+/** 浅滩海床：比水面略低，角色走上去是「蹚水」的效果 */
+export const SHALLOW_BED_Y = -0.26
+/** 水面高度。贴在沙滩顶（y=0）稍下方 */
+export const WATER_SURFACE_Y = -0.08
+
 export interface WorldSampler {
   readonly width: number
   readonly height: number
@@ -77,6 +91,16 @@ export interface WorldSampler {
   height01(x: number, y: number): number
   /** 湿度场，约 -1..1。决定陆地上是沙还是草 */
   moisture(x: number, y: number): number
+  /**
+   * 聚落场，约 -1..1。低频（环面半径缩到 0.28），出「文明大区 / 蛮荒大区」：
+   * 村庄只会在聚落场高的大区里出现，于是世界天然分成有村镇的腹地与大片荒野。
+   */
+  district(x: number, y: number): number
+  /**
+   * 地表台阶等级（整数）：陆地 0..MAX_LEVEL，浅滩 -2、深水 -3。
+   * 数值翻成世界高度是渲染层的事（见 world.heightAt）。
+   */
+  levelAt(x: number, y: number): number
   biomeAt(x: number, y: number): Biome
   /** 把任意整数格坐标回绕进 [0,width) × [0,height) */
   wrapX(x: number): number
@@ -99,6 +123,9 @@ export function createSampler(p: WorldParams): WorldSampler {
   const noiseH = createNoise4D(seededRandom(p.seed))
   // ^ 与 v 两个场必须用不同种子，见上面的说明
   const noiseM = createNoise4D(seededRandom(p.seed ^ 0x9e3779b9))
+  // 聚落场：又一个独立种子。它只出「文明 / 蛮荒」的大区划分，别与湿度相关，
+  // 否则村庄永远长在森林里（或永远长在沙漠边）
+  const noiseD = createNoise4D(seededRandom(p.seed ^ 0x51ab3f1))
 
   const TAU = Math.PI * 2
 
@@ -108,21 +135,31 @@ export function createSampler(p: WorldParams): WorldSampler {
    * ⚠️ 每一倍频都必须**整体缩放环面半径**，而不是缩放 u/v。
    * 缩放 u/v 会让高倍频的周期不再是 1，接缝立刻回来 —— 这是这套做法里
    * 最容易写错、而且只在世界边界处才看得出来的一点。
+   *
+   * `radiusScale` 整体缩放基础环面半径：<1 即降低频率（更大的地貌区块）。
    */
-  const fbm = (noise: ReturnType<typeof createNoise4D>, x: number, y: number): number => {
+  const fbm = (
+    noise: ReturnType<typeof createNoise4D>,
+    x: number,
+    y: number,
+    radiusScale = 1,
+    octaves = OCTAVES,
+  ): number => {
     const u = (x / width) * TAU
     const v = (y / height) * TAU
     const cu = Math.cos(u)
     const su = Math.sin(u)
     const cv = Math.cos(v)
     const sv = Math.sin(v)
+    const r1s = r1 * radiusScale
+    const r2s = r2 * radiusScale
 
     let amp = 1
     let freq = 1
     let sum = 0
     let norm = 0
-    for (let i = 0; i < OCTAVES; i++) {
-      sum += amp * noise(cu * r1 * freq, su * r1 * freq, cv * r2 * freq, sv * r2 * freq)
+    for (let i = 0; i < octaves; i++) {
+      sum += amp * noise(cu * r1s * freq, su * r1s * freq, cv * r2s * freq, sv * r2s * freq)
       norm += amp
       amp *= GAIN
       freq *= LACUNARITY
@@ -135,11 +172,12 @@ export function createSampler(p: WorldParams): WorldSampler {
 
   const height01 = (x: number, y: number): number => fbm(noiseH, x, y)
   const moisture = (x: number, y: number): number => fbm(noiseM, x, y)
+  const district = (x: number, y: number): number => fbm(noiseD, x, y, 0.28, 2)
 
   const biomeAt = (x: number, y: number): Biome => {
     const h = height01(x, y)
     if (h < seaLevel - 0.06) return BIOME.water
-    // 浅滩：紧贴海平面的一条带，是水陆之间的过渡，HD-2D 里靠它出「岸」的观感
+    // 浅滩：紧贴海平面的一条带，是水陆之间的过渡，可以蹚水走过去
     if (h < seaLevel + 0.03) return BIOME.shallow
     // 离岸不远且干燥 → 沙；其余是草
     const m = moisture(x, y)
@@ -147,5 +185,13 @@ export function createSampler(p: WorldParams): WorldSampler {
     return m < -0.42 ? BIOME.sand : BIOME.grass
   }
 
-  return { width, height, height01, moisture, biomeAt, wrapX, wrapY }
+  /** 高度 → 台阶等级。浅滩 / 深水用负数标记，海床高度是常量而不是台阶 */
+  const levelAt = (x: number, y: number): number => {
+    const h = height01(x, y)
+    if (h < seaLevel - 0.06) return -3
+    if (h < seaLevel + 0.03) return -2
+    return Math.min(MAX_LEVEL, Math.floor((h - seaLevel) / LEVEL_STEP))
+  }
+
+  return { width, height, height01, moisture, district, levelAt, biomeAt, wrapX, wrapY }
 }

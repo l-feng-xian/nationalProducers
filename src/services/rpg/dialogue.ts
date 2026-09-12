@@ -38,9 +38,10 @@ export interface TalkResult {
  *
  * 每轮都重写一遍（而不是建会话时写一次）：世界简介、玩家身份、NPC 关联的卡
  * 都可以在 NpcEditor 里随时改，而 chatId 不会作废。不刷新的话，从聊天页
- * 或 ↻ 发起的那一轮用的就是过期身份。
+ * 或 ↻ 发起的那一轮用的就是过期身份。situation 同理 —— NPC 会走动,
+ * 每轮都该带上它此刻在哪、在干什么。
  */
-function bindingOf(world: RpgWorld, npc: RpgNpc): RpgChatBinding {
+function bindingOf(world: RpgWorld, npc: RpgNpc, situation?: string): RpgChatBinding {
   return {
     worldId: world.id,
     npcId: npc.id,
@@ -50,10 +51,15 @@ function bindingOf(world: RpgWorld, npc: RpgNpc): RpgChatBinding {
     ...(npc.characterId ? { characterId: npc.characterId } : {}),
     npcName: npc.name,
     npcDescription: npc.description,
+    ...(situation ? { situation } : {}),
   }
 }
 
-async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> {
+async function ensureChat(
+  world: RpgWorld,
+  npc: RpgNpc,
+  situation?: string,
+): Promise<string | null> {
   const chats = useChatsStore()
   const chars = useCharactersStore()
 
@@ -61,7 +67,7 @@ async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> 
   // chats.open() 对不存在的 id 只是把 current 置 null，随后 send() 直接 return，
   // 全程不报错，表现为「按了没反应」。所以必须先验一次。
   if (npc.chatId && (await chatsRepo.get(npc.chatId))) {
-    await chatsRepo.patchMetadata(npc.chatId, { rpg: bindingOf(world, npc) })
+    await chatsRepo.patchMetadata(npc.chatId, { rpg: bindingOf(world, npc, situation) })
     return npc.chatId
   }
 
@@ -70,7 +76,7 @@ async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> 
   // 世界人设要在**建会话时**就传进去：开场白里的 {{user}} 在播种那一刻就被
   // 展开并永久落库（整个 swipes 池都是），事后再补绑定也改不回来了
   const meta = await chats.createSolo(npc.characterId, `${world.name} · ${name}`, world.persona)
-  await chatsRepo.patchMetadata(meta.id, { rpg: bindingOf(world, npc) })
+  await chatsRepo.patchMetadata(meta.id, { rpg: bindingOf(world, npc, situation) })
   npc.chatId = meta.id
   // ⚠️ 必须落库。只改内存的话重进游戏 chatId 又是空的，于是**每次说话都新建
   // 一段会话** —— NPC 永远记不住上一句，而且会话列表被刷屏。
@@ -90,6 +96,8 @@ export async function talkToNpc(
   npc: RpgNpc,
   text: string,
   onDelta?: (t: string) => void,
+  /** 引擎给的 NPC 此刻处境,进【场景】。不传则不带（聊天页续聊就是这种） */
+  situation?: string,
 ): Promise<TalkResult> {
   const chats = useChatsStore()
   const chars = useCharactersStore()
@@ -112,7 +120,7 @@ export async function talkToNpc(
   // 第二次就是「按了没反应」—— 自己先挡住并给出人话
   if (gen.busy) return { ok: false, text: '', error: '上一句还没说完' }
 
-  const chatId = await ensureChat(world, npc)
+  const chatId = await ensureChat(world, npc, situation)
   if (!chatId) return { ok: false, text: '', error: '无法创建对话' }
 
   // send() 不接 chatId，只认 chats.current。漏了这步，NPC 的话会被说进

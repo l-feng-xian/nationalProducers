@@ -35,7 +35,6 @@ const engine = shallowRef<EngineHandle | null>(null)
 const booting = ref(true)
 const bootError = ref('')
 const backend = ref('')
-const rigKind = ref('')
 const nearName = ref('')
 const editorOpen = ref(false)
 
@@ -66,12 +65,18 @@ onMounted(async () => {
       host: el,
       npcs: w.npcs,
       ...(w.playerX >= 0 ? { start: { x: w.playerX, y: w.playerY } } : {}),
-      playerSpine: { dir: '/1_1001', atlas: '1001.atlas', json: '1001.json' },
     })
     engine.value = eng
     backend.value = eng.scene.backend
-    rigKind.value = eng.playerRigKind
     eng.onTick = onTick
+    // NPC 漫游跨格时落盘,3 秒节流 —— 不然一群村民能把 IndexedDB 走冒烟
+    let lastNpcSave = 0
+    eng.onNpcMoved = () => {
+      const now = Date.now()
+      if (now - lastNpcSave < 3000 || rpg.pending) return
+      lastNpcSave = now
+      void rpg.save()
+    }
     eng.start()
   } catch (e) {
     bootError.value = e instanceof Error ? e.message : String(e)
@@ -132,10 +137,18 @@ async function send(text: string) {
   rpg.pending = true
   rpg.dialogueError = ''
   try {
-    const r = await talkToNpc(w, npc, text, (t) => {
-      const line = rpg.lines[idx]
-      if (line) line.text = t
-    })
+    // 情境随对话带上:NPC 此刻在哪、在干什么,拼进提示词的【场景】
+    const situation = engine.value?.npcStateText(npc.id)
+    const r = await talkToNpc(
+      w,
+      npc,
+      text,
+      (t) => {
+        const line = rpg.lines[idx]
+        if (line) line.text = t
+      },
+      situation,
+    )
     if (!r.ok) {
       rpg.dialogueError = r.error ?? '对话失败'
       // 没说出话就把空的那条抹掉，别在界面上留一条空白发言
@@ -156,11 +169,18 @@ function placeNpc() {
   const eng = engine.value
   if (!eng) return
   const p = eng.position()
-  const npc = rpg.addNpc(p.x, p.y)
+  // 脚下未必能站人(浅水/房子里) —— 先找最近的有效落点
+  const spot = eng.findNpcSpot(p.x, p.y)
+  if (!spot) {
+    toast.error('附近找不到能站人的地方')
+    return
+  }
+  const npc = rpg.addNpc(spot.x, spot.y)
   if (!npc) return
   eng.setNpcs(rpg.current?.npcs ?? [])
   editorOpen.value = true
-  toast.success('已在脚下放置一个 NPC')
+  const moved = spot.x !== Math.floor(p.x) || spot.y !== Math.floor(p.y)
+  toast.success(moved ? '已放到最近的可站立位置' : '已在脚下放置一个 NPC')
 }
 
 function onNpcsChanged() {
@@ -185,9 +205,6 @@ onBeforeUnmount(() => {
     <AppTopbar :title="rpg.current?.name ?? '世界'">
       <template #actions>
         <span v-if="backend" class="chip">{{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}</span>
-        <span v-if="rigKind === 'placeholder'" class="chip chip--warn" title="Spine 资源未加载">
-          占位角色
-        </span>
         <!-- 窄屏放不下全称：390px 下两颗全称按钮会把标题挤成一条缝 -->
         <button class="cbx-btn cbx-btn--ghost sm" @click="placeNpc">
           <span class="wide">在脚下放 NPC</span><span class="narrow">＋NPC</span>
@@ -244,7 +261,8 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #0d1b2a;
+  /* 与场景背景同色：启动遮罩、渲染间隙都不露深色 */
+  background: #ece9df;
 }
 .canvas-host {
   position: absolute;
@@ -259,7 +277,7 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   margin: 0;
-  color: #fff;
+  color: #6b6353;
   font-size: var(--cbx-fs-md);
   padding: var(--cbx-space-5);
   text-align: center;
@@ -292,10 +310,6 @@ onBeforeUnmount(() => {
   background: var(--cbx-bg-secondary);
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-secondary);
-}
-.chip--warn {
-  background: var(--cbx-warning-light);
-  color: var(--cbx-warning-hover);
 }
 .narrow {
   display: none;

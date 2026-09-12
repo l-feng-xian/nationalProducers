@@ -12,6 +12,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { rpgWorldsRepo } from '@/db/repositories'
 import { resolveNpc, type RpgNpc, type RpgWorld } from '@/types/rpg'
+import { fnv1a } from '@/services/hash'
 import { useCharactersStore } from './characters'
 
 export interface DialogueLine {
@@ -77,10 +78,15 @@ export const useRpgStore = defineStore('rpg', () => {
   function addNpc(x: number, y: number): RpgNpc | null {
     const w = current.value
     if (!w) return null
+    const id = crypto.randomUUID()
     const npc: RpgNpc = {
-      id: crypto.randomUUID(),
+      id,
       x: Math.floor(x),
       y: Math.floor(y),
+      // 出生格即锚点;漫游半径按 id 哈希 3..6 —— 村民的活动范围各有大小
+      homeX: Math.floor(x),
+      homeY: Math.floor(y),
+      roamR: 3 + (fnv1a(id) % 4),
       name: '新 NPC',
       description: '',
     }
