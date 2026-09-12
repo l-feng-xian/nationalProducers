@@ -70,6 +70,23 @@ export function emptyCounts(): SyncCounts {
 }
 
 /** 「角色 4 · 世界书 2 · 会话 1 · 消息 17」，确认页与结果提示共用 */
+const SCOPE_LABEL: Record<keyof SyncScope, string> = {
+  characters: '角色',
+  worldbooks: '世界书',
+  groups: '群聊',
+  chats: '会话与消息',
+  settings: '设置',
+  rpgworlds: '世界',
+}
+
+/** 把一份 scope 说成人话。拉取批准页要让用户看清对方到底要什么 */
+export function describeScope(s: SyncScope): string {
+  const parts = (Object.keys(SCOPE_LABEL) as (keyof SyncScope)[])
+    .filter((k) => s[k])
+    .map((k) => SCOPE_LABEL[k])
+  return parts.join(' · ') || '（空）'
+}
+
 export function describeCounts(c: SyncCounts & { skipped?: number }): string {
   const parts: string[] = []
   if (c.characters) parts.push(`角色 ${c.characters}`)

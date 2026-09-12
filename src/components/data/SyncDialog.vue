@@ -12,7 +12,7 @@ import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useToast } from '@/composables/useToast'
 import { formatBytes } from '@/services/io/backup'
-import { describeCounts } from '@/services/sync/protocol'
+import { describeCounts, describeScope } from '@/services/sync/protocol'
 import { MAX_DEVICE_NAME } from '@/services/sync/signaling'
 import { renderQr } from '@/services/qr/render'
 import { decodeImageFile, startCameraScan, type ScanHandle } from '@/services/qr/scan'
@@ -392,6 +392,31 @@ onBeforeUnmount(stopCamera)
                 接收
               </button>
               <button class="cbx-btn cbx-btn--ghost danger" @click="sync.answerConfirm(false)">
+                拒绝
+              </button>
+            </div>
+          </template>
+
+          <!-- 6.5 对方要从我这儿拉数据，等我批准 -->
+          <!--
+            ⚠️ 这一步以前是没有的：pull 帧一到就直接把整库导出发走了。
+            邀请页上写着「允许之后只是接通通道；具体传不传数据、传哪些，还要再确认
+            一次」—— 这个页面就是让那句话在拉取方向上也成立的地方。
+          -->
+          <template v-else-if="sync.step === 'pullAsk' && sync.pullRequest">
+            <p class="note">对方想<b>从这台设备取走</b>这些数据：</p>
+            <p class="big">{{ describeScope(sync.pullRequest) }}</p>
+            <p v-if="sync.pullRequest.settings" class="note note--warn">
+              ⚠️ 含「设置」——你的接口地址、模型与人设会一并送出去。
+            </p>
+            <p class="cbx-field__hint">
+              只会发送上面列出的类别；你在上一页没勾的项目已经排除在外。不确定就拒绝。
+            </p>
+            <div class="acts">
+              <button class="cbx-btn cbx-btn--primary" @click="sync.answerPullRequest(true)">
+                允许取走
+              </button>
+              <button class="cbx-btn cbx-btn--ghost danger" @click="sync.answerPullRequest(false)">
                 拒绝
               </button>
             </div>

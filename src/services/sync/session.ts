@@ -61,6 +61,23 @@ export interface SessionHooks {
    * 一个 id 直接把通道建起来。
    */
   onInvite?: (from: { id: string; name: string }) => Promise<boolean>
+  /**
+   * 对方要**从我这里拉数据**，返回 true 才发。UI 在这里弹确认页。
+   *
+   * ⚠️ 这一道是必须的，而且此前是缺的。`pull` 帧一到就直接 `push()` 出去了 ——
+   * 也就是说通道一旦接通，对端发一句 `{"t":"pull"}` 就能把本机整个库（角色、
+   * 全部会话与消息、世界，还有 settings 里的接口地址与人设）导出发走，
+   * 本机**不弹任何东西**。而邀请页上明写着「允许之后只是接通通道；具体传不传
+   * 数据、传哪些，还要再确认一次」—— 拉取方向上这句话原本是假的。
+   *
+   * 入参是**已经过滤过**的范围（见 #sanitizeScope），UI 直接照它显示即可。
+   *
+   * ⚠️ 返回的是**批准的范围**，不是 boolean。UI 那边还会拿本机自己的勾选去取交集
+   * （本机默认就不给 settings）；如果这里只回 true/false，那份收窄就只停在界面上，
+   * 真正发出去的仍是对方点名要的全部 —— 界面许下一个协议层没兑现的承诺，
+   * 比不做还糟。返回 null 表示拒绝。
+   */
+  onPullRequest?: (scope: SyncScope) => Promise<SyncScope | null>
   onProgress?: (p: Progress) => void
   /** 接收完成并已写库 */
   onApplied?: (r: ImportResult) => void
@@ -346,6 +363,27 @@ export class SyncSession {
     this.#dc?.send(encodeFrame(f))
   }
 
+  /**
+   * 把对端 pull 帧里的 scope 收成一个安全的 SyncScope。
+   *
+   * ⚠️ **逐字段 `=== true`，缺省一律 false。** 绝不能沿用 push() 里那句
+   * `{ ...FULL_SCOPE, ...scope }` —— `decodeFrame` 只验了 `t` 是字符串，
+   * scope 可以压根不存在。展开一个 undefined 的结果就是 **FULL_SCOPE**：
+   * 对端发一句 `{"t":"pull"}` 就等于点名要走整个库，连 settings 都在里面。
+   * 「没说」必须解释成「不要」，不能解释成「全都要」。
+   */
+  #sanitizeScope(raw: unknown): SyncScope {
+    const s = (raw ?? {}) as Partial<Record<keyof SyncScope, unknown>>
+    return {
+      characters: s.characters === true,
+      worldbooks: s.worldbooks === true,
+      groups: s.groups === true,
+      chats: s.chats === true,
+      settings: s.settings === true,
+      rpgworlds: s.rpgworlds === true,
+    }
+  }
+
   async #onMessage(data: unknown): Promise<void> {
     try {
       if (typeof data === 'string') {
@@ -375,10 +413,28 @@ export class SyncSession {
           throw new Error(`对方的应用版本不一致（协议 v${f.version}，本机 v${PROTOCOL_VERSION}）`)
         }
         return
-      case 'pull':
-        // 对方要拉数据，等同于我方发送
-        void this.push(f.scope).catch((e: unknown) => this.#fail(toErr(e)))
+      case 'pull': {
+        // 对方要拉数据，等同于我方发送 —— 但必须先问过本机的人
+        const want = this.#sanitizeScope(f.scope)
+        if (!Object.values(want).some(Boolean)) {
+          this.#send({ t: 'reject', reason: '对方没有可拉取的范围' })
+          return
+        }
+        const approved = (await this.#hooks.onPullRequest?.(want)) ?? null
+        if (!approved) {
+          this.#send({ t: 'reject', reason: '对方拒绝了这次拉取' })
+          return
+        }
+        // ⚠️ 再过一次 sanitize：UI 回来的东西同样不该无条件相信，而且这一步
+        // 保证「实际发出去的」恒等于「用户在批准页上看到的那几项」的子集
+        const eff = this.#sanitizeScope(approved)
+        if (!Object.values(eff).some(Boolean)) {
+          this.#send({ t: 'reject', reason: '对方拒绝了这次拉取' })
+          return
+        }
+        void this.push(eff).catch((e: unknown) => this.#fail(toErr(e)))
         return
+      }
       case 'manifest': {
         const ok = this.#pullPending ? true : ((await this.#hooks.onIncoming?.(f)) ?? false)
         this.#pullPending = false

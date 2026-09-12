@@ -33,6 +33,7 @@ import {
  *  invited   有人从在线名单点了我，等我批准
  *  ready     已连通，选方向与范围
  *  confirm   收到对方的 manifest，等用户点接收
+ *  pullAsk   对方要从我这儿拉数据，等我批准
  *  transfer  传输中
  *  done / error
  */
@@ -44,6 +45,7 @@ export type SyncStep =
   | 'invited'
   | 'ready'
   | 'confirm'
+  | 'pullAsk'
   | 'transfer'
   | 'done'
   | 'error'
@@ -70,6 +72,9 @@ export const useSyncStore = defineStore('sync', () => {
   const incoming = ref<Manifest | null>(null)
   /** 接收方确认页的回调闸门 */
   let confirmGate: ((ok: boolean) => void) | null = null
+  /** 对方想从我这儿拉走的范围（已过滤），批准页用 */
+  const pullRequest = ref<SyncScope | null>(null)
+  let pullGate: ((approved: SyncScope | null) => void) | null = null
 
   /**
    * 是否走信令服务器。
@@ -136,6 +141,9 @@ export const useSyncStore = defineStore('sync', () => {
     signal?.close()
     signal = null
     confirmGate = null
+    pullRequest.value = null
+    pullGate?.(null)
+    pullGate = null
     relayed.value = true
     fallbackReason.value = ''
     peers.value = []
@@ -177,6 +185,19 @@ export const useSyncStore = defineStore('sync', () => {
         step.value = 'invited'
         return new Promise<boolean>((res) => {
           inviteGate = res
+        })
+      },
+      onPullRequest: (want) => {
+        // ⚠️ 再与本机自己的勾选取交集。本机默认不勾「设置」（它会把接口地址、
+        // 模型与人设整包送出去），这个默认不该因为用户在批准页上顺手点了「允许」
+        // 就失效 —— 对方要得到的，不能多于我本来就愿意给的
+        const eff: SyncScope = { ...want }
+        for (const k of Object.keys(eff) as (keyof SyncScope)[]) eff[k] = eff[k] && scope.value[k]
+        pullRequest.value = eff
+        step.value = 'pullAsk'
+        // 回的是**批准的范围**而不是 true/false —— 不然上面这次收窄只停在界面上
+        return new Promise<SyncScope | null>((res) => {
+          pullGate = res
         })
       },
       onApplied: (r) => {
@@ -404,6 +425,15 @@ export const useSyncStore = defineStore('sync', () => {
     if (!ok) incoming.value = null
   }
 
+  /** 我在「对方想拉走这些」里点了允许 / 拒绝 */
+  function answerPullRequest(ok: boolean): void {
+    step.value = ok ? 'transfer' : 'ready'
+    // 批准时交出去的正是页面上显示的那份（已与本机勾选取过交集）
+    pullGate?.(ok ? pullRequest.value : null)
+    pullGate = null
+    if (!ok) pullRequest.value = null
+  }
+
   return {
     step,
     role,
@@ -434,5 +464,7 @@ export const useSyncStore = defineStore('sync', () => {
     push,
     pull,
     answerConfirm,
+    pullRequest,
+    answerPullRequest,
   }
 })
