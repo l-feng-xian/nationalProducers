@@ -536,7 +536,7 @@ export function createWorld(p: WorldParams): World {
           y: wy,
           ox: jitter(3, 0.3),
           oy: jitter(19, 0.3),
-          variant: h & 3,
+          variant: h & 7,
           rot: 0,
         }
       }
@@ -583,7 +583,7 @@ export function createWorld(p: WorldParams): World {
         y: wy,
         ox: jitter(3, 0.3),
         oy: jitter(19, 0.3),
-        variant: h & 3,
+        variant: h & 7,
         rot: 0,
       }
     }

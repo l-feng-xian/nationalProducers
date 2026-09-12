@@ -391,16 +391,48 @@ export class MeshBuilder {
 const WOOD = rgb('#8a5a33')
 const WOOD_LIGHT = rgb('#a97e4f')
 /** 树干用浅木色方柱 —— 参考图的特征：短粗、奶黄 */
-const TRUNK = rgb('#b08d5f')
-/** 抹茶系低饱和绿。下层再乘 0.88 出同棵双色 */
-const LEAF = [rgb('#7fae66'), rgb('#8cba75'), rgb('#75a75f'), rgb('#89b972')]
-const PINE_LEAF = [rgb('#4e7d5c'), rgb('#457353'), rgb('#568864')]
+const TRUNK = rgb('#9a7246')
+/** 阔叶树冠。比原先的抹茶色饱和不少 —— 参考图里的树是画面的主色，不是背景 */
+const LEAF = [rgb('#4f9b3f'), rgb('#5aa848'), rgb('#469238'), rgb('#63b150')]
+/**
+ * 树冠色族。`variant` 0..7 直接索引（见 world.ts 的 `h & 7`）。
+ *
+ * 六绿 + 一株樱、一株金：参考图里满屏的粉樱与金秋是**点缀**，密度决定了它是
+ * 「有季节感」还是「花里胡哨」。2/8 实测下来在成片森林里刚好 —— 远看仍是绿林，
+ * 走近才发现夹着几株开花的。
+ */
+const CANOPY = [
+  rgb('#4f9b3f'),
+  rgb('#5aa848'),
+  rgb('#469238'),
+  rgb('#63b150'),
+  rgb('#3f8a44'),
+  rgb('#6cb85a'),
+  /** 樱 */
+  rgb('#f0a6c4'),
+  /** 金秋 */
+  rgb('#efa73f'),
+]
+const PINE_LEAF = [rgb('#2f6b4a'), rgb('#276043'), rgb('#3a7b55')]
 /** 果树上的白点(花/果) */
 const FRUIT = rgb('#f5f2e8')
 
 const WALLS = [rgb('#e8dbc0'), rgb('#efe6d0'), rgb('#d9c8a8')]
 const ROOFS = [rgb('#e08850'), rgb('#5f9ea0'), rgb('#c05a3e'), rgb('#4f8f92')]
-const FLOWERS = [rgb('#e05f5f'), rgb('#e8c94f'), rgb('#f0f0e8'), rgb('#d98fc9')]
+/**
+ * 花色。参考图里花田是**大片紫蓝**打底，黄/粉/红作为跳色 ——
+ * 所以紫与蓝各占两格，出现频率天然更高
+ */
+const FLOWERS = [
+  rgb('#8f7fd6'),
+  rgb('#f2c53d'),
+  rgb('#6f8fd9'),
+  rgb('#ef6b6b'),
+  rgb('#9b7fe0'),
+  rgb('#f4f0e6'),
+  rgb('#7e9ee4'),
+  rgb('#ef8fc4'),
+]
 const CREAM = rgb('#efe6d0')
 const STONE_LIGHT = rgb('#cfc8b8')
 const GLOW = rgb('#ffd98a')
@@ -482,23 +514,40 @@ export function addTree(
   groundY: number,
   variant: number,
 ): void {
-  const s = 0.92 + (variant % 3) * 0.12
-  b.box(x, groundY + 0.2 * s, z, 0.24 * s, 0.4 * s, 0.24 * s, TRUNK)
-  const leaf = LEAF[variant % LEAF.length]!
-  b.sphere(x, groundY + 0.6 * s, z, 0.5 * s, tint(leaf, 0.88), 0.82)
-  b.sphere(
-    x + ((variant & 1) - 0.5) * 0.1,
-    groundY + 0.95 * s,
-    z + (((variant >> 1) & 1) - 0.5) * 0.1,
-    0.38 * s,
-    leaf,
-    0.85,
-  )
-  b.sphere(x, groundY + 1.24 * s, z, 0.24 * s, tint(leaf, 1.12), 0.88)
-  if ((variant & 2) === 0) {
-    b.box(x - 0.32 * s, groundY + 0.66 * s, z + 0.34 * s, 0.07, 0.07, 0.07, FRUIT)
-    b.box(x + 0.36 * s, groundY + 0.94 * s, z - 0.22 * s, 0.07, 0.07, 0.07, FRUIT)
-    b.box(x + 0.04 * s, groundY + 1.18 * s, z + 0.22 * s, 0.06, 0.06, 0.06, FRUIT)
+  const s = 0.95 + (variant % 3) * 0.14
+  // 干比原先高一截：原来树顶才 1.3，和 1.55 高的小人差不多，读起来像灌木。
+  // 参考图里树是**盖过人**的，抬到 ~2.0 之后才有「树荫下」的感觉
+  // 干要细、要**大半藏在冠里**。粗干 + 高冠会露出一截光秃秃的棕色柱子，
+  // 参考图里的树几乎看不到主干
+  b.box(x, groundY + 0.3 * s, z, 0.15 * s, 0.6 * s, 0.15 * s, TRUNK)
+  const leaf = CANOPY[variant % CANOPY.length]!
+
+  /**
+   * 树冠：一圈矮多边形「瓣」拼成的疙瘩状轮廓。
+   *
+   * ⚠️ 每瓣都刻意降到 `seg=5, rings=3`（20 个三角）而不是默认的 6×4（36 个）。
+   * 原来三颗默认球是 108 个三角，现在五瓣只要 100 —— **轮廓更碎更手作，
+   * 三角反而更少**。低模风格里瓣数比单瓣精度重要得多，而整张世界是一次性
+   * 预生成 64 个 chunk 的，这里每多一个三角都要乘以全图的树。
+   */
+  const lobe = (dx: number, dy: number, dz: number, r: number, k: number, sq = 0.9): void => {
+    b.sphere(x + dx * s, groundY + dy * s, z + dz * s, r * s, tint(leaf, k), sq, 6, 3)
+  }
+  // 一大团压扁的主冠 + 沿冠沿几个凸起。
+  // ⚠️ 关键是几瓣**高度相近**、只在水平方向错开：把它们竖着垒起来会变成宝塔，
+  // 而参考图里的树冠是一朵横向铺开的「西兰花」。squash 也从 0.8 收到 0.9 ——
+  // 0.8 配 rings=3 出来是一摞盘子，没有体积
+  lobe(0, 0.82, 0, 0.62, 0.9, 0.8)
+  lobe(-0.36, 0.96, 0.14, 0.33, 1.02)
+  lobe(0.34, 0.93, -0.16, 0.31, 0.95)
+  lobe(0.08, 1.0, 0.34, 0.29, 1.06)
+  lobe(-0.1, 1.16, -0.06, 0.3, 1.12)
+
+  // 花/果白点。樱与金秋不挂白点 —— 它们自己就是画面的亮色，再点就脏了
+  if ((variant & 1) === 0 && variant < 6) {
+    b.box(x - 0.3 * s, groundY + 0.96 * s, z + 0.32 * s, 0.07, 0.07, 0.07, FRUIT)
+    b.box(x + 0.34 * s, groundY + 1.16 * s, z - 0.2 * s, 0.07, 0.07, 0.07, FRUIT)
+    b.box(x + 0.04 * s, groundY + 1.3 * s, z + 0.2 * s, 0.06, 0.06, 0.06, FRUIT)
   }
 }
 
@@ -519,6 +568,13 @@ export function addPine(
   b.cone(x, groundY + 1.14, z, 0.15 * s, 0.3, 6, tint(leaf, 1.15))
 }
 
+/**
+ * 灌木：三瓣一丛。
+ *
+ * 原先是孤零零一颗球，远看就是地上一个绿点。参考图里的灌木都是**几坨挤在一起**
+ * 的，边缘毛糙。同样用 `seg=5, rings=3` 的矮多边形球，三瓣 60 个三角，
+ * 比原来一颗默认球（36）只多一点，轮廓却完全不同。
+ */
 export function addBush(
   b: MeshBuilder,
   x: number,
@@ -527,10 +583,22 @@ export function addBush(
   variant: number,
 ): void {
   const leaf = LEAF[variant % LEAF.length]!
-  b.sphere(x, groundY + 0.14, z, 0.22 + (variant % 2) * 0.04, leaf, 0.72)
+  const s = 1 + (variant % 2) * 0.18
+  b.sphere(x, groundY + 0.15 * s, z, 0.23 * s, leaf, 0.74, 5, 3)
+  b.sphere(x - 0.16 * s, groundY + 0.11 * s, z + 0.1 * s, 0.16 * s, tint(leaf, 0.9), 0.76, 5, 3)
+  b.sphere(x + 0.15 * s, groundY + 0.12 * s, z - 0.09 * s, 0.15 * s, tint(leaf, 1.08), 0.76, 5, 3)
 }
 
-/** 花朵：细茎 + 小色块。variant 直接挑颜色 */
+/**
+ * 花：一丛三朵，高低错开。
+ *
+ * ⚠️ 原先是「一根茎 + 一个小方块」，一格一朵 —— 在 2.5D 俯视下那就是地上
+ * 一个像素点，成片的花田看着跟空地没区别。参考图里花是**铺开的一片**，
+ * 有明确的色块面积。三朵各自偏移、高度不同，一格就有了体积。
+ *
+ * 成本：6 个 box（72 三角）对 2 个（24）。只长在有花的格上，而花本来就是
+ * 稀疏道具；换来的是整片花田真的能看出是花田。
+ */
 export function addFlower(
   b: MeshBuilder,
   x: number,
@@ -538,8 +606,17 @@ export function addFlower(
   groundY: number,
   variant: number,
 ): void {
-  b.box(x, groundY + 0.11, z, 0.04, 0.22, 0.04, rgb('#4e8a3d'))
-  b.box(x, groundY + 0.26, z, 0.12, 0.1, 0.12, FLOWERS[variant % FLOWERS.length]!)
+  const stem = rgb('#3f8a3a')
+  const c = FLOWERS[variant % FLOWERS.length]!
+  // 同一丛里掺一朵邻色，避免整片花田是一个死板的纯色
+  const c2 = FLOWERS[(variant + 1) % FLOWERS.length]!
+  const one = (dx: number, dz: number, h: number, col: RGB, w: number): void => {
+    b.box(x + dx, groundY + h * 0.5, z + dz, 0.035, h, 0.035, stem)
+    b.box(x + dx, groundY + h + 0.03, z + dz, w, 0.08, w, col)
+  }
+  one(0, 0, 0.26, c, 0.15)
+  one(-0.2, 0.14, 0.19, c2, 0.13)
+  one(0.18, -0.16, 0.22, c, 0.12)
 }
 
 /**
@@ -556,71 +633,103 @@ export function addHouse(
   rot: number,
 ): void {
   const yaw = (rot * Math.PI) / 2
+  /**
+   * ⚠️ 整体放大系数。原先这套房子是照着 1.0 高的小人捏的 —— 屋脊 1.16、门高 0.40，
+   * 而玩家立绘是 **1.55**：人比房子高，门只到人膝盖，整座村子看上去是摆件。
+   *
+   * ⚠️ 上限由摆放规则钉死：房屋用 3×3 哈希极大值法保证彼此**至少隔 2 格**，
+   * 所以整栋最宽处的半宽不能超过 1.0 格。最宽的不是墙而是**屋顶出檐**（原 1.3）——
+   * 我第一版按墙宽 1.12 算，取了 1.72，结果墙不挤、屋顶却互相插进去了，
+   * 一片村子看上去像几个屋顶焊在一起。按出檐算：1.3 × K ≤ 2.0 → K ≤ 1.54，取 1.5。
+   * 谷仓出檐原本就有 1.68，另给一个更小的 KB。
+   */
+  const KH = 1.5
+  const KB = 1.15
   if (variant === 3) {
     // 谷仓：橙棕木板墙 + 青灰绿大屋顶 + 深棕大门 + 奶白门框与檐梁
-    b.box(x, groundY + 0.44, z, 1.5, 0.88, 1.2, rgb('#c08a5e'), yaw)
-    b.box(x, groundY + 0.9, z, 1.56, 0.07, 1.26, CREAM, yaw)
-    b.roof(x, groundY + 0.94, z, 1.68, 0.52, 1.38, rgb('#5f9a92'), yaw)
-    const [dx1, dz1] = rotOff(x, z, 0, 0.615, yaw)
-    b.box(dx1, groundY + 0.36, dz1, 0.62, 0.7, 0.05, rgb('#5e4530'), yaw)
-    b.box(dx1, groundY + 0.73, dz1, 0.7, 0.06, 0.05, CREAM, yaw)
-    const [dx2, dz2] = rotOff(x, z, -0.34, 0.615, yaw)
-    b.box(dx2, groundY + 0.36, dz2, 0.05, 0.7, 0.05, CREAM, yaw)
-    const [dx3, dz3] = rotOff(x, z, 0.34, 0.615, yaw)
-    b.box(dx3, groundY + 0.36, dz3, 0.05, 0.7, 0.05, CREAM, yaw)
+    b.box(x, groundY + KB * 0.44, z, KB * 1.5, KB * 0.88, KB * 1.2, rgb('#c08a5e'), yaw)
+    b.box(x, groundY + KB * 0.9, z, KB * 1.56, KB * 0.07, KB * 1.26, CREAM, yaw)
+    b.roof(x, groundY + KB * 0.94, z, KB * 1.68, KB * 0.52, KB * 1.38, rgb('#5f9a92'), yaw)
+    const [dx1, dz1] = rotOff(x, z, 0, KB * 0.615, yaw)
+    b.box(dx1, groundY + KB * 0.36, dz1, KB * 0.62, KB * 0.7, KB * 0.05, rgb('#5e4530'), yaw)
+    b.box(dx1, groundY + KB * 0.73, dz1, KB * 0.7, KB * 0.06, KB * 0.05, CREAM, yaw)
+    const [dx2, dz2] = rotOff(x, z, -KB * 0.34, KB * 0.615, yaw)
+    b.box(dx2, groundY + KB * 0.36, dz2, KB * 0.05, KB * 0.7, KB * 0.05, CREAM, yaw)
+    const [dx3, dz3] = rotOff(x, z, KB * 0.34, KB * 0.615, yaw)
+    b.box(dx3, groundY + KB * 0.36, dz3, KB * 0.05, KB * 0.7, KB * 0.05, CREAM, yaw)
     return
   }
   const wall = WALLS[variant % WALLS.length]!
   const roofC = ROOFS[variant % ROOFS.length]!
-  b.box(x, groundY + 0.33, z, 1.12, 0.66, 1.0, wall, yaw)
+  b.box(x, groundY + KH * 0.33, z, KH * 1.12, KH * 0.66, KH * 1.0, wall, yaw)
   // 浅色檐口条：屋檐下的一圈奶油边
-  b.box(x, groundY + 0.67, z, 1.17, 0.06, 1.05, CREAM, yaw)
-  b.roof(x, groundY + 0.7, z, 1.3, 0.46, 1.18, roofC, yaw)
+  b.box(x, groundY + KH * 0.67, z, KH * 1.17, KH * 0.06, KH * 1.05, CREAM, yaw)
+  b.roof(x, groundY + KH * 0.7, z, KH * 1.3, KH * 0.46, KH * 1.18, roofC, yaw)
 
   // ── 门：青绿门体 + 拱顶窄块 + 奶油门框 + 石阶 ──
   const doorC = rgb('#4f8f8b')
   {
-    const [px0, pz0] = rotOff(x, z, 0, 0.515, yaw)
-    b.box(px0, groundY + 0.2, pz0, 0.28, 0.4, 0.05, doorC, yaw)
-    b.box(px0, groundY + 0.44, pz0, 0.2, 0.08, 0.05, doorC, yaw)
-    const [f1x, f1z] = rotOff(x, z, -0.17, 0.525, yaw)
-    b.box(f1x, groundY + 0.26, f1z, 0.05, 0.52, 0.04, CREAM, yaw)
-    const [f2x, f2z] = rotOff(x, z, 0.17, 0.525, yaw)
-    b.box(f2x, groundY + 0.26, f2z, 0.05, 0.52, 0.04, CREAM, yaw)
-    const [f3x, f3z] = rotOff(x, z, 0, 0.525, yaw)
-    b.box(f3x, groundY + 0.53, f3z, 0.39, 0.05, 0.04, CREAM, yaw)
-    const [sx0, sz0] = rotOff(x, z, 0, 0.58, yaw)
-    b.box(sx0, groundY + 0.025, sz0, 0.36, 0.05, 0.16, STONE_LIGHT, yaw)
+    const [px0, pz0] = rotOff(x, z, 0, KH * 0.515, yaw)
+    b.box(px0, groundY + KH * 0.2, pz0, KH * 0.28, KH * 0.4, KH * 0.05, doorC, yaw)
+    b.box(px0, groundY + KH * 0.44, pz0, KH * 0.2, KH * 0.08, KH * 0.05, doorC, yaw)
+    const [f1x, f1z] = rotOff(x, z, -KH * 0.17, KH * 0.525, yaw)
+    b.box(f1x, groundY + KH * 0.26, f1z, KH * 0.05, KH * 0.52, KH * 0.04, CREAM, yaw)
+    const [f2x, f2z] = rotOff(x, z, KH * 0.17, KH * 0.525, yaw)
+    b.box(f2x, groundY + KH * 0.26, f2z, KH * 0.05, KH * 0.52, KH * 0.04, CREAM, yaw)
+    const [f3x, f3z] = rotOff(x, z, 0, KH * 0.525, yaw)
+    b.box(f3x, groundY + KH * 0.53, f3z, KH * 0.39, KH * 0.05, KH * 0.04, CREAM, yaw)
+    const [sx0, sz0] = rotOff(x, z, 0, KH * 0.58, yaw)
+    b.box(sx0, groundY + KH * 0.025, sz0, KH * 0.36, KH * 0.05, KH * 0.16, STONE_LIGHT, yaw)
   }
 
   // ── 窗 ×2：奶油框 + 蓝玻璃 + 十字棂 + 窗下花箱 ──
   for (const lx of [-0.33, 0.33] as const) {
-    const [wx0, wz0] = rotOff(x, z, lx, 0.505, yaw)
-    b.box(wx0, groundY + 0.4, wz0, 0.24, 0.24, 0.04, CREAM, yaw)
-    b.box(wx0, groundY + 0.4, wz0, 0.17, 0.17, 0.06, rgb('#a8cfe0'), yaw)
-    b.box(wx0, groundY + 0.4, wz0, 0.03, 0.18, 0.065, CREAM, yaw)
-    b.box(wx0, groundY + 0.4, wz0, 0.18, 0.03, 0.065, CREAM, yaw)
-    const [bx0, bz0] = rotOff(x, z, lx, 0.535, yaw)
-    b.box(bx0, groundY + 0.24, bz0, 0.22, 0.09, 0.09, rgb('#8a6a48'), yaw)
-    const [p1x, p1z] = rotOff(x, z, lx - 0.06, 0.545, yaw)
-    b.box(p1x, groundY + 0.3, p1z, 0.08, 0.07, 0.07, FLOWERS[variant % FLOWERS.length]!, yaw)
-    const [p2x, p2z] = rotOff(x, z, lx + 0.06, 0.545, yaw)
-    b.box(p2x, groundY + 0.3, p2z, 0.08, 0.07, 0.07, FLOWERS[(variant + 2) % FLOWERS.length]!, yaw)
+    const [wx0, wz0] = rotOff(x, z, lx, KH * 0.505, yaw)
+    b.box(wx0, groundY + KH * 0.4, wz0, KH * 0.24, KH * 0.24, KH * 0.04, CREAM, yaw)
+    b.box(wx0, groundY + KH * 0.4, wz0, KH * 0.17, KH * 0.17, KH * 0.06, rgb('#a8cfe0'), yaw)
+    b.box(wx0, groundY + KH * 0.4, wz0, KH * 0.03, KH * 0.18, KH * 0.065, CREAM, yaw)
+    b.box(wx0, groundY + KH * 0.4, wz0, KH * 0.18, KH * 0.03, KH * 0.065, CREAM, yaw)
+    const [bx0, bz0] = rotOff(x, z, lx, KH * 0.535, yaw)
+    b.box(bx0, groundY + KH * 0.24, bz0, KH * 0.22, KH * 0.09, KH * 0.09, rgb('#8a6a48'), yaw)
+    const [p1x, p1z] = rotOff(x, z, lx - KH * 0.06, KH * 0.545, yaw)
+    b.box(
+      p1x,
+      groundY + KH * 0.3,
+      p1z,
+      KH * 0.08,
+      KH * 0.07,
+      KH * 0.07,
+      FLOWERS[variant % FLOWERS.length]!,
+      yaw,
+    )
+    const [p2x, p2z] = rotOff(x, z, lx + KH * 0.06, KH * 0.545, yaw)
+    b.box(
+      p2x,
+      groundY + KH * 0.3,
+      p2z,
+      KH * 0.08,
+      KH * 0.07,
+      KH * 0.07,
+      FLOWERS[(variant + 2) % FLOWERS.length]!,
+      yaw,
+    )
   }
 
   // ── 烟囱：奶白柱身 + 深色顶帽（随转向摆在屋脊旁） ──
-  const [cx0, cz0] = rotOff(x, z, 0.38, -0.3, yaw)
-  b.box(cx0, groundY + 1.06, cz0, 0.15, 0.36, 0.15, rgb('#e8e0d0'), yaw)
-  b.box(cx0, groundY + 1.26, cz0, 0.17, 0.05, 0.17, rgb('#6e6259'), yaw)
+  const [cx0, cz0] = rotOff(x, z, KH * 0.38, -KH * 0.3, yaw)
+  b.box(cx0, groundY + KH * 1.06, cz0, KH * 0.15, KH * 0.36, KH * 0.15, rgb('#e8e0d0'), yaw)
+  b.box(cx0, groundY + KH * 1.26, cz0, KH * 0.17, KH * 0.05, KH * 0.17, rgb('#6e6259'), yaw)
 }
 
 /** 水井：石筒 + 双柱 + 小坡顶，放在村心 */
 export function addWell(b: MeshBuilder, x: number, z: number, groundY: number): void {
-  b.cylinder(x, groundY, z, 0.26, 0.3, 0.32, 7, rgb('#9a9a92'))
-  b.cylinder(x, groundY + 0.32, z, 0.2, 0.2, 0.04, 7, rgb('#3e5a66'))
-  b.box(x - 0.26, groundY + 0.5, z, 0.07, 0.42, 0.07, WOOD_LIGHT)
-  b.box(x + 0.26, groundY + 0.5, z, 0.07, 0.42, 0.07, WOOD_LIGHT)
-  b.roof(x, groundY + 0.71, z, 0.62, 0.2, 0.5, ROOFS[0]!)
+  /** 放大到与 1.55 高的玩家相称：水井原先井台 0.32、顶棚 0.91，人比井棚还高 */
+  const KW = 1.6
+  b.cylinder(x, groundY, z, KW * 0.26, KW * 0.3, KW * 0.32, 7, rgb('#9a9a92'))
+  b.cylinder(x, groundY + KW * 0.32, z, KW * 0.2, KW * 0.2, KW * 0.04, 7, rgb('#3e5a66'))
+  b.box(x - KW * 0.26, groundY + KW * 0.5, z, KW * 0.07, KW * 0.42, KW * 0.07, WOOD_LIGHT)
+  b.box(x + KW * 0.26, groundY + KW * 0.5, z, KW * 0.07, KW * 0.42, KW * 0.07, WOOD_LIGHT)
+  b.roof(x, groundY + KW * 0.71, z, KW * 0.62, KW * 0.2, KW * 0.5, ROOFS[0]!)
 }
 
 /** 干草垛：一墩圆锥，村口的丰收感 */
@@ -632,18 +741,22 @@ export function addHaystack(
   variant: number,
 ): void {
   const yaw = variant * 0.9
-  b.cylinder(x, groundY, z, 0.3, 0.34, 0.08, 7, rgb('#c9a04e'))
-  b.cone(x, groundY + 0.06, z, 0.34, 0.5, 7, rgb('#dcb35c'), yaw)
+  /** 放大到与 1.55 高的玩家相称：草垛原先 0.56，比一捆干草还矮 */
+  const KY = 1.8
+  b.cylinder(x, groundY, z, KY * 0.3, KY * 0.34, KY * 0.08, 7, rgb('#c9a04e'))
+  b.cone(x, groundY + KY * 0.06, z, KY * 0.34, KY * 0.5, 7, rgb('#dcb35c'), yaw)
 }
 
 /** 围栏：双柱双横杆，rot 决定走向 */
 export function addFence(b: MeshBuilder, x: number, z: number, groundY: number, rot: number): void {
   const yaw = (rot * Math.PI) / 2
   const w = 0.8
-  b.box(x - w / 2, groundY + 0.18, z, 0.08, 0.36, 0.08, WOOD_LIGHT, yaw)
-  b.box(x + w / 2, groundY + 0.18, z, 0.08, 0.36, 0.08, WOOD_LIGHT, yaw)
-  b.box(x, groundY + 0.14, z, w + 0.1, 0.05, 0.05, WOOD_LIGHT, yaw)
-  b.box(x, groundY + 0.27, z, w + 0.1, 0.05, 0.05, WOOD_LIGHT, yaw)
+  /** 放大到与 1.55 高的玩家相称：篱笆原先只有 0.36 高 —— 在 1.55 的人旁边是脚踝高的绊线 */
+  const KF = 2.3
+  b.box(x - w / 2, groundY + KF * 0.18, z, KF * 0.08, KF * 0.36, KF * 0.08, WOOD_LIGHT, yaw)
+  b.box(x + w / 2, groundY + KF * 0.18, z, KF * 0.08, KF * 0.36, KF * 0.08, WOOD_LIGHT, yaw)
+  b.box(x, groundY + KF * 0.14, z, w + KF * 0.1, KF * 0.05, KF * 0.05, WOOD_LIGHT, yaw)
+  b.box(x, groundY + KF * 0.27, z, w + KF * 0.1, KF * 0.05, KF * 0.05, WOOD_LIGHT, yaw)
 }
 
 /** 田垄：一小方耕地 + 一排三簇作物。田里的 crop 全部 rot=0，垄线才会平行 */
@@ -681,19 +794,23 @@ export function addRock(
 /** 长椅：路边的歇脚处，NPC 交互的天然场景道具 */
 export function addBench(b: MeshBuilder, x: number, z: number, groundY: number, rot: number): void {
   const yaw = (rot * Math.PI) / 2
-  b.box(x - 0.26, groundY + 0.13, z, 0.07, 0.26, 0.24, WOOD_LIGHT, yaw)
-  b.box(x + 0.26, groundY + 0.13, z, 0.07, 0.26, 0.24, WOOD_LIGHT, yaw)
-  b.box(x, groundY + 0.27, z, 0.64, 0.05, 0.26, WOOD_LIGHT, yaw)
+  /** 放大到与 1.55 高的玩家相称：长椅座面原先 0.27，人坐上去等于蹲在地上 */
+  const KE = 1.7
+  b.box(x - KE * 0.26, groundY + KE * 0.13, z, KE * 0.07, KE * 0.26, KE * 0.24, WOOD_LIGHT, yaw)
+  b.box(x + KE * 0.26, groundY + KE * 0.13, z, KE * 0.07, KE * 0.26, KE * 0.24, WOOD_LIGHT, yaw)
+  b.box(x, groundY + KE * 0.27, z, KE * 0.64, KE * 0.05, KE * 0.26, WOOD_LIGHT, yaw)
   const [bx, bz] = rotOff(x, z, 0, -0.11, yaw)
-  b.box(bx, groundY + 0.4, bz, 0.64, 0.2, 0.05, WOOD_LIGHT, yaw)
+  b.box(bx, groundY + KE * 0.4, bz, KE * 0.64, KE * 0.2, KE * 0.05, WOOD_LIGHT, yaw)
 }
 
 /** 路灯：石座 + 木柱 + 暖光灯箱 + 小顶。unlit 管线里靠亮色读作「亮着」 */
 export function addLantern(b: MeshBuilder, x: number, z: number, groundY: number): void {
-  b.box(x, groundY + 0.04, z, 0.18, 0.08, 0.18, rgb('#9a9a92'))
-  b.box(x, groundY + 0.47, z, 0.07, 0.86, 0.07, rgb('#5e4a35'))
-  b.box(x, groundY + 0.96, z, 0.16, 0.16, 0.16, GLOW)
-  b.cone(x, groundY + 1.04, z, 0.14, 0.1, 4, rgb('#5f6b5a'))
+  /** 放大到与 1.55 高的玩家相称：路灯原先 1.14，比人还矮，灯头正好怼在脸上 */
+  const KL = 1.62
+  b.box(x, groundY + KL * 0.04, z, KL * 0.18, KL * 0.08, KL * 0.18, rgb('#9a9a92'))
+  b.box(x, groundY + KL * 0.47, z, KL * 0.07, KL * 0.86, KL * 0.07, rgb('#5e4a35'))
+  b.box(x, groundY + KL * 0.96, z, KL * 0.16, KL * 0.16, KL * 0.16, GLOW)
+  b.cone(x, groundY + KL * 1.04, z, KL * 0.14, KL * 0.1, 4, rgb('#5f6b5a'))
 }
 
 /** 指示牌：双板小牌，AI RPG 里给「去哪儿找谁」的方位感 */
@@ -704,9 +821,21 @@ export function addSignpost(
   groundY: number,
   variant: number,
 ): void {
-  b.box(x, groundY + 0.5, z, 0.07, 1.0, 0.07, WOOD_LIGHT)
-  b.box(x, groundY + 0.82, z, 0.44, 0.13, 0.05, rgb('#c9a877'), variant * 0.45)
-  b.box(x, groundY + 0.6, z, 0.34, 0.11, 0.05, rgb('#b8977a'), variant * 0.45 + 0.6)
+  /** 放大到与 1.55 高的玩家相称：指示牌原先 1.0，牌面在人胸口以下 */
+  const KS = 1.6
+  b.box(x, groundY + KS * 0.5, z, KS * 0.07, KS * 1.0, KS * 0.07, WOOD_LIGHT)
+  b.box(x, groundY + KS * 0.82, z, KS * 0.44, KS * 0.13, KS * 0.05, rgb('#c9a877'), variant * 0.45)
+  b.box(
+    x,
+    groundY + KS * 0.6,
+    z,
+    KS * 0.34,
+    KS * 0.11,
+    KS * 0.05,
+    rgb('#b8977a'),
+    // ⚠️ 这个 0.6 是**弧度**（第二块牌相对第一块转开的角度），不是尺寸，别乘 KS
+    variant * 0.45 + 0.6,
+  )
 }
 
 /** 草捆：方草垛两叠，谷仓与干草垛的搭档 */
@@ -718,8 +847,10 @@ export function addHaybale(
   variant: number,
 ): void {
   const yaw = variant * 0.8
-  b.box(x, groundY + 0.14, z, 0.42, 0.28, 0.3, rgb('#e3c26e'), yaw)
-  b.box(x, groundY + 0.37, z, 0.3, 0.2, 0.22, rgb('#d8b65e'), yaw + 0.35)
+  /** 放大到与 1.55 高的玩家相称：干草捆原先 0.47 */
+  const KZ = 1.6
+  b.box(x, groundY + KZ * 0.14, z, KZ * 0.42, KZ * 0.28, KZ * 0.3, rgb('#e3c26e'), yaw)
+  b.box(x, groundY + KZ * 0.37, z, KZ * 0.3, KZ * 0.2, KZ * 0.22, rgb('#d8b65e'), yaw + 0.35)
 }
 
 /** 稻草人：立在田中央的小小地标 */
@@ -731,10 +862,12 @@ export function addScarecrow(
   variant: number,
 ): void {
   const shirts = [rgb('#c94f4f'), rgb('#5f8fb0'), rgb('#c9a04e')]
-  b.box(x, groundY + 0.5, z, 0.06, 1.0, 0.06, rgb('#8a6a48'))
-  b.box(x, groundY + 0.72, z, 0.56, 0.05, 0.05, rgb('#8a6a48'))
-  b.box(x, groundY + 0.56, z, 0.3, 0.36, 0.18, shirts[variant % shirts.length]!)
-  b.sphere(x, groundY + 0.88, z, 0.11, rgb('#e8d5a0'), 0.9)
-  b.cylinder(x, groundY + 0.94, z, 0.16, 0.16, 0.03, 7, rgb('#e8c968'))
-  b.cylinder(x, groundY + 0.97, z, 0.09, 0.1, 0.08, 7, rgb('#e8c968'))
+  /** 放大到与 1.55 高的玩家相称：稻草人是**人形**，原先 1.0 只到人肩膀，一眼就不对 */
+  const KC = 1.5
+  b.box(x, groundY + KC * 0.5, z, KC * 0.06, KC * 1.0, KC * 0.06, rgb('#8a6a48'))
+  b.box(x, groundY + KC * 0.72, z, KC * 0.56, KC * 0.05, KC * 0.05, rgb('#8a6a48'))
+  b.box(x, groundY + KC * 0.56, z, KC * 0.3, KC * 0.36, KC * 0.18, shirts[variant % shirts.length]!)
+  b.sphere(x, groundY + KC * 0.88, z, KC * 0.11, rgb('#e8d5a0'), KC * 0.9)
+  b.cylinder(x, groundY + KC * 0.94, z, KC * 0.16, KC * 0.16, KC * 0.03, 7, rgb('#e8c968'))
+  b.cylinder(x, groundY + KC * 0.97, z, KC * 0.09, KC * 0.1, KC * 0.08, 7, rgb('#e8c968'))
 }

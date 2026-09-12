@@ -16,47 +16,77 @@ export interface RGB {
   b: number
 }
 
-/** '#rrggbb' → 0..1 分量 */
+const srgbToLinear = (c: number): number =>
+  c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+const linearToSrgb = (c: number): number =>
+  c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055
+
+/**
+ * '#rrggbb' → 0..1 的**线性**分量。
+ *
+ * ⚠️ 这里必须转换，而且这是整张地图「发灰发白」的总根源。
+ *
+ * 这些颜色最终是写进**顶点色**的，而 three 把顶点色当线性量，渲染完再统一
+ * 编码回 sRGB 输出。原先只做了 `/255`，等于把 sRGB 数值当线性用 ——
+ * 输出时被整体提亮一大截：`#4f9a45` 这样一个饱和中绿，实际显示出来是
+ * `#96cc8f`（惨白的抹茶色）。整张世界因此像蒙了一层雾，
+ * 而调色板里写的是什么颜色根本对不上眼睛看到的。
+ *
+ * 与 time.ts 里天色的处理完全同源，那边也踩过一次（见 SKY_KEYS 上方）。
+ */
 export function rgb(hex: string): RGB {
   const n = parseInt(hex.slice(1), 16)
   return {
-    r: ((n >> 16) & 0xff) / 255,
-    g: ((n >> 8) & 0xff) / 255,
-    b: (n & 0xff) / 255,
+    r: srgbToLinear(((n >> 16) & 0xff) / 255),
+    g: srgbToLinear(((n >> 8) & 0xff) / 255),
+    b: srgbToLinear((n & 0xff) / 255),
   }
 }
 
-/** 草地按台阶等级由深到浅 —— 越高越亮，梯田的层次全靠它 */
+/**
+ * 草地按台阶等级由深到浅 —— 越高越亮，梯田的层次全靠它。
+ *
+ * ⚠️ 这条色阶**刻意压窄**。原先是 #7eb468 → #beecad，跨度太大，高处的台阶
+ * 褪成接近白的浅绿，整张图看上去是「蒙了层雾的沙盘」而不是草地。参考图里
+ * 地面自始至终是饱和的中绿，层次只靠细微明度差来读。
+ */
 const GRASS_LEVEL_HEX = [
-  '#7eb468',
-  '#86bb70',
-  '#8ec279',
-  '#96c981',
-  '#9ed08a',
-  '#a6d793',
-  '#aede9b',
-  '#b6e5a4',
-  '#beecad',
+  '#4f9a45',
+  '#57a24b',
+  '#5faa52',
+  '#67b258',
+  '#6fba5f',
+  '#77c266',
+  '#7fca6c',
+  '#87d273',
+  '#8fda7a',
 ]
 
 export const TERRAIN = {
   grassLevels: GRASS_LEVEL_HEX.map(rgb),
   /** 地块侧面（土崖） */
-  dirt: rgb('#c8a06e'),
+  dirt: rgb('#cba372'),
   /** 水下海床（隔着水面看） */
-  waterBed: rgb('#b3a878'),
+  waterBed: rgb('#9e8f63'),
   /** 浅滩海床 */
-  shallowBed: rgb('#d0c493'),
-  sand: rgb('#e6d7a8'),
-  /** 村道 */
-  path: rgb('#d9c39a'),
+  shallowBed: rgb('#c8b784'),
+  sand: rgb('#e8d49c'),
+  /** 村道。参考图里是暖陶土砖，不是浅沙 —— 村子因此能从草地里跳出来 */
+  path: rgb('#cf9f6e'),
   /** 深水水面 */
-  waterDeep: rgb('#9fd4cf'),
+  waterDeep: rgb('#59c2c0'),
   /** 浅滩水面 */
-  waterShallow: rgb('#b8e4dd'),
+  waterShallow: rgb('#8adedb'),
 }
 
-/** 0..1 分量 → 'rgb(r,g,b)'，给 canvas 2D 用 */
+/**
+ * 0..1 线性分量 → 'rgb(r,g,b)'，给 canvas 2D 用。
+ *
+ * ⚠️ 必须转回 sRGB。canvas 2D 的 fillStyle 收的是 sRGB 数值，没有任何色彩管理；
+ * 直接把线性值乘 255 递过去，创建向导的缩略图会比进游戏后看到的地形暗一大截 ——
+ * 而那张图的全部价值就是「跟真的长一样」。
+ */
 export function cssOf(c: RGB): string {
-  return `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`
+  const b = (v: number): number => Math.round(Math.max(0, Math.min(1, linearToSrgb(v))) * 255)
+  return `rgb(${b(c.r)},${b(c.g)},${b(c.b)})`
 }
