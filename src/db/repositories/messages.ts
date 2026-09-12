@@ -9,6 +9,36 @@ import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
 import type { ChatMessage } from '@/types/chat'
 
+/** 只用到 openCursor 这一件事，结构化声明即可，免得把 idb 的泛型拖进签名 */
+type MsgStore = {
+  openCursor(range: IDBKeyRange, direction: 'prev'): Promise<{ key: IDBValidKey } | null>
+}
+
+/**
+ * 本次该从哪个号开始：`max(meta.nextSeq, 库里真实最大 seq + 1)`。
+ *
+ * ⚠️ 不能直接信 `meta.nextSeq`。写消息用的是 `put`（复合主键 `[chatId, seq]` 的
+ * **upsert**），号一旦发重，旧消息就被**静默覆盖** —— 不报错、条数不变、
+ * 新消息还插在会话中间，用户刷新之前根本看不出来。
+ *
+ * 而 nextSeq 倒退不需要任何畸形数据，走的就是应用自己宣传的那条路：
+ * 导入/同步是「同 id 覆盖」，确认页上明写着「其中 N 个会话本机已存在，将被覆盖」。
+ * 拿手机上一份**较旧**的同名会话推到电脑（本机 0..19 / nextSeq 20，
+ * 来的那份 0..9 / nextSeq 10），会话元数据被整个换成旧的，而本机 10..19 那些
+ * 消息行还留在库里 —— 之后每发一条就顶掉一条旧的，直到号追回 20。
+ *
+ * 这里在**同一个事务**里跟库核一次表，代价是一次 'prev' 游标（O(log n)），
+ * 换来的是「seq 只增不减」从注释里的约定变成真正的不变量。
+ */
+async function allocSeq(store: MsgStore, chatId: string, metaNext: number): Promise<number> {
+  const cur = await store.openCursor(chatRange(chatId), 'prev')
+  const k = cur?.key
+  const maxSeq = Array.isArray(k) ? k[1] : undefined
+  const safe = typeof maxSeq === 'number' && Number.isFinite(maxSeq) ? maxSeq + 1 : 0
+  const base = typeof metaNext === 'number' && Number.isFinite(metaNext) ? metaNext : 0
+  return Math.max(base, safe)
+}
+
 /** 追加一条：同一事务内从 ChatMeta.nextSeq 取号并自增，同时更新计数/时间 */
 export async function append(chatId: string, msg: Omit<ChatMessage, 'seq'>): Promise<ChatMessage> {
   const db = await getDb()
@@ -16,9 +46,11 @@ export async function append(chatId: string, msg: Omit<ChatMessage, 'seq'>): Pro
   const chats = tx.objectStore('chats')
   const meta = await chats.get(chatId)
   if (!meta) throw new Error(`会话 ${chatId} 不存在`)
-  const row: ChatMessage = { ...msg, seq: meta.nextSeq }
-  await tx.objectStore('messages').put(toPlain(row))
-  meta.nextSeq += 1
+  const store = tx.objectStore('messages')
+  const seq = await allocSeq(store, chatId, meta.nextSeq)
+  const row: ChatMessage = { ...msg, seq }
+  await store.put(toPlain(row))
+  meta.nextSeq = seq + 1
   meta.messageCount += 1
   meta.lastMessageAt = row.send_date
   meta.updatedAt = Date.now()
@@ -39,6 +71,7 @@ export async function appendMany(
   if (!meta) throw new Error(`会话 ${chatId} 不存在`)
   const store = tx.objectStore('messages')
   const out: ChatMessage[] = []
+  meta.nextSeq = await allocSeq(store, chatId, meta.nextSeq)
   for (const m of msgs) {
     const row: ChatMessage = { ...m, seq: meta.nextSeq }
     await store.put(toPlain(row))
@@ -188,6 +221,8 @@ export async function copyUpTo(
   const meta = await chats.get(dst)
   if (!meta) throw new Error(`会话 ${dst} 不存在`)
   const seqMap = new Map<number, number>()
+  // 分支目标会话同样要跟库核表 —— 它也可能是被导入覆盖过的
+  meta.nextSeq = await allocSeq(store, dst, meta.nextSeq)
   for (const r of rows) {
     const row: ChatMessage = { ...r, chatId: dst, seq: meta.nextSeq, id: crypto.randomUUID() }
     await store.put(toPlain(row))

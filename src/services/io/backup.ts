@@ -5,7 +5,7 @@
  * API Key（secrets）**刻意不导出**，避免用户把备份发给别人时泄漏密钥。
  */
 
-import { getDb } from '@/db/schema'
+import { chatRange, getDb } from '@/db/schema'
 import { toPlain } from '@/utils/plain'
 import { collectBlobRefs } from '@/db/repositories/blobs'
 
@@ -306,6 +306,39 @@ export async function applyBackup(
   await bulk('chats', allow.chats ? (file.chats ?? []).map(stripMemIndex) : [])
   await bulk('messages', allow.chats ? (file.messages ?? []) : [])
   await bulk('rpgworlds', allow.rpgworlds ? (file.rpgworlds ?? []) : [])
+
+  /**
+   * 导入是「同 id 覆盖」，被覆盖的会话元数据整包换成了对方那份，而**本机原有的
+   * 消息行还在库里**（导入只写不删）。于是 messageCount 与 nextSeq 描述的是
+   * 对方那份的规模，跟本地实际对不上。
+   *
+   * nextSeq 那一半有 messages 仓储的 allocSeq 兜底，不会再顶掉消息；
+   * 但 messageCount 没有任何人会去修 —— 侧栏会一直显示一个偏小的条数，
+   * 而且永远不会自己好。这里按库里**真实**情况重算一次。
+   */
+  if (allow.chats) {
+    for (const row of file.chats ?? []) {
+      const id = (row as { id?: unknown }).id
+      if (typeof id !== 'string' || !id) continue
+      try {
+        const meta = await db.get('chats', id)
+        if (!meta) continue
+        const range = chatRange(id)
+        const count = await db.count('messages', range)
+        const last = await db.transaction('messages').store.openCursor(range, 'prev')
+        const maxSeq = Array.isArray(last?.key) ? (last.key[1] as unknown) : undefined
+        const nextSeq =
+          typeof maxSeq === 'number' && Number.isFinite(maxSeq) ? maxSeq + 1 : meta.nextSeq
+        if (meta.messageCount === count && meta.nextSeq >= nextSeq) continue
+        meta.messageCount = count
+        // 只增不减 —— seq 复用会让游标与分页错乱（见 messages 仓储开头的说明）
+        meta.nextSeq = Math.max(meta.nextSeq, nextSeq)
+        await db.put('chats', toPlain(meta))
+      } catch (e) {
+        skip('chats', e)
+      }
+    }
+  }
 
   if (allow.settings && file.settings) {
     try {
