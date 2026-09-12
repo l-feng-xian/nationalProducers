@@ -123,11 +123,35 @@ export interface RpgChatBinding {
   npcName?: string
   npcDescription?: string
   /**
+   * situation 的写入时刻（现实毫秒）。
+   *
+   * situation 是「此刻」的快照：游戏里每轮生成前微秒级刷新，永远新鲜。但从
+   * **聊天页续聊、或按 ↻ 重新生成**走的根本不是 dialogue.ts —— 那条路直接读这份
+   * 持久化的值，而没有任何东西会去重写它。不设保质期的话，模型会在半天之后
+   * 仍被告知「对方此刻在村道上」，而那个人早就回家睡下了。宁可不带，不可带错。
+   */
+  situationAt?: number
+  /**
    * NPC 此刻的处境（在哪、在干什么）。每轮对话前由引擎按实时位置重写,
    * 与 worldDescription 拼进【场景】—— 让模型知道「你们是在哪、什么状态下
    * 碰上的」,而不是每次都当作初次见面
    */
   situation?: string
+}
+
+/**
+ * situation 的保质期（现实毫秒）。超过就当它不存在。
+ *
+ * 15 分钟：游戏里每轮对话都会重写它，所以在游戏里永远不会过期；只有「关掉游戏、
+ * 隔了一会儿从聊天页接着聊」才会撞上这条线 —— 而那正是它该失效的场景。
+ * 取得太短会让玩家刚退出游戏点 ↻ 就丢掉情境；太长则等于没加。
+ */
+export const SITUATION_TTL_MS = 15 * 60 * 1000
+
+/** binding 里的 situation 是否仍然新鲜。没有时间戳的旧数据一律当过期 */
+export function freshSituation(b: RpgChatBinding, now = Date.now()): string | undefined {
+  if (!b.situation || !b.situationAt) return undefined
+  return now - b.situationAt < SITUATION_TTL_MS ? b.situation : undefined
 }
 
 /** 向量索引的进度。换模型时整会话作废重建 */

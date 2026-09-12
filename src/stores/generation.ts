@@ -12,7 +12,7 @@ import { selectSpeakers } from '@/services/group/activation'
 import { cleanGroupMessage, groupStopStrings } from '@/services/group/cards'
 import { group_activation_strategy, type Group } from '@/types/group'
 import type { Character } from '@/types/character'
-import type { ChatMeta } from '@/types/chat'
+import { freshSituation, type ChatMeta } from '@/types/chat'
 import { synthNpcCard } from '@/types/rpg'
 import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
@@ -233,8 +233,9 @@ export const useGenerationStore = defineStore('generation', () => {
     const card = b.characterId ? chars.byId(b.characterId) : undefined
     return {
       persona: b.persona,
-      // 世界简介说「这是哪」,situation 说「此刻在哪、在干什么」—— 两行拼进同一个【场景】
-      scenarioPrefix: [b.worldDescription, b.situation].filter(Boolean).join('\n'),
+      // 世界简介说「这是哪」,situation 说「此刻在哪、在干什么」—— 两行拼进同一个【场景】。
+      // situation 过了保质期就整句丢掉：陈旧的位置比没有位置更糟
+      scenarioPrefix: [b.worldDescription, freshSituation(b)].filter(Boolean).join('\n'),
       speaker: card ?? synthNpcCard(b.npcId, b.npcName ?? '', b.npcDescription ?? '', b.worldName),
     }
   }

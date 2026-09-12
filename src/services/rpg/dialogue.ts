@@ -51,7 +51,9 @@ function bindingOf(world: RpgWorld, npc: RpgNpc, situation?: string): RpgChatBin
     ...(npc.characterId ? { characterId: npc.characterId } : {}),
     npcName: npc.name,
     npcDescription: npc.description,
-    ...(situation ? { situation } : {}),
+    // 时间戳与 situation 必须同生同死：只写一个的话，要么老时间戳给新 situation
+    // 背书（提前过期），要么新时间戳给老 situation 续命（永不过期）
+    ...(situation ? { situation, situationAt: Date.now() } : {}),
   }
 }
 

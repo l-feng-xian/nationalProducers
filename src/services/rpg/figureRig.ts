@@ -51,6 +51,12 @@ export interface FigureOptions {
   seed?: number
   /** 玩家固定造型：草帽 + 蓝背带裤 */
   player?: boolean
+  /**
+   * 共用的身体材质。颜色全在顶点里，材质之间本来就没有任何差别 ——
+   * 传进来一份的话，昼夜色调只要改这一处就能覆盖所有小人，
+   * 顺带还省掉每个 NPC 一次材质编译。不传则自建（独立使用时仍然能跑）。
+   */
+  material?: THREE_NS.MeshBasicMaterial
 }
 
 export function createFigureRig(opts: FigureOptions): CharacterRig {
@@ -77,7 +83,9 @@ export function createFigureRig(opts: FigureOptions): CharacterRig {
     strawHat = rnd() < 0.3 // 村里三成人也戴草帽
   }
 
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true })
+  // 自建的才由自己 dispose；共用的那份归 scene 管
+  const ownMat = opts.material === undefined
+  const mat = opts.material ?? new THREE.MeshBasicMaterial({ vertexColors: true })
   const geos: THREE_NS.BufferGeometry[] = []
   const part = (paint: (b: MeshBuilder) => void): THREE_NS.Mesh => {
     const b = new MeshBuilder()
@@ -208,7 +216,7 @@ export function createFigureRig(opts: FigureOptions): CharacterRig {
     dispose() {
       for (const g of geos) g.dispose()
       for (const m of extraMats) m.dispose()
-      mat.dispose()
+      if (ownMat) mat.dispose()
     },
   }
 }

@@ -48,6 +48,7 @@ import {
   type RGB,
 } from './blocks'
 import { BIOME, WATER_SURFACE_Y } from './noise'
+import { skyAt } from './time'
 
 /**
  * 每种道具的投影参数 [椭圆半径, 参考高度]。null = 太小不投影。
@@ -96,6 +97,8 @@ export interface SceneHandle {
   readonly yaw: number
   /** three 名字空间。three 是动态 import 的，外面建 rig 时拿不到，从这里取 */
   readonly THREE: typeof THREE_NS
+  /** 全部角色共用的身体材质。建 rig 时传进去，昼夜调色才能一处覆盖 */
+  readonly figureMaterial: THREE_NS.MeshBasicMaterial
   setPlayer(x: number, y: number): void
   /** 挂一个角色（玩家或 NPC）。重复挂是空操作 */
   addRig(rig: CharacterRig): void
@@ -103,6 +106,17 @@ export interface SceneHandle {
   /** 把某个 rig 立到格坐标 (x,y) 的地表上。rig 自己负责朝向 */
   placeRig(rig: CharacterRig, x: number, y: number): void
   resize(w: number, h: number): void
+  /**
+   * 按当天分钟调整天色。
+   *
+   * ⚠️ 做法是给材质的 `color` 乘子赋值 —— basic 材质的片元就是
+   * `diffuse × vColor`，一行 setRGB 就给**烘焙进顶点色**的整张地图整体调色，
+   * **零几何改动、零重建**，WebGPU 与 WebGL 两个后端语义一致。
+   * 不用雾（正交相机下会把地图前后切成一条带）、不用全屏覆盖面（多一次全屏
+   * draw 且要和云影排队）、不换 NodeMaterial（地形材质本来就会被内部转成
+   * NodeMaterial，自己写一份只是把一行赋值换成一套节点图）。
+   */
+  setTimeOfDay(minuteOfDay: number): void
   render(): void
   dispose(): void
   /**
@@ -203,10 +217,15 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   }
   const { createWaterMaterial, createFoamMaterial } = await import('./water.tsl')
   const { createCloudShadowMaterial } = await import('./clouds.tsl')
-  const { createNoiseOrigin } = await import('./frame.tsl')
+  const { createNoiseOrigin, createDayTint, createSunAmount } = await import('./frame.tsl')
   // 水面、泡沫、云影共用一个噪声原点：跨接缝那一帧三者必须同步补偿，
   // 否则补了的那层和没补的那层在同一帧里对不上，比不补还刺眼
   const noiseOrigin = createNoiseOrigin()
+  // 昼夜乘子。地形/道具/小人是 basic 材质，改 material.color 就够了；
+  // 水面与泡沫是 TSL 图，没有 diffuse 可改，只能靠这个 uniform 一起压暗
+  const dayTint = createDayTint()
+  /** 日光强度 0..1。云影与贴地投影一起按它淡出 */
+  const sunAmount = createSunAmount()
 
   const canvas = document.createElement('canvas')
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block'
@@ -222,7 +241,13 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   await renderer.init()
 
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color(BACKGROUND)
+  const bg = new THREE.Color(BACKGROUND)
+  scene.background = bg
+  /**
+   * 所有小人共用的身体材质。颜色全在顶点里，材质之间本来就没差别 ——
+   * 共用一份，昼夜色调改这一处就覆盖全部角色，顺带省掉每个 NPC 一次材质编译。
+   */
+  const figureMat = new THREE.MeshBasicMaterial({ vertexColors: true })
 
   // 正交相机：视野以「格」为单位，resize 时按像素比例重算
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400)
@@ -235,8 +260,9 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     color: TERRAIN.waterDeep,
     alpha: WATER_ALPHA,
     origin: noiseOrigin,
+    tint: dayTint,
   })
-  const foamMat = createFoamMaterial(noiseOrigin)
+  const foamMat = createFoamMaterial(noiseOrigin, dayTint)
   // 道具/角色的贴地投影：统一半透明暗色,不写深度
   const shadowMat = new THREE.MeshBasicMaterial({
     color: 0x243038,
@@ -414,7 +440,7 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   // ── 云层阴影：高空覆盖面，最后绘制，压暗下方一切 ──
   // 平面要比世界大一圈：斜视相机下，画面顶部对应的云面位置比地面视野
   // 更「靠相机」约 30/tan(pitch)≈47 格，玩家贴世界边缘时也得盖满
-  const cloudMat = createCloudShadowMaterial(noiseOrigin)
+  const cloudMat = createCloudShadowMaterial(noiseOrigin, sunAmount)
   const cloudGeo = new THREE.PlaneGeometry(W + 160, H + 160)
   const clouds = new THREE.Mesh(cloudGeo, cloudMat)
   clouds.rotation.x = -Math.PI / 2
@@ -544,6 +570,7 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
   return {
     canvas,
     THREE,
+    figureMaterial: figureMat,
     yaw,
     addRig,
     removeRig,
@@ -553,6 +580,19 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     backend: renderer.backend && 'isWebGPUBackend' in renderer.backend ? 'webgpu' : 'webgl',
     setPlayer,
     resize,
+    setTimeOfDay(minuteOfDay: number) {
+      const s = skyAt(minuteOfDay)
+      // 地形、道具与所有小人共用同一档乘子 —— 分开调会出现「地暗了人还亮着」
+      terrainMat.color.setRGB(s.tint.r, s.tint.g, s.tint.b)
+      figureMat.color.setRGB(s.tint.r, s.tint.g, s.tint.b)
+      // 水面与泡沫走 uniform（TSL 图里没有 diffuse 可乘）。
+      // ⚠️ 必须与上面两行同值：分开调会出现「地暗了湖还亮着」
+      dayTint.value.setRGB(s.tint.r, s.tint.g, s.tint.b)
+      // 没有太阳就没有影子 —— 贴地投影与云影走同一个数
+      shadowMat.opacity = 0.25 * s.sun
+      sunAmount.value = s.sun
+      bg.setRGB(s.sky.r, s.sky.g, s.sky.b)
+    },
     render: () => renderer.render(scene, camera),
     debugSnapshot: () => ({
       originX: noiseOrigin.value.x,

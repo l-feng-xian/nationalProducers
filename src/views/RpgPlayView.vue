@@ -20,6 +20,7 @@ import { createWorld, worldParamsOf } from '@/services/rpg/world'
 import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { resolveNpc, type RpgNpc } from '@/types/rpg'
+import { TALK_MINUTES, formatClock } from '@/services/rpg/time'
 
 defineOptions({ name: 'RpgPlayView' })
 
@@ -36,10 +37,14 @@ const booting = ref(true)
 const bootError = ref('')
 const backend = ref('')
 const nearName = ref('')
+const clockText = ref('')
 const editorOpen = ref(false)
 
 /** 玩家位置每帧都在变，但只有跨格时才值得落盘 —— 否则一秒写几十次 IDB */
 let lastSavedTile = ''
+/** 世界时刻的兜底落盘间隔（游戏分钟）。见 onTick 里的说明 */
+const CLOCK_SAVE_MINUTES = 30
+let lastSavedMinutes = 0
 
 onMounted(async () => {
   const id = route.params['id']
@@ -64,12 +69,16 @@ onMounted(async () => {
       world,
       host: el,
       npcs: w.npcs,
+      clock0: w.worldMinutes,
+      timeScale: w.timeScale,
       ...(w.playerX >= 0 ? { start: { x: w.playerX, y: w.playerY } } : {}),
       // ?webgl=1 强制走 WebGL 后端。这个入参一直都在，只是从没接到视图层 ——
       // 于是移动端唯一会走的那条回退路径至今**没法验**
       ...(new URLSearchParams(location.search).get('webgl') === '1' ? { forceWebGL: true } : {}),
     })
     engine.value = eng
+    // 以存档里的时刻为基准起算，否则一进游戏就先白写一次
+    lastSavedMinutes = w.worldMinutes
     // 验收脚本要停掉 rAF 自己驱动 setPlayer/render，才能无竞态地断言接缝
     if (import.meta.env.DEV) (globalThis as Record<string, unknown>)['__rpg'] = eng
     backend.value = eng.scene.backend
@@ -105,12 +114,27 @@ function onTick() {
     w.playerX = p.x
     w.playerY = p.y
   }
+  const c = eng.clock()
+  w.worldMinutes = c.total
+  clockText.value = formatClock(c)
+  // 时刻主要搭既有落盘的顺风车（跨格 / 关对话 / 离开页面）。但只靠顺风车不行：
+  // 站着不动看风景半小时再关掉标签页，onBeforeUnmount 在硬刷新/关页时并不保证
+  // 跑得到，下次进来世界时间就**倒流**回上一次存档。所以再补一道粗粒度的兜底，
+  // 把损失封顶在 CLOCK_SAVE_MINUTES 内。默认流速下这是每 30 秒一次写，
+  // 相比 NPC 漫游那 3 秒一次的节流可以忽略
+  if (c.total - lastSavedMinutes >= CLOCK_SAVE_MINUTES) {
+    lastSavedMinutes = c.total
+    if (!rpg.pending) void rpg.save()
+  }
 
   // 靠近时按交互键
   if (eng.input.consumeInteract() && near && !rpg.talkingTo) openTalk(near)
 }
 
 function openTalk(npc: RpgNpc) {
+  // 对话期间冻结时钟：模型花的是现实时间，故事里你们只是交换了几句话。
+  // 照现实走的话一次对话等于游戏里五小时，提示词里刚说的时段当场作废
+  engine.value?.setClockPaused(true)
   rpg.openDialogue(npc)
   // 对话期间不让角色继续走：输入焦点在文本框里，但摇杆还可能被碰到
   engine.value?.input.setStick(0, 0)
@@ -128,6 +152,7 @@ function openTalk(npc: RpgNpc) {
  */
 function closeTalk() {
   if (rpg.pending) stopTalking()
+  engine.value?.setClockPaused(false)
   rpg.closeDialogue()
   void rpg.save()
 }
@@ -161,6 +186,8 @@ async function send(text: string) {
     }
   } finally {
     rpg.pending = false
+    // 说完一句定额推进 —— 时钟虽然冻着，故事总得往前走一点
+    engine.value?.addClockMinutes(TALK_MINUTES)
     // chatId 可能是这次才建的，存档要跟上
     void rpg.save()
   }
@@ -210,6 +237,7 @@ onBeforeUnmount(() => {
   <div class="page">
     <AppTopbar :title="rpg.current?.name ?? '世界'">
       <template #actions>
+        <span v-if="clockText" class="chip">{{ clockText }}</span>
         <span v-if="backend" class="chip">{{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}</span>
         <!-- 窄屏放不下全称：390px 下两颗全称按钮会把标题挤成一条缝 -->
         <button class="cbx-btn cbx-btn--ghost sm" @click="placeNpc">

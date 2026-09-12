@@ -10,6 +10,15 @@
 
 import type { World } from './world'
 import { findSpawn, findStandSpot, wrapDelta } from './world'
+import { autoRoutine, fallbackRoutine, slotIndexAt } from './routine'
+import {
+  DEFAULT_TIME_SCALE,
+  MINUTES_PER_DAY,
+  clockOf,
+  phaseLabel,
+  phaseOf,
+  type WorldClock,
+} from './time'
 import type { CharacterRig } from './rig'
 import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
@@ -21,6 +30,8 @@ import { fnv1a } from '@/services/hash'
 const SPEED = 5.2
 /** NPC 漫游速度。明显慢于玩家 —— 村民散步,不是赶路 */
 const NPC_SPEED = 1.6
+/** 通勤速度。赶路是有目的的,散步不是;也免得一段通勤吃掉整个时段 */
+const NPC_TRAVEL_SPEED = 2.2
 /** NPC 的落点判定半径(格),比玩家略小,贴着树走不至于卡死 */
 const NPC_RADIUS = 0.2
 /**
@@ -52,6 +63,12 @@ export interface EngineHandle {
   findNpcSpot(x: number, y: number): { x: number; y: number } | null
   /** NPC 此刻的处境一句话（在哪、在干什么），拼进对话提示词的【场景】 */
   npcStateText(id: string): string
+  /** 当前世界时刻 */
+  clock(): WorldClock
+  /** 对话期间冻结时钟 —— 见 time.ts 的 TALK_MINUTES */
+  setClockPaused(v: boolean): void
+  /** 说完一句话后定额推进 */
+  addClockMinutes(n: number): void
   /** 任一 NPC 跨过格边界时回调（store 侧节流落盘用） */
   onNpcMoved?: (() => void) | undefined
   start(): void
@@ -69,6 +86,10 @@ export interface CreateEngineArgs {
   forceWebGL?: boolean
   /** 世界里的 NPC。位置是格坐标 */
   npcs?: RpgNpc[]
+  /** 起始世界时刻（总游戏分钟）。存档续上用 */
+  clock0?: number
+  /** 时间流速。0 = 冻结 */
+  timeScale?: number
 }
 
 export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle> {
@@ -83,7 +104,11 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   let isMoving = false
 
   // 玩家固定草帽农夫造型；NPC 按 id 哈希取配色
-  const player: CharacterRig = createFigureRig({ THREE: scene.THREE, player: true })
+  const player: CharacterRig = createFigureRig({
+    THREE: scene.THREE,
+    player: true,
+    material: scene.figureMaterial,
+  })
   scene.addRig(player)
 
   // ── NPC ──
@@ -97,23 +122,63 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     hx: number
     hy: number
     roam: number
-    phase: 'idle' | 'walk'
+    /**
+     * travel = 正在赶去当前时段的 POI。
+     *
+     * 作息刻意**不新增一套状态机**：把当前时段的 POI 直接设成锚点 (hx,hy)，
+     * 「在这点附近走走停停」就白捡了原有的 idle↔walk。真正需要新增的只有
+     * 换段那一刻的长距离位移 —— 而那恰恰是硬拴绳会把人**瞬移**拽回去的地方。
+     */
+    phase: 'idle' | 'walk' | 'travel'
     /** idle 剩余秒数 / walk 的目标点 */
     t: number
     tx: number
     ty: number
+    /** 当前生效的作息段。只在游戏分钟变化时才重算，不是每帧 */
+    slot: number
+    /** 连续多少次检查都没靠近目标 —— 卡死阶梯用 */
+    stuck: number
+    /** 上次测距时离目标多远，配合 stuck 判定「有没有进展」 */
+    lastD: number
+    /** 绕行点；非 null 时先去它，到了再续原目标 */
+    detour: { x: number; y: number } | null
+    /** 这一段没能走到 POI（卡死阶梯的最后一级）。只影响提示词措辞 */
+    stranded: boolean
   }
   const npcRigs = new Map<string, CharacterRig>()
   const npcRt = new Map<string, NpcRt>()
   let npcs: RpgNpc[] = args.npcs ?? []
   let near: RpgNpc | null = null
 
+  // ── 世界时钟 ──
+  let clockTotal = args.clock0 ?? 480
+  const timeScale = args.timeScale ?? DEFAULT_TIME_SCALE
+  let clockPaused = false
+  /** 上一帧结束时的整分钟。跨帧记住，见 tick 里的说明 */
+  let lastMinute = Math.floor(clockTotal)
+
   const W = world.params.width
   const H = world.params.height
 
-  /** 能站人：陆地且没有实体道具 */
-  const canStand = (x: number, y: number): boolean =>
-    world.walkableAt(x, y) && !world.blockedAt(x, y)
+  /**
+   * 能站人：陆地且没有实体道具。
+   *
+   * ⚠️ **按格记忆化**。引擎只问整数格，而世界是确定且静态的，所以这份缓存是
+   * **精确**的、不是近似。不缓存的话每次调用要重算 biome/湿度/台阶三个 fBm ——
+   * 每个移动中的 NPC 每帧至少问两次，20 个 NPC @60fps 就是每秒七万次噪声取样。
+   * 作息会让 NPC 走得更多，所以这不是镀金，是必要的。
+   */
+  const standCache = new Map<number, boolean>()
+  const canStand = (x: number, y: number): boolean => {
+    const gx = ((Math.floor(x) % W) + W) % W
+    const gy = ((Math.floor(y) % H) + H) % H
+    const key = gy * W + gx
+    const hit = standCache.get(key)
+    if (hit !== undefined) return hit
+    const v = world.walkableAt(x, y) && !world.blockedAt(x, y)
+    standCache.set(key, v)
+    return v
+  }
 
   /** 环面距离（格） */
   const torusDist = (ax: number, ay: number, bx: number, by: number): number =>
@@ -155,6 +220,12 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       n.homeY = Math.floor(fy)
     }
     if (n.roamR === undefined) n.roamR = 3 + (fnv1a(n.id) % 4)
+    // 作息与 homeX/homeY 同一套路：惰性推导一次并写回，随既有节流落盘。
+    // 之后算法再怎么调，这个 NPC 的家也不会悄悄搬走
+    if (!n.routine) {
+      const anchor = { x: n.homeX, y: n.homeY }
+      n.routine = autoRoutine(world, n, anchor) ?? fallbackRoutine(world, anchor)
+    }
     rt = {
       x: fx,
       y: fy,
@@ -165,13 +236,50 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       t: 1 + Math.random() * 3,
       tx: fx,
       ty: fy,
+      slot: -1, // -1 = 还没定过，首帧必然触发一次换段
+      stuck: 0,
+      lastD: Infinity,
+      detour: null,
+      stranded: false,
     }
     npcRt.set(n.id, rt)
     return rt
   }
 
+  /**
+   * 换段：把当前时段的 POI 设成锚点，并让 NPC 走过去。
+   *
+   * ⚠️ travel 期间**挂起拴绳** —— 拴绳的意义是「别走丢」，而通勤时目的地本身
+   * 就是绳子。不挂起的话第一帧就被拽回去，人永远到不了田里。
+   */
+  function enterSlot(n: RpgNpc, rt: NpcRt, minuteOfDay: number): void {
+    const routine = n.routine
+    if (!routine) return
+    const idx = slotIndexAt(routine, minuteOfDay)
+    if (idx === rt.slot) return
+    rt.slot = idx
+    const poi = routine.pois[idx]
+    if (!poi) return
+    rt.hx = poi.x + 0.5
+    rt.hy = poi.y + 0.5
+    rt.roam = poi.r ?? 2
+    rt.detour = null
+    rt.stuck = 0
+    rt.lastD = Infinity
+    rt.stranded = false
+    // 已经在目的地附近就不必专程走一趟
+    if (torusDist(rt.x, rt.y, rt.hx, rt.hy) <= rt.roam) return
+    rt.tx = rt.hx
+    rt.ty = rt.hy
+    rt.phase = 'travel'
+  }
+
   function makeNpcRig(npc: RpgNpc): CharacterRig {
-    return createFigureRig({ THREE: scene.THREE, seed: fnv1a(npc.id) })
+    return createFigureRig({
+      THREE: scene.THREE,
+      seed: fnv1a(npc.id),
+      material: scene.figureMaterial,
+    })
   }
 
   function syncNpcs(): void {
@@ -199,6 +307,10 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   // 首次摆放会永久停在错误的镜像上
   scene.setPlayer(px, py)
   syncNpcs()
+  // 天色要在**第一帧之前**就定好。只在 minuteChanged 时刷新的话，存档记着
+  // 深夜 23:00 进游戏会先亮一下白天再暗下去；timeScale=0（冻结）的世界
+  // 更是永远停在白天
+  scene.setTimeOfDay(Math.floor(clockTotal) % MINUTES_PER_DAY)
 
   // 窗口/容器尺寸变化要跟着走，否则转屏后画面被拉伸
   const ro = new ResizeObserver(() => scene.resize(host.clientWidth, host.clientHeight))
@@ -234,12 +346,41 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       syncNpcs()
     },
     findNpcSpot,
+    /**
+     * NPC 此刻的处境一句话。
+     *
+     * ⚠️ **不带自己的【】标签** —— 外层 builder 会把整块包进【场景】，
+     * 自带一个就成了标签套标签。
+     *
+     * ⚠️ 地点永远报**实际所在**，不是意图。走不到目的地时（卡死阶梯的最后一级）
+     * 说的是「在森林里，正要去田里干活」—— 诚实，而且比假装它已经到了更有戏。
+     */
     npcStateText(id: string): string {
       const rt = npcRt.get(id)
       if (!rt) return ''
+      const n = npcs.find((x) => x.id === id)
+      const c = clockOf(clockTotal)
+      const hh = String(Math.floor(c.minuteOfDay / 60)).padStart(2, '0')
+      const mm = String(c.minuteOfDay % 60).padStart(2, '0')
+      const when = `${phaseLabel(phaseOf(c.minuteOfDay))} ${hh}:${mm}`
       const area = world.describeArea(rt.x, rt.y)
-      const act = rt.phase === 'walk' ? '正在附近踱步' : '正站在原地歇脚'
-      return `【当前情形】对方此刻在${area},${act},你走上前与它交谈。`
+      const poi = n?.routine?.pois[rt.slot]
+      let act: string
+      if (rt.phase === 'travel' && poi) act = `正赶去${poi.label}`
+      // 没走到就照实说「正要去」。地点报的是实际所在，于是整句读作
+      //「在谷仓边，正要去田里照看庄稼」—— 诚实，而且比假装它已经到了更有戏
+      else if (rt.stranded && poi) act = `本想去${poi.label}${poi.act}，一时没能过去`
+      else if (rt.phase === 'walk') act = '正在附近踱步'
+      else if (poi && phaseOf(c.minuteOfDay) === 'lateNight' && rt.slot === 0) act = '已经歇下'
+      else act = poi ? `正${poi.act}` : '正站在原地歇脚'
+      return `此刻是${when}，对方在${area}，${act}。你走上前与它搭话。`
+    },
+    clock: () => clockOf(clockTotal),
+    setClockPaused(v: boolean) {
+      clockPaused = v
+    },
+    addClockMinutes(n: number) {
+      clockTotal += n
     },
     start() {
       if (running) return
@@ -274,6 +415,21 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     const dt = Math.min((now - last) / 1000, MAX_DT)
     last = now
 
+    // 时钟跟着 dt 走，不反推墙钟 —— dt 已被 MAX_DT 夹住，所以切走标签页再回来
+    // **不会快进**，世界在你不看的时候就该是停着的（见 time.ts 的说明）。
+    // 对话期间冻结：模型花的是现实时间，故事里你们只是交换了几句话
+    //
+    // ⚠️ 「上一分钟」必须**跨帧记住**，不能在本帧开头现读 clockTotal。
+    // addClockMinutes（每说完一句推进 5 分钟）是在两帧**之间**改的值，
+    // 现读的话那 5 分钟已经算进 prevMinute 里，minuteChanged 恒为 false ——
+    // 换段与天色都收不到这次跳变。timeScale=0 的世界里这就是永久的。
+    if (!clockPaused) clockTotal += dt * timeScale
+    const clockMinuteOfDay = Math.floor(clockTotal) % MINUTES_PER_DAY
+    const minuteChanged = Math.floor(clockTotal) !== lastMinute
+    lastMinute = Math.floor(clockTotal)
+    // 天色也是每游戏分钟更新一次，不是每帧
+    if (minuteChanged) scene.setTimeOfDay(clockMinuteOfDay)
+
     const dir = input.direction()
     isMoving = dir.active
     if (dir.active) {
@@ -298,9 +454,16 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       const rig = npcRigs.get(n.id)
       const rt = npcRt.get(n.id)
       if (!rig || !rt) continue
+      // 换段只在游戏分钟跳变时算一次，不是每帧。
+      // `slot < 0` 是首次挂载：不补这一条的话 timeScale=0（文档写明「冻结」）
+      // 的世界永远等不到 minuteChanged，NPC 一辈子拿不到 POI，
+      // 提示词里人人都「站在原地歇脚」
+      if (minuteChanged || rt.slot < 0) enterSlot(n, rt, clockMinuteOfDay)
       const frozen = torusDist(rt.x, rt.y, px, py) < NPC_REACH
       if (frozen) {
-        rt.phase = 'idle'
+        // ⚠️ 这里**不能动 rt.phase**。原先无条件置成 idle，加上 travel 之后
+        // 就意味着：玩家从一个正在赶路的 NPC 身边走过，它会**永久忘记自己在
+        // 赶路**，卡在半路直到下一次换段。只冻住运动，不改它的意图
         rt.t = 1.5 + Math.random() * 2 // 玩家走开后缓一缓再动
         // ⚠️ 朝向也要走环面最短位移：接缝对面一格的 NPC，裸差值会是 255，
         // 它会转身朝**反方向**看一个隔着大半个世界的你
@@ -326,21 +489,43 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         }
         rig.play('idle')
       } else {
-        // 轴分离试探（与玩家同一套手感：贴墙会滑行）;撞墙的分量直接放弃
-        const step = Math.min(NPC_SPEED * dt, 0.2)
-        const mdx = rt.tx - rt.x
-        const mdy = rt.ty - rt.y
+        const travelling = rt.phase === 'travel'
+        // 通勤时的目标可能是绕行点
+        const goalX = travelling && rt.detour ? rt.detour.x : rt.tx
+        const goalY = travelling && rt.detour ? rt.detour.y : rt.ty
+        // 轴分离试探（与玩家同一套手感：贴墙会滑行）
+        const step = Math.min((travelling ? NPC_TRAVEL_SPEED : NPC_SPEED) * dt, 0.2)
+        // ⚠️ 必须是**环面**位移。裸差值会让接缝对面的目标看起来在 251 格之外，
+        // NPC 于是朝反方向绕大半个世界走 —— 而卡死阶梯量的是环面距离，
+        // 看到它「越走越远」，3 秒后就地放弃。表现为「农夫永远到不了自家田里」，
+        // 而那块田其实只有 12 步。
+        const mdx = wrapDelta(goalX - rt.x, W)
+        const mdy = wrapDelta(goalY - rt.y, H)
         const mx = Math.abs(mdx) < 0.03 ? 0 : Math.sign(mdx) * Math.min(step, Math.abs(mdx))
         const my = Math.abs(mdy) < 0.03 ? 0 : Math.sign(mdy) * Math.min(step, Math.abs(mdy))
         if (mx !== 0) {
           if (canStand(rt.x + mx + Math.sign(mx) * NPC_RADIUS, rt.y)) rt.x += mx
-          else rt.tx = rt.x
+          // ⚠️ 漫游时撞墙就放弃这个分量（rt.tx = rt.x），但**通勤时不能放弃** ——
+          // 那等于取消通勤。保留目标，让另一个轴带着滑过去
+          else if (!travelling) rt.tx = rt.x
         }
         if (my !== 0) {
           if (canStand(rt.x, rt.y + my + Math.sign(my) * NPC_RADIUS)) rt.y += my
-          else rt.ty = rt.y
+          else if (!travelling) rt.ty = rt.y
         }
-        if (Math.abs(rt.tx - rt.x) <= 0.05 && Math.abs(rt.ty - rt.y) <= 0.05) {
+        // 走过接缝就回绕，坐标始终留在 [0,W)×[0,H)
+        rt.x = ((rt.x % W) + W) % W
+        rt.y = ((rt.y % H) + H) % H
+
+        const reached =
+          Math.abs(wrapDelta(goalX - rt.x, W)) <= 0.05 &&
+          Math.abs(wrapDelta(goalY - rt.y, H)) <= 0.05
+        if (reached && travelling && rt.detour) {
+          // 到了绕行点，续原目标
+          rt.detour = null
+          rt.stuck = 0
+          rt.lastD = Infinity
+        } else if (reached) {
           rt.phase = 'idle'
           rt.t = 2 + Math.random() * 4
           rig.play('idle')
@@ -348,23 +533,70 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
           rig.setFacing(mx || mdx, my || mdy)
           rig.play('walk')
         }
-        // 硬拴绳:无论怎么撞怎么滑,绝不离开锚点半径(+半格容差)
-        const ddx = rt.x - rt.hx
-        const ddy = rt.y - rt.hy
-        const dd = Math.hypot(ddx, ddy)
-        if (dd > rt.roam + 0.5) {
-          const k = (rt.roam + 0.5) / dd
-          rt.x = rt.hx + ddx * k
-          rt.y = rt.hy + ddy * k
-          rt.phase = 'idle'
-          rt.t = 1
+
+        if (travelling) {
+          // 卡死阶梯：每 0.75s 量一次到目标的距离，没进展就插一个垂直绕行点；
+          // 再不行就**体面放弃** —— 绝不瞬移
+          rt.t -= dt
+          if (rt.t <= 0) {
+            rt.t = 0.75
+            const d = torusDist(rt.x, rt.y, rt.tx, rt.ty)
+            if (rt.lastD - d < 0.05) rt.stuck++
+            else rt.stuck = 0
+            rt.lastD = d
+            if (rt.stuck === 1 && !rt.detour) {
+              // 朝目标方向的法向偏 2.5 格。左右由 id 哈希定：确定性，
+              // 而且全村不会同时朝一边闪
+              const ux = wrapDelta(rt.tx - rt.x, W)
+              const uy = wrapDelta(rt.ty - rt.y, H)
+              const len = Math.hypot(ux, uy) || 1
+              const side = fnv1a(n.id) & 1 ? 1 : -1
+              const cand = {
+                x: rt.x + (-uy / len) * 2.5 * side,
+                y: rt.y + (ux / len) * 2.5 * side,
+              }
+              if (canStand(cand.x, cand.y)) rt.detour = cand
+            } else if (rt.stuck >= 4) {
+              // 走不到就把锚点改成当前位置，转 idle。
+              // npcStateText 会照实说它在哪，作息只负责解释「为什么要去」
+              rt.hx = rt.x
+              rt.hy = rt.y
+              rt.phase = 'idle'
+              rt.t = 2 + Math.random() * 3
+              rt.stuck = 0
+              // ⚠️ 必须记下「没走到」。不记的话 npcStateText 会回到「正在
+              // 照看庄稼」那一支 —— 人站在谷仓边，提示词却说它在田里干活，
+              // 等于拿假情境喂模型。放弃可以，撒谎不行
+              rt.stranded = true
+            }
+          }
+        } else {
+          // 硬拴绳:无论怎么撞怎么滑,绝不离开锚点半径(+半格容差)。
+          // ⚠️ 只在漫游时生效 —— 通勤时的目的地本身就是绳子
+          //
+          // ⚠️ 必须走环面位移。裸差值在接缝两侧会算出 ~W 的假距离,拴绳当场判定
+          // 「跑太远」并把人**拽过大半个世界** —— 正是本模块一再拒绝的瞬移。
+          // 作息把这条从「几乎撞不上」变成「随时可能」:POI 是按地标找的,
+          // 完全可能落在锚点的接缝对面。
+          const ddx = wrapDelta(rt.x - rt.hx, W)
+          const ddy = wrapDelta(rt.y - rt.hy, H)
+          const dd = Math.hypot(ddx, ddy)
+          if (dd > rt.roam + 0.5) {
+            const k = (rt.roam + 0.5) / dd
+            rt.x = (((rt.hx + ddx * k) % W) + W) % W
+            rt.y = (((rt.hy + ddy * k) % H) + H) % H
+            rt.phase = 'idle'
+            rt.t = 1
+          }
         }
       }
       rig.update(dt)
       scene.placeRig(rig, rt.x, rt.y)
-      // 跨格才写回落盘对象 —— nearestNpc/编辑器读的都是格坐标
-      const tileX = Math.floor(rt.x)
-      const tileY = Math.floor(rt.y)
+      // 跨格才写回落盘对象 —— nearestNpc/编辑器读的都是格坐标。
+      // 取模：漫游/绕行的目标点算在锚点周围,可能落到 [0,W) 之外,
+      // 直接 floor 会把 -1 这种坐标存进档
+      const tileX = Math.floor(((rt.x % W) + W) % W)
+      const tileY = Math.floor(((rt.y % H) + H) % H)
       if (tileX !== n.x || tileY !== n.y) {
         n.x = tileX
         n.y = tileY

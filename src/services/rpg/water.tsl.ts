@@ -48,7 +48,7 @@ import {
   vec4,
 } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
-import type { NoiseOrigin } from './frame.tsl'
+import type { DayTint, NoiseOrigin } from './frame.tsl'
 
 /** 顶点阶段的连续坐标：建构时绝对坐标 + 本块的平移 + 噪声原点 */
 function vertexXZ(origin: NoiseOrigin) {
@@ -87,6 +87,11 @@ export interface WaterMaterialArgs {
   alpha: number
   /** 跨接缝那一帧的整体瞬移补偿，见 frame.tsl.ts */
   origin: NoiseOrigin
+  /**
+   * 昼夜色调乘子。地形靠 `material.color` 调色，水面这条路上没有 diffuse
+   * 可改，只能自己乘一次 —— 不乘的话入夜后整片湖惨白发亮
+   */
+  tint: DayTint
 }
 
 export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMaterial {
@@ -112,7 +117,8 @@ export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMater
     // 闪光点：波纹加权和的高位窄区间才点亮，随波生灭
     const glint = smoothstep(0.72, 0.9, ripple)
     const br = ripple.mul(0.22).add(0.87)
-    const col = base.mul(br).add(glint.mul(0.3))
+    // 闪光也一并压暗 —— 只调基色的话，夜里水面会剩下一层亮白的碎点
+    const col = base.mul(br).add(glint.mul(0.3)).mul(args.tint)
     return vec4(col, alpha.add(glint.mul(0.08)))
   })()
 
@@ -123,7 +129,7 @@ export function createWaterMaterial(args: WaterMaterialArgs): MeshBasicNodeMater
  * 岸线泡沫。几何是「贴陆地的窄条带」（见 scene.ts buildChunk），
  * 这里用噪声驱动 alpha 与亮度的涨落 —— 没有节奏的不规则拍岸。
  */
-export function createFoamMaterial(origin: NoiseOrigin): MeshBasicNodeMaterial {
+export function createFoamMaterial(origin: NoiseOrigin, tint: DayTint): MeshBasicNodeMaterial {
   const material = new MeshBasicNodeMaterial()
   material.transparent = true
   material.depthWrite = false
@@ -139,8 +145,8 @@ export function createFoamMaterial(origin: NoiseOrigin): MeshBasicNodeMaterial {
     )
     const pulse = f.mul(0.5).add(0.5)
     const a = pulse.mul(pulse).mul(0.55).add(0.12)
-    const tint = pulse.mul(0.1).add(0.9)
-    return vec4(vec3(0.97, 0.99, 1).mul(tint), a)
+    const pulseTint = pulse.mul(0.1).add(0.9)
+    return vec4(vec3(0.97, 0.99, 1).mul(pulseTint).mul(tint), a)
   })()
 
   return material

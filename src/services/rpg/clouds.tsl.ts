@@ -15,9 +15,12 @@
 
 import { Fn, mx_fractal_noise_float, positionWorld, smoothstep, time, vec3, vec4 } from 'three/tsl'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
-import type { NoiseOrigin } from './frame.tsl'
+import type { NoiseOrigin, SunAmount } from './frame.tsl'
 
-export function createCloudShadowMaterial(origin: NoiseOrigin): MeshBasicNodeMaterial {
+export function createCloudShadowMaterial(
+  origin: NoiseOrigin,
+  sun: SunAmount,
+): MeshBasicNodeMaterial {
   const material = new MeshBasicNodeMaterial()
   material.transparent = true
   material.depthWrite = false
@@ -34,8 +37,9 @@ export function createCloudShadowMaterial(origin: NoiseOrigin): MeshBasicNodeMat
     const n = mx_fractal_noise_float(vec3(wx, wz, time.mul(0.1)).mul(0.06), 4)
     // 过半的天空有云：阈值贴着 0 取，宽平滑区间出松软的云边
     const cover = smoothstep(-0.05, 0.4, n)
-    // 云下最深处压到 ~60% 亮度
-    const a = cover.mul(0.4)
+    // 云下最深处压到 ~60% 亮度。夜里随日光一起淡出 —— 没有太阳就没有云影，
+    // 否则夜色里会爬着一团团无缘无故的黑雾
+    const a = cover.mul(0.4).mul(sun)
     return vec4(shadowColor, a)
   })()
 

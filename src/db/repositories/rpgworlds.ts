@@ -7,7 +7,7 @@
 
 import { getDb } from '../schema'
 import { toPlain } from '../plain'
-import { emptyWorld, normalizeGen, type RpgWorld } from '@/types/rpg'
+import { DEFAULT_TIME_SCALE, emptyWorld, normalizeGen, type RpgWorld } from '@/types/rpg'
 
 /**
  * 补齐可能缺失的字段。
@@ -24,6 +24,10 @@ function normalize(w: RpgWorld): RpgWorld {
   // 地形参数同样是后加的。逐字段兜底成 LEGACY_GEN —— 也就是参数化之前那版
   // 生成器的行为，老世界因此逐格不变。⚠️ 这里是整个向后兼容故事的落点
   w.gen = normalizeGen(w.gen)
+  // 时钟是后加的字段。⚠️ 回填成第 0 天 08:00 而不是 0（午夜）——
+  // 老存档一进去就是一片漆黑，用户只会以为渲染坏了
+  if (typeof w.worldMinutes !== 'number' || !Number.isFinite(w.worldMinutes)) w.worldMinutes = 480
+  if (typeof w.timeScale !== 'number' || !(w.timeScale >= 0)) w.timeScale = DEFAULT_TIME_SCALE
   return w
 }
 

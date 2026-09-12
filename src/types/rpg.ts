@@ -10,6 +10,14 @@ import { emptyCharacter, type Character } from './character'
 export const RPG_WORLD_SIZE = 256
 
 /**
+ * 时间流速：现实 1 秒推进多少游戏分钟。
+ *
+ * 放在 types/ 而不是 services/rpg/time.ts，是因为 db 仓储层要用它做回填，
+ * 而那一层只依赖 types/。time.ts 从这里 re-export。
+ */
+export const DEFAULT_TIME_SCALE = 1
+
+/**
  * 一个 NPC。
  *
  * `characterId` 关联到角色卡：关联了就用卡里的名字与简介，没关联就用自填的
@@ -35,6 +43,12 @@ export interface RpgNpc {
   description: string
   /** 与该 NPC 的会话 id。第一次说话时创建并记住，之后继续同一段对话 */
   chatId?: string
+  /**
+   * 生活作息。缺省时引擎首次挂载会按周边地貌推导一份并写回 ——
+   * 与 homeX/homeY 同一套路：推导一次、落盘一次，之后算法再怎么调都不会让
+   * 老 NPC 的家悄悄搬走。
+   */
+  routine?: RpgRoutine
 }
 
 /**
@@ -108,6 +122,41 @@ export function normalizeGen(raw: unknown): RpgGenParams {
   }
 }
 
+/**
+ * 一个兴趣点。存的是**格坐标**，不是「最近的房子」这种描述。
+ *
+ * 地形确实是算出来的，但 POI 是「这个 NPC 的家是那一间」这样一次性的**选择**：
+ * 每次进游戏重算的话，房屋哈希或锚点稍有变动，人的家就会悄悄搬走。
+ * 所以确定性推导一次、结果存下来 —— 与 homeX/homeY 完全同源。
+ */
+export interface RpgPoi {
+  x: number
+  y: number
+  /** 这是什么地方，直接进提示词：'家门口' | '田里' | '水井旁' …… */
+  label: string
+  /** 在这儿做什么，直接进提示词：'照看庄稼' | '打水' | '与邻里闲话' …… */
+  act: string
+  /** 在这点周围多大范围内溜达（格）。缺省 2 */
+  r?: number
+}
+
+/** 一段作息。数组按 from 升序，最后一段回绕接第一段 —— 一天是个圈 */
+export interface RpgRoutineSlot {
+  /** 起始时刻，当天分钟 0..1439 */
+  from: number
+  /** 索引进 routine.pois */
+  poi: number
+}
+
+export type RpgRoutineKind = 'farmer' | 'villager' | 'keeper' | 'wanderer'
+
+export interface RpgRoutine {
+  kind: RpgRoutineKind
+  /** 2~4 个点就够：家 / 干活的地方 / 社交的地方 */
+  pois: RpgPoi[]
+  slots: RpgRoutineSlot[]
+}
+
 export interface RpgWorld {
   id: string
   name: string
@@ -129,6 +178,16 @@ export interface RpgWorld {
   playerY: number
   persona: RpgPersona
   npcs: RpgNpc[]
+  /**
+   * 世界诞生以来的总游戏分钟。唯一真相源 —— 天数与当天时刻都从它算。
+   * 不存成两个字段是因为两个字段迟早会对不上（跨天时先写哪个都错一帧）。
+   *
+   * ⚠️ 这是**存**出来的，不是从种子算的。地形是「这个世界长什么样」，可以算；
+   * 时刻是「玩家走到了哪一步」，属于进度，必须落盘。
+   */
+  worldMinutes: number
+  /** 时间流速：现实 1 秒推进多少游戏分钟。0 = 冻结 */
+  timeScale: number
   createdAt: number
   updatedAt: number
 }
@@ -149,6 +208,10 @@ export function emptyWorld(id: string, name = '新世界', seed?: number): RpgWo
     playerY: -1,
     persona: { name: '', description: '' },
     npcs: [],
+    // 第 0 天 08:00。刻意不随机 —— 新世界一进去就是深夜、屏幕一片黑，
+    // 第一印象就砸了
+    worldMinutes: 480,
+    timeScale: DEFAULT_TIME_SCALE,
     createdAt: now,
     updatedAt: now,
   }
