@@ -12,13 +12,16 @@ import { SyncSession } from '@/services/sync/session'
 import type { Manifest } from '@/services/sync/protocol'
 import {
   isRendezvous,
+  listPeers,
   makeToken,
+  MAX_DEVICE_NAME,
   packRendezvous,
   rendezvousUrls,
   SAME_ORIGIN,
   signalCandidates,
   SignalClient,
   unpackRendezvous,
+  type Peer,
 } from '@/services/sync/signaling'
 
 /**
@@ -27,6 +30,7 @@ import {
  *  showCode  显示自己的码，等对方扫
  *  scan      扫对方的码
  *  connecting 两边的码都交换完了，等通道真正打开
+ *  invited   有人从在线名单点了我，等我批准
  *  ready     已连通，选方向与范围
  *  confirm   收到对方的 manifest，等用户点接收
  *  transfer  传输中
@@ -37,6 +41,7 @@ export type SyncStep =
   | 'showCode'
   | 'scan'
   | 'connecting'
+  | 'invited'
   | 'ready'
   | 'confirm'
   | 'transfer'
@@ -78,6 +83,16 @@ export const useSyncStore = defineStore('sync', () => {
   const fallbackReason = ref('')
   let signal: SignalClient | null = null
 
+  // ── 自动发现 ──
+  /** 同一信令服务器上在线的其它幕间设备 */
+  const peers = ref<Peer[]>([])
+  const discovering = ref(false)
+  /** 本机显示给别人看的名字，存 localStorage（这是设备级偏好，不该进同步的库） */
+  const deviceName = ref(loadDeviceName())
+  /** 有人点了我，等我批准 */
+  const invite = ref<{ id: string; name: string } | null>(null)
+  let inviteGate: ((ok: boolean) => void) | null = null
+
   /** 默认不勾「设置」—— 它会整包覆盖对方的接口地址、模型与人设 */
   const scope = ref<SyncScope>({ ...FULL_SCOPE, settings: false })
 
@@ -88,6 +103,33 @@ export const useSyncStore = defineStore('sync', () => {
     return Math.min(100, Math.round((loaded.value / total.value) * 100))
   })
 
+  /** 设备名存在 localStorage：它是「这台设备叫什么」，跟着设备走而不是跟着数据走 */
+  const NAME_KEY = 'muxian.sync.deviceName'
+  function loadDeviceName(): string {
+    try {
+      return localStorage.getItem(NAME_KEY) || defaultDeviceName()
+    } catch {
+      // 隐私模式下 localStorage 可能直接抛
+      return defaultDeviceName()
+    }
+  }
+  function defaultDeviceName(): string {
+    const ua = navigator.userAgent
+    if (/Android/i.test(ua)) return '我的安卓'
+    if (/iPhone|iPad|iPod/i.test(ua)) return '我的 iPhone'
+    if (/Mac/i.test(ua)) return '我的 Mac'
+    return '我的电脑'
+  }
+  function setDeviceName(n: string): void {
+    deviceName.value = n.slice(0, MAX_DEVICE_NAME)
+    try {
+      localStorage.setItem(NAME_KEY, deviceName.value)
+    } catch {
+      // 存不下就算了，本次会话内仍然生效
+    }
+    signal?.rename(deviceName.value)
+  }
+
   function reset(): void {
     session?.close()
     session = null
@@ -96,6 +138,10 @@ export const useSyncStore = defineStore('sync', () => {
     confirmGate = null
     relayed.value = true
     fallbackReason.value = ''
+    peers.value = []
+    discovering.value = false
+    invite.value = null
+    inviteGate = null
     step.value = 'pick'
     role.value = 'host'
     error.value = ''
@@ -126,6 +172,13 @@ export const useSyncStore = defineStore('sync', () => {
           confirmGate = res
         })
       },
+      onInvite: (from) => {
+        invite.value = from
+        step.value = 'invited'
+        return new Promise<boolean>((res) => {
+          inviteGate = res
+        })
+      },
       onApplied: (r) => {
         result.value = r
         received.value = true
@@ -148,9 +201,13 @@ export const useSyncStore = defineStore('sync', () => {
   async function trySignal(name: string): Promise<boolean> {
     const s = new SignalClient({
       onRelay: (m) => void session?.handleRelay(m),
+      onUsers: (users) => {
+        peers.value = listPeers(users, s.id)
+      },
       onClose: (reason) => {
         // 通道已经建好之后信令断开无所谓，数据是点对点走的
         if (step.value === 'transfer' || step.value === 'done') return
+        peers.value = []
         if (step.value === 'showCode' || step.value === 'connecting') fail(new Error(reason))
       },
     })
@@ -168,15 +225,66 @@ export const useSyncStore = defineStore('sync', () => {
     }
   }
 
+  /**
+   * 弹窗一打开就调：连上信令、进入待机，于是**双向可见** ——
+   * 我能看到在线的其它设备，别人也能在名单里看到我。
+   * 连不上信令不报错，只是没有自动发现，扫码那条路仍然可用。
+   */
+  async function open(): Promise<void> {
+    reset()
+    discovering.value = true
+    const s = makeSession()
+    const ok = await trySignal(deviceName.value)
+    discovering.value = false
+    if (ok && signal) {
+      s.listenViaSignal(signal)
+      peers.value = listPeers(signal.users, signal.id)
+    }
+  }
+
+  /** 从在线名单点了某台设备，直接发起连接（对方会收到「是否允许」） */
+  async function connectTo(peerId: string): Promise<void> {
+    const s = session
+    if (!s || !signal) return
+    try {
+      step.value = 'connecting'
+      // 不带令牌 —— 对方那边会改走「问用户」的路径
+      await s.joinViaSignal(signal, peerId, '', deviceName.value)
+      await s.waitOpen()
+      step.value = 'ready'
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  /** 我在「是否允许连接」里点了允许 / 拒绝 */
+  function answerInvite(ok: boolean): void {
+    step.value = ok ? 'connecting' : 'pick'
+    inviteGate?.(ok)
+    inviteGate = null
+    if (!ok) {
+      invite.value = null
+      return
+    }
+    // 批准之后等通道真正打开
+    void session
+      ?.waitOpen()
+      .then(() => {
+        step.value = 'ready'
+      })
+      .catch((e: unknown) => fail(e))
+  }
+
   /** 发起方：出码 → 等对方扫。有信令时只出这一个码，扫完直接连上 */
   async function startHost(): Promise<void> {
     try {
       role.value = 'host'
       error.value = ''
       step.value = 'connecting'
-      const s = makeSession()
+      // open() 已经建好 session 并连上信令了，复用它；没有才重新来
+      const s = session ?? makeSession()
 
-      if (await trySignal('发起方')) {
+      if (signal || (await trySignal(deviceName.value))) {
         const token = makeToken()
         s.hostViaSignal(signal!, token)
         // url 写 SAME_ORIGIN：扫码方按自己的同源规则去算，
@@ -203,7 +311,7 @@ export const useSyncStore = defineStore('sync', () => {
   function startGuest(): void {
     role.value = 'guest'
     error.value = ''
-    makeSession()
+    if (!session) makeSession()
     step.value = 'scan'
   }
 
@@ -309,6 +417,14 @@ export const useSyncStore = defineStore('sync', () => {
     incoming,
     relayed,
     fallbackReason,
+    peers,
+    discovering,
+    deviceName,
+    invite,
+    open,
+    connectTo,
+    answerInvite,
+    setDeviceName,
     scope,
     reset,
     startHost,

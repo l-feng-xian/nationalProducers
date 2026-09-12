@@ -28,6 +28,10 @@ export interface RelayMessage {
   candidate?: RTCIceCandidateInit
   /** 配对令牌，防止同一台服务器上的其他人凭 id 硬连进来 */
   token?: string
+  /** 发起方的设备名。名单点击模式下要显示在「是否允许连接」里 */
+  name?: string
+  /** bye 的原因。用来把「对方点了拒绝」和「对方掉线了」区分开 */
+  reason?: string
 }
 
 export interface SignalHooks {
@@ -114,7 +118,8 @@ export class SignalClient {
       }, READY_TIMEOUT)
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ type: 'hello', name }))
+        // 统一加前缀，好让对面的在线名单能把幕间客户端与服务器演示页的访客区分开
+        ws.send(JSON.stringify({ type: 'hello', name: encodeDeviceName(name) }))
       })
       ws.addEventListener('error', () => {
         clearTimeout(timer)
@@ -155,6 +160,13 @@ export class SignalClient {
 
   send(m: { type: RelayMessage['type']; to: string } & Record<string, unknown>): void {
     if (this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(m))
+  }
+
+  /** 改名。服务器收到 hello 会重新广播在线名单，对方那边立刻就能看到 */
+  rename(name: string): void {
+    if (this.#ws?.readyState === WebSocket.OPEN) {
+      this.#ws.send(JSON.stringify({ type: 'hello', name: encodeDeviceName(name) }))
+    }
   }
 
   close(): void {
@@ -219,6 +231,41 @@ export function unpackRendezvous(code: string): Rendezvous {
     throw new Error('会合码内容不完整')
   }
   return { url, id, token }
+}
+
+/**
+ * 设备名前缀。
+ *
+ * 信令服务器是**共享的**，上面还挂着它自带那个演示页面的访客（在线名单里
+ * 能看到「用户-xxxx」这种）。给幕间的客户端统一加前缀，列表里就只显示同类，
+ * 不会把不相干的人混进来。服务器把名字截到 20 字，前缀占 3 个。
+ */
+const NAME_PREFIX = '幕间·'
+/** 前缀之外还剩多少字留给用户自己起的名字 */
+export const MAX_DEVICE_NAME = 17
+
+export function encodeDeviceName(name: string): string {
+  const clean = name.trim().slice(0, MAX_DEVICE_NAME) || '未命名设备'
+  return NAME_PREFIX + clean
+}
+
+export interface Peer {
+  id: string
+  name: string
+}
+
+/**
+ * 从在线名单里挑出可连接的幕间设备。
+ *
+ * ⚠️ 名单是**整台信令服务器**的，不是局域网扫描 —— 服务器在公网上，理论上
+ * 别处的人也可能出现在这里。但真正能不能连上由传输层兜底：`iceServers` 为空
+ * 意味着只有 host 候选，不在同一局域网的两端**根本协商不出通路**。
+ * 所以名单宽一点没关系，连接本身仍然被限制在局域网内。
+ */
+export function listPeers(users: SignalUser[], selfId: string): Peer[] {
+  return users
+    .filter((u) => u.id !== selfId && typeof u.name === 'string' && u.name.startsWith(NAME_PREFIX))
+    .map((u) => ({ id: u.id, name: u.name.slice(NAME_PREFIX.length) || '未命名设备' }))
 }
 
 /** 一次性配对令牌 */

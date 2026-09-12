@@ -6,13 +6,14 @@
  * 发起方出码 → 加入方扫 → 加入方出码 → 发起方扫 → 连通。
  * 每一步的文案都明写「现在轮到谁做什么」，否则用户很容易卡在第二次扫描上。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useSyncStore } from '@/stores/sync'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useToast } from '@/composables/useToast'
 import { formatBytes } from '@/services/io/backup'
 import { describeCounts } from '@/services/sync/protocol'
+import { MAX_DEVICE_NAME } from '@/services/sync/signaling'
 import { renderQr } from '@/services/qr/render'
 import { decodeImageFile, startCameraScan, type ScanHandle } from '@/services/qr/scan'
 
@@ -168,6 +169,21 @@ function close() {
   emit('close')
 }
 
+/**
+ * 弹窗一打开就连上信令并待机。
+ *
+ * 这一步是**双向**的：连上之后我能看到别人，别人也能在名单里看到我。
+ * 所以两台设备都得把这个弹窗打开才会互相发现 —— 文案里明说了这点，
+ * 否则用户会对着空名单等。
+ */
+onMounted(() => {
+  void sync.open()
+})
+
+function onRename(e: Event) {
+  sync.setDeviceName((e.target as HTMLInputElement).value)
+}
+
 onBeforeUnmount(stopCamera)
 </script>
 
@@ -189,26 +205,78 @@ onBeforeUnmount(stopCamera)
           <!-- 1 选角色 -->
           <template v-if="sync.step === 'pick'">
             <p class="note">
-              两台设备连同一个 Wi-Fi，扫一次码就能直连传数据。
+              两台设备连同一个 Wi-Fi，直接点对方的名字就能连。
               握手借信令服务器牵个线，<strong>数据本身点对点直接走、不经过服务器</strong>； 同样不含
               API Key 与向量索引。
             </p>
+
+            <div class="block">
+              <div class="block__head">
+                <span class="cbx-field__label">发现的设备</span>
+                <span v-if="sync.discovering" class="chip">搜索中…</span>
+                <span v-else-if="sync.peers.length" class="chip chip--ok">
+                  {{ sync.peers.length }} 台在线
+                </span>
+              </div>
+              <div v-if="sync.peers.length" class="peers">
+                <button
+                  v-for="p in sync.peers"
+                  :key="p.id"
+                  class="peer"
+                  type="button"
+                  @click="sync.connectTo(p.id)"
+                >
+                  <span class="peer__dot" />
+                  <span class="peer__name">{{ p.name }}</span>
+                  <span class="peer__go">连接 →</span>
+                </button>
+              </div>
+              <p v-else-if="!sync.discovering" class="cbx-field__hint">
+                没发现其它设备。请在另一台设备上也打开这个「二维码同步」弹窗 ——
+                双方都打开时才会互相出现在名单里。
+              </p>
+            </div>
+
+            <label class="cbx-field nameline">
+              <span class="cbx-field__label">本机名称</span>
+              <input
+                class="cbx-input"
+                :value="sync.deviceName"
+                :maxlength="MAX_DEVICE_NAME"
+                placeholder="给这台设备起个名"
+                @change="onRename"
+              />
+              <span class="cbx-field__hint">别人在名单里看到的就是这个名字</span>
+            </label>
+
+            <div class="cbx-divider" />
+            <p class="cbx-field__hint">找不到对方？也可以扫码连：</p>
             <div class="acts">
-              <button
-                class="cbx-btn cbx-btn--primary"
-                :disabled="!secure"
-                @click="sync.startHost()"
-              >
-                发起连接
+              <button class="cbx-btn cbx-btn--soft" :disabled="!secure" @click="sync.startHost()">
+                显示二维码
               </button>
               <button class="cbx-btn cbx-btn--soft" :disabled="!secure" @click="sync.startGuest()">
                 扫码加入
               </button>
             </div>
-            <p class="cbx-field__hint">
-              一台点「发起连接」出码，另一台点「扫码加入」扫它 —— 就这一次。
-              信令服务器连不上时会自动退回手动模式（那种要互扫两次）。
+          </template>
+
+          <!-- 1b 有人从名单里点了我 -->
+          <template v-else-if="sync.step === 'invited' && sync.invite">
+            <p class="note">
+              <strong>「{{ sync.invite.name }}」</strong> 想和这台设备建立连接。
             </p>
+            <p class="cbx-field__hint">
+              允许之后只是接通通道；具体传不传数据、传哪些，还要再确认一次。
+            </p>
+            <div class="acts">
+              <button class="cbx-btn cbx-btn--primary" @click="sync.answerInvite(true)">
+                允许
+              </button>
+              <button class="cbx-btn cbx-btn--ghost danger" @click="sync.answerInvite(false)">
+                拒绝
+              </button>
+            </div>
           </template>
 
           <!-- 2 显示自己的码 -->
@@ -493,6 +561,82 @@ onBeforeUnmount(stopCamera)
 
 .danger {
   color: var(--cbx-error);
+}
+
+.block__head {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  margin-bottom: var(--cbx-space-2);
+}
+.peers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-1);
+}
+.peer {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  width: 100%;
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-md);
+  background: var(--cbx-bg);
+  color: inherit;
+  font-size: var(--cbx-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--cbx-transition);
+}
+@media (hover: hover) {
+  .peer:hover {
+    background: var(--cbx-bg-hover);
+  }
+}
+.peer__dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--cbx-success);
+}
+.peer__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peer__go {
+  flex-shrink: 0;
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-brand);
+}
+.nameline .cbx-input {
+  max-width: var(--cbx-fieldw-sm);
+}
+/* .cbx-field__hint 是 span（inline），只有在输入框占满整行时才会自然换行。
+   这里把输入框收窄了，不显式转成 block 的话提示会挤在输入框右边、断成两截。 */
+.nameline .cbx-field__hint {
+  display: block;
+}
+.chip {
+  padding: 0 var(--cbx-space-2);
+  border-radius: var(--cbx-radius-pill);
+  background: var(--cbx-bg-secondary);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-secondary);
+}
+.chip--ok {
+  background: var(--cbx-success-light);
+  color: var(--cbx-success);
+}
+
+@media (max-width: 767px) {
+  .peer {
+    min-height: var(--cbx-tap-min);
+  }
 }
 
 @media (max-width: 767px) {

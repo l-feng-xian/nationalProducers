@@ -53,6 +53,14 @@ export interface SessionHooks {
   onClose?: (reason: string) => void
   /** 对方要发数据过来，返回 true 才接收。UI 在这里弹确认页 */
   onIncoming?: (m: Manifest) => Promise<boolean>
+  /**
+   * 有人从在线名单里点了我，返回 true 才接受连接。
+   *
+   * 扫码连接靠二维码里的令牌证明「对方确实看过我的屏幕」；从名单点击没有
+   * 这个前提，所以**必须由用户当面点头**，否则信令服务器上任何人都能凭
+   * 一个 id 直接把通道建起来。
+   */
+  onInvite?: (from: { id: string; name: string }) => Promise<boolean>
   onProgress?: (p: Progress) => void
   /** 接收完成并已写库 */
   onApplied?: (r: ImportResult) => void
@@ -178,8 +186,32 @@ export class SyncSession {
     this.#wireTrickle()
   }
 
-  /** 扫码方：主动向二维码里的那个 id 发起连接 */
-  async joinViaSignal(signal: SignalClient, targetId: string, token: string): Promise<void> {
+  /**
+   * 待机：既不出码也不主动连，只等在线名单里有人点我。
+   *
+   * 与 hostViaSignal 的差别是**没有令牌**可比对 —— 点击方无从得知令牌。
+   * 因此这条路径改为逐个询问用户（onInvite），批准了才继续握手。
+   */
+  listenViaSignal(signal: SignalClient): void {
+    this.#signal = signal
+    this.#token = ''
+    this.pc.addEventListener('datachannel', (e) => this.#bindChannel(e.channel))
+    this.#wireTrickle()
+  }
+
+  /**
+   * 主动连接对端：扫码扫到的，或从在线名单里点的。
+   *
+   * `token` 在扫码模式下来自二维码；名单点击模式下对方没有可比对的令牌，
+   * 传空串即可，那边会改走「问用户要不要接受」的路径。`selfName` 就是显示
+   * 在对方询问框里的名字。
+   */
+  async joinViaSignal(
+    signal: SignalClient,
+    targetId: string,
+    token: string,
+    selfName = '',
+  ): Promise<void> {
     this.#signal = signal
     this.#token = token
     this.#peerId = targetId
@@ -188,7 +220,13 @@ export class SyncSession {
     this.#bindChannel(dc)
     const offer = await this.pc.createOffer()
     await this.pc.setLocalDescription(offer)
-    signal.send({ type: 'offer', to: targetId, sdp: offer.sdp ?? '', token })
+    signal.send({
+      type: 'offer',
+      to: targetId,
+      sdp: offer.sdp ?? '',
+      token,
+      name: selfName,
+    })
   }
 
   /** 信令服务器转发过来的消息。由 store 接到 SignalClient 的 onRelay 上 */
@@ -196,9 +234,27 @@ export class SyncSession {
     try {
       switch (m.type) {
         case 'offer': {
-          // 令牌不对就是别人猜到了我的 id，直接不理
-          if (!m.token || m.token !== this.#token) return
-          if (this.#peerId && this.#peerId !== m.from) return // 已经和别人配上了
+          // 已经和别人配上了（含我方正在主动连别人），后来者一律不理。
+          // 两边同时点对方会撞在这里，属于罕见情况，重试一次即可。
+          if (this.#peerId && this.#peerId !== m.from) return
+
+          // 按**对方带没带令牌**分流，而不是按本机处于哪种模式：
+          // 二维码亮着的同时，别人仍可能从在线名单点我，两条路要能并存。
+          if (m.token) {
+            // 带令牌 = 扫码而来，必须和我出的那个码一致
+            if (!this.#token || m.token !== this.#token) return
+          } else {
+            // 不带令牌 = 从名单点击，没有共享秘密，必须当面问用户
+            const ok =
+              (await this.#hooks.onInvite?.({ id: m.from, name: m.name ?? '未知设备' })) ?? false
+            if (!ok) {
+              // 带上原因，对面才能说「对方拒绝了」而不是含糊的「已断开」
+              this.#signal?.send({ type: 'bye', to: m.from, reason: 'rejected' })
+              return
+            }
+            // 询问期间可能已经被别人先占住
+            if (this.#peerId && this.#peerId !== m.from) return
+          }
           this.#peerId = m.from
           await this.pc.setRemoteDescription({ type: 'offer', sdp: m.sdp ?? '' })
           await this.#flushIce()
@@ -227,7 +283,8 @@ export class SyncSession {
           return
         }
         case 'bye':
-          if (m.from === this.#peerId) this.#fail(new Error('对方已断开'))
+          if (m.from !== this.#peerId) return
+          this.#fail(new Error(m.reason === 'rejected' ? '对方拒绝了这次连接请求' : '对方已断开'))
           return
       }
     } catch (e) {
