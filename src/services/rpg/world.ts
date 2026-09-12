@@ -131,6 +131,7 @@ export function worldParamsOf(w: {
     moistureBias: w.gen.moistureBias,
     districtGate: w.gen.districtGate,
     villageChance: w.gen.villageChance,
+    lakes: w.gen.lakes,
   }
 }
 
@@ -644,6 +645,17 @@ export function createWorld(p: WorldParams): World {
     scarecrow: '稻草人旁',
   }
 
+  /** 半径 r 内有没有水。只给措辞用，describeArea 一轮对话才调一次，代价可忽略 */
+  const waterWithin = (x: number, y: number, r: number): boolean => {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const b = sampler.biomeAt(wrapX(x + dx), wrapY(y + dy))
+        if (b === BIOME.water || b === BIOME.shallow) return true
+      }
+    }
+    return false
+  }
+
   /**
    * 相对村心的方位词。给「青柳村西边的麦田」这种说法用。
    * ⚠️ 中文是**东南/西北**的字序，不是「南东」—— 东西在前，南北在后。
@@ -666,10 +678,14 @@ export function createWorld(p: WorldParams): World {
     const b = sampler.biomeAt(wx, wy)
     const v = villageNear(wx, wy)
     if (b === BIOME.water || b === BIOME.shallow) {
-      if (v) return `${v.name}外的水边`
+      // 湖与海要分开说：「湖畔」和「海边」给模型的画面完全不同
+      const lake = sampler.isLakeAt(wx, wy)
+      if (v) return lake ? `${v.name}旁的湖畔` : `${v.name}外的海边`
       const gx = Math.floor(wx / WILD_REGION)
       const gy = Math.floor(wy / WILD_REGION)
-      return `${wildName(seed, gx, gy, 'water')}畔`
+      return lake
+        ? `${wildName(seed, gx, gy, 'water')}湖畔`
+        : `${wildName(seed, gx, gy, 'water')}畔`
     }
     if (pathAt(wx, wy)) return v ? `${v.name}的村道上` : '村道上'
     // 半径 2 格内找最近的地标
@@ -685,7 +701,13 @@ export function createWorld(p: WorldParams): World {
         }
       }
     }
-    if (b === BIOME.sand) return '沙滩上'
+    // ⚠️ 沙有两个互不相干的成因：近岸带与干旱（湿度极低）。一律说「沙滩上」的话，
+    // 湿度偏置一调低，满地内陆沙漠都会被描述成海滩 —— 而这句是**逐字进提示词**的，
+    // 模型会给站在荒漠里的 NPC 写海浪和海鸥。
+    //
+    // 判据直接问「附近有没有水」而不是反推生成成因：沙滩的定义本来就是「挨着水的沙」，
+    // 这样无论将来沙从哪儿来都不会再说错。三格内有水才算滩。
+    if (b === BIOME.sand) return waterWithin(wx, wy, 3) ? '沙滩上' : '荒漠中'
     // 野地用比村庄粗得多的网格命名 —— 每走两步换个地名反而出戏
     const gx = Math.floor(wx / WILD_REGION)
     const gy = Math.floor(wy / WILD_REGION)

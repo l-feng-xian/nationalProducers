@@ -66,6 +66,8 @@ export interface RpgGenParams {
   districtGate: number
   /** 每个区域的落村概率 */
   villageChance: number
+  /** 内陆湖。⚠️ 老世界必须是 false —— 开了会改地形 */
+  lakes: boolean
 }
 
 /** 引入 gen 字段之前那一版生成器的行为。老存档一律回填成它 */
@@ -75,10 +77,14 @@ export const LEGACY_GEN: RpgGenParams = {
   moistureBias: 0,
   districtGate: 0.1,
   villageChance: 0.62,
+  lakes: false,
 }
 
-/** 新建世界的默认值。目前与 LEGACY_GEN 完全一致 */
-export const DEFAULT_GEN: RpgGenParams = { ...LEGACY_GEN }
+/**
+ * 新建世界的默认值。与 LEGACY_GEN **只差 lakes** ——
+ * 新世界才吃新生态，老世界的海岸线一格都不许动。
+ */
+export const DEFAULT_GEN: RpgGenParams = { ...LEGACY_GEN, lakes: true }
 
 /**
  * 逐字段兜底。
@@ -96,6 +102,9 @@ export function normalizeGen(raw: unknown): RpgGenParams {
     moistureBias: num(g.moistureBias, LEGACY_GEN.moistureBias),
     districtGate: num(g.districtGate, LEGACY_GEN.districtGate),
     villageChance: num(g.villageChance, LEGACY_GEN.villageChance),
+    // ⚠️ 缺省即 false，不是 DEFAULT_GEN 的 true —— 老存档没有这个字段，
+    // 兜底成 true 会让所有老世界一夜之间长出湖来
+    lakes: g.lakes === true,
   }
 }
 

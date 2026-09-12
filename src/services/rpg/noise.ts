@@ -69,6 +69,16 @@ export interface WorldParams {
   districtGate?: number
   /** 每个区域的落村概率。村庄相关，噪声层不读它 */
   villageChance?: number
+  /**
+   * 内陆湖。⚠️ 默认 **false** —— 老世界绝不能凭空长出湖来。
+   *
+   * 刻意**不新增生态枚举**：湖就是普通的 water/shallow。加一个 BIOME.lake 要改
+   * 七处 `b === water || b === shallow`（可行走、挡路、高度、水面网格、泡沫、
+   * 地貌措辞……），每一处都是一次「忘了改」的机会 —— 漏一处就是「湖能走上去」
+   * 或者「湖没有泡沫」或者「湖壁渲染成土崖」。不加枚举则 scene / water.tsl /
+   * walkableAt / BLOCKERS **零改动**，湖天生就有波纹、岸线泡沫与可蹚的浅边。
+   */
+  lakes?: boolean
 }
 
 /**
@@ -98,6 +108,8 @@ export const BLOCK_H = 0.3
 const LEVEL_STEP = 0.09
 /** 台阶等级上限。fBm 归一化后动态范围有限，封顶防止极个别尖塔 */
 const MAX_LEVEL = 9
+/** 湖场阈值。0.22 在 256² 上出个位数的几片湖；调低会变成满地水洼 */
+const LAKE_T = 0.22
 /** 深水海床的顶面高度。隔着半透明水面看到的就是它 */
 export const WATER_BED_Y = -0.72
 /** 浅滩海床：比水面略低，角色走上去是「蹚水」的效果 */
@@ -123,6 +135,11 @@ export interface WorldSampler {
    */
   levelAt(x: number, y: number): number
   biomeAt(x: number, y: number): Biome
+  /**
+   * 该格的水是不是**内陆湖**（而不是海）。
+   * 只给地貌措辞用 —— 渲染层不需要区分，湖与海走的是同一套水面材质。
+   */
+  isLakeAt(x: number, y: number): boolean
   /** 把任意整数格坐标回绕进 [0,width) × [0,height) */
   wrapX(x: number): number
   wrapY(y: number): number
@@ -148,6 +165,10 @@ export function createSampler(p: WorldParams): WorldSampler {
   // 聚落场：又一个独立种子。它只出「文明 / 蛮荒」的大区划分，别与湿度相关，
   // 否则村庄永远长在森林里（或永远长在沙漠边）
   const noiseD = createNoise4D(seededRandom(p.seed ^ 0x51ab3f1))
+  // 湖场：第四个独立种子。与前三个都不相关，否则湖会永远长在森林里（或永远
+  // 贴着海岸）—— 那样它就不像湖，像高度场的某种副产品
+  const noiseL = createNoise4D(seededRandom(p.seed ^ 0x2e7d1a55))
+  const lakes = p.lakes === true
 
   const TAU = Math.PI * 2
 
@@ -198,11 +219,48 @@ export function createSampler(p: WorldParams): WorldSampler {
   const moisture = (x: number, y: number): number => fbm(noiseM, x, y) + moistureBias
   const district = (x: number, y: number): number => fbm(noiseD, x, y, 0.28, 2)
 
+  /** 湖场：低频两倍频 —— 出「几片大湖」而不是满地水洼 */
+  const lakeField = (x: number, y: number): number => fbm(noiseL, x, y, 0.55, 2)
+
+  /**
+   * 该格是不是湖。0=不是，1=湖滩，2=深湖。
+   *
+   * ⚠️ 高度带门控是这套做法的**全部关键**，不是优化：
+   *  - 下界 seaLevel+0.05 在浅滩带**之上**，所以湖与海之间必然隔着一圈浅滩或沙，
+   *    「内陆」这个性质是结构上保证的，不是靠调参碰运气；
+   *  - 上界 seaLevel+0.30 挡住山顶大湖，顺带避免湖挂在悬崖上（台阶落差会穿帮）。
+   * 而且这个门是一次浮点比较，h 在调用处早就算出来了 —— 绝大多数格（海、高地）
+   * 为湖多付的代价就是这一次比较，湖噪声根本不会被求值。
+   */
+  const lakeKind = (x: number, y: number, h: number): 0 | 1 | 2 => {
+    if (!lakes) return 0
+    if (h < seaLevel + 0.05 || h > seaLevel + 0.3) return 0
+    const l = lakeField(x, y)
+    if (l <= LAKE_T) return 0
+    // ⚠️ 光靠高度带**挡不住**湖与海连上。带宽只有 0.02，在坡陡的地方不足一格宽，
+    // 于是 h=0.051 的湖格会紧挨着 h=0.029 的浅滩 —— 实测 1383 个湖格里有 201 个
+    // 贴着海。这里补一道邻格检查：八邻中只要有一格低于浅滩线就不算湖。
+    // 于是「湖离海至少隔一格」成了**结构保证**而不是调参碰运气。
+    // 判据用的是**原始高度**而不是 biomeAt，所以不会递归回 lakeKind。
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
+        if (height01(x + dx, y + dy) < seaLevel + 0.03) return 0
+      }
+    }
+    return l > LAKE_T + 0.05 ? 2 : 1
+  }
+
   const biomeAt = (x: number, y: number): Biome => {
     const h = height01(x, y)
     if (h < seaLevel - 0.06) return BIOME.water
     // 浅滩：紧贴海平面的一条带，是水陆之间的过渡，可以蹚水走过去
     if (h < seaLevel + 0.03) return BIOME.shallow
+    // 湖：只在「已经是陆地、但还没爬高」的那一段里问湖场。
+    // lakes 关掉时这里只是一次布尔判断，老世界逐格结果与从前完全相同
+    const lk = lakeKind(x, y, h)
+    if (lk === 2) return BIOME.water
+    if (lk === 1) return BIOME.shallow
     // 离岸不远且干燥 → 沙；其余是草
     const m = moisture(x, y)
     if (h < seaLevel + 0.14 && m < 0.12) return BIOME.sand
@@ -214,8 +272,29 @@ export function createSampler(p: WorldParams): WorldSampler {
     const h = height01(x, y)
     if (h < seaLevel - 0.06) return -3
     if (h < seaLevel + 0.03) return -2
+    // ⚠️ **必须与 biomeAt 同步**。biomeAt 与 levelAt 是两个各自读同一个高度场的
+    // 函数；这里漏掉湖判定的话，湖床会按陆地高度渲染，而水面钉在 WATER_SURFACE_Y
+    // 这个常量上 —— 水面跑到地形**下面**，湖要么看不见要么里外翻转。
+    // 光看任一个函数都发现不了，这是整件事最容易翻车的一处。
+    const lk = lakeKind(x, y, h)
+    if (lk === 2) return -3
+    if (lk === 1) return -2
     return Math.min(MAX_LEVEL, Math.floor((h - seaLevel) / LEVEL_STEP))
   }
 
-  return { width, height, height01, moisture, district, levelAt, biomeAt, wrapX, wrapY }
+  /** 该格是不是湖（而不是海）。只给地貌措辞用：「湖畔」与「海边」不是一回事 */
+  const isLakeAt = (x: number, y: number): boolean => lakeKind(x, y, height01(x, y)) !== 0
+
+  return {
+    width,
+    height,
+    height01,
+    moisture,
+    district,
+    levelAt,
+    biomeAt,
+    isLakeAt,
+    wrapX,
+    wrapY,
+  }
 }
