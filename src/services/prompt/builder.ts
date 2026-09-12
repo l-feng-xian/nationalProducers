@@ -103,6 +103,19 @@ export interface SpeakerLite {
 }
 
 export interface BuildPromptInput {
+  /**
+   * 覆盖本轮的用户身份。
+   *
+   * 为 RPG 而加：1v1 路径下 `resolvePersona` 的 group 参数恒为 undefined，
+   * 于是「玩家在这个世界里是谁」原本**没有任何入口**能送进提示词。
+   *
+   * 之所以不走「临时改 settings.persona 再还原」：settings 的落盘是 400ms
+   * 防抖的全局 timer，覆盖窗口期内只要别处触发一次 touch()，这份**临时**身份
+   * 就会被固化成用户的全局人设 —— 那是会真损坏用户数据的竞态。
+   *
+   * 两项留空等于不覆盖：resolvePersona 用的是 `|| fallback`，空串照样回落。
+   */
+  personaOverride?: { name: string; description: string }
   isGroup: boolean
   speaker: SpeakerLite
   /** 1vN 全体成员（含静音）；1v1 = [speaker] */
@@ -171,12 +184,29 @@ function roleByName(r: string): 0 | 1 | 2 {
   return r === 'user' ? EXT_ROLE.USER : r === 'assistant' ? EXT_ROLE.ASSISTANT : EXT_ROLE.SYSTEM
 }
 
+/**
+ * 本轮实际生效的用户身份：**RPG 世界身份 > 群聊身份 > 全局人设**。
+ *
+ * ⚠️ 不能把 personaOverride 直接当成 resolvePersona 的 fallback 传进去 ——
+ * 那样传一个两项都空的覆盖会解析成「空身份」，而不是回落到全局人设。
+ * 空串必须继续往下落，这与 GroupPersona 的既有语义一致（group.ts 用 `||`）。
+ */
+function effectivePersona(input: BuildPromptInput): { name: string; description: string } {
+  const base = resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
+  const o = input.personaOverride
+  if (!o) return base
+  return {
+    name: o.name.trim() || base.name,
+    description: o.description.trim() || base.description,
+  }
+}
+
 /** 构建宏求值环境 */
 export function buildMacroEnv(input: BuildPromptInput, relationsText: string): MacroEnv {
   const s = input.settings
   // 群聊可以覆盖用户身份（{{user}} 与 {{persona}} 都跟着走）。
   // 只有 isGroup 时才看 group，否则 1v1 会被某个群聊的设定污染
-  const p = resolvePersona(input.isGroup ? input.group : undefined, s.persona)
+  const p = effectivePersona(input)
   return {
     user: p.name,
     char: input.speaker.name,
@@ -211,7 +241,7 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const count = input.count ?? estimateTokens
 
   // ── 1. 关系图谱文本（1vN），供 {{relations}} ──
-  const persona = resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
+  const persona = effectivePersona(input)
   const nameOf = new Map(input.members.map((m) => [m.id, m.name]))
   // 用户也是关系图谱里的一个节点。少了这一行，「我 对 她：师徒」这条边会因为
   // nameOf 查不到名字被 renderRelations **整行静默丢弃** —— 不报错，

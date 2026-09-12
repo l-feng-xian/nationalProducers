@@ -215,7 +215,21 @@ export const useGenerationStore = defineStore('generation', () => {
 
   /** 组装本轮提示词（dryRun 也走这里，用于预览面板） */
   function build(
-    opts: { composerText?: string; isContinue?: boolean; isDryRun?: boolean } = {},
+    opts: {
+      composerText?: string
+      isContinue?: boolean
+      isDryRun?: boolean
+      /** RPG：本轮用玩家在世界里的身份，而不是全局人设 */
+      personaOverride?: { name: string; description: string }
+      /**
+       * RPG：本轮的发言者用这张卡，而不是按 meta.characterId 去查。
+       *
+       * 为「没有关联角色卡的纯游戏 NPC」而加：那种 NPC 的名字与简介只存在
+       * 存档里，`chars.byId(undefined)` 查不到就会**静默回落成「一个乐于
+       * 助人的 AI 助手」** —— 用户填的 NPC 简介一个字都进不了提示词。
+       */
+      speakerOverride?: Character
+    } = {},
   ): BuiltPrompt | null {
     const chats = useChatsStore()
     const chars = useCharactersStore()
@@ -224,7 +238,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const meta = chats.current
     if (!meta) return null
 
-    const char = chars.byId(meta.characterId) ?? defaultAssistantCharacter()
+    const char = opts.speakerOverride ?? chars.byId(meta.characterId) ?? defaultAssistantCharacter()
     const speaker = { id: char.id, name: char.data.name, char }
 
     // 需求 5：全局世界书只在全局配置启用；角色世界书随角色带入
@@ -256,6 +270,7 @@ export const useGenerationStore = defineStore('generation', () => {
       : meta.chat_metadata.timedWorldInfo
 
     const built = buildChatPrompt({
+      ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
       isGroup: false,
       speaker,
       members: [speaker],
@@ -278,7 +293,12 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   /** 发送一轮：组装 → 流式 → 落盘 */
-  async function send(): Promise<void> {
+  async function send(
+    opts: {
+      personaOverride?: { name: string; description: string }
+      speakerOverride?: Character
+    } = {},
+  ): Promise<void> {
     const chats = useChatsStore()
     const chars = useCharactersStore()
     const settings = useSettingsStore()
@@ -294,10 +314,13 @@ export const useGenerationStore = defineStore('generation', () => {
 
     // 检索必须在 build() 之前：build() 是同步的，拿不到 await
     await prepareRecall(meta.id)
-    const built = build()
+    const built = build({
+      ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
+      ...(opts.speakerOverride ? { speakerOverride: opts.speakerOverride } : {}),
+    })
     if (!built) return
 
-    const char = chars.byId(meta.characterId) ?? defaultAssistantCharacter()
+    const char = opts.speakerOverride ?? chars.byId(meta.characterId) ?? defaultAssistantCharacter()
     const row = await chats.appendAi(char.data.name, char.id)
     if (!row) return
 
@@ -390,6 +413,12 @@ export const useGenerationStore = defineStore('generation', () => {
    * 每条消息带 gen_id 批号，便于「重掷整批」。
    */
   async function sendGroup(opts: { forceId?: string; isUserInput?: boolean } = {}): Promise<void> {
+    // ⚠️ 进门就复位，别只依赖上一轮 finally 的清理。
+    // `stop()` 会把 aborted 置 true，而它**只在本函数的 finally 里复位** ——
+    // 于是在 1v1（含 RPG 的 NPC 对话）里按过一次停止之后，标志会一直挂着，
+    // 下一次群聊在第一个发言者结束时就 `if (aborted) break` 静默停掉其余成员，
+    // 表现是「群里只有一个人说话」且毫无报错。
+    aborted = false
     const chats = useChatsStore()
     const chars = useCharactersStore()
     const groups = useGroupsStore()

@@ -243,7 +243,8 @@ async function doImport(e: Event) {
   try {
     const r = await importAll(await file.text())
     toast.success(
-      `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}`,
+      `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}` +
+        (r.rpgworlds ? ` · 世界 ${r.rpgworlds}` : ''),
     )
     setTimeout(() => location.reload(), 800)
   } catch (err) {

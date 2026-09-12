@@ -9,15 +9,29 @@ import { getDb } from '../schema'
 import { toPlain } from '../plain'
 import { emptyWorld, type RpgWorld } from '@/types/rpg'
 
+/**
+ * 补齐可能缺失的字段。
+ *
+ * 导入备份走的是 `db.put(store, toPlain(row))` **零校验原样回写**，
+ * 所以一份手工改过、或由旧版本导出的记录完全可能没有 npcs / persona。
+ * 读路径统一过一遍，消费方就不必各自防御（与 groups.ts 的 normalize 同一套路）。
+ */
+function normalize(w: RpgWorld): RpgWorld {
+  if (!Array.isArray(w.npcs)) w.npcs = []
+  if (!w.persona) w.persona = { name: '', description: '' }
+  return w
+}
+
 export async function list(): Promise<RpgWorld[]> {
   const db = await getDb()
   const rows = await db.getAllFromIndex('rpgworlds', 'by_updatedAt')
-  return rows.reverse()
+  return rows.reverse().map(normalize)
 }
 
 export async function get(id: string): Promise<RpgWorld | undefined> {
   const db = await getDb()
-  return db.get('rpgworlds', id)
+  const w = await db.get('rpgworlds', id)
+  return w ? normalize(w) : undefined
 }
 
 export async function create(name = '新世界', seed?: number): Promise<RpgWorld> {
