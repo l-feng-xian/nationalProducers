@@ -57,14 +57,23 @@ export const useChatsStore = defineStore('chats', () => {
     invalidateIndex(chatId)
   }
 
-  /** 新建 1v1 会话，并按需求 2 随机播种一条开场白 */
-  async function createSolo(characterId: string | undefined, title: string): Promise<ChatMeta> {
+  /**
+   * 新建 1v1 会话，并按需求 2 随机播种一条开场白。
+   *
+   * @param persona 本会话生效的用户身份（RPG 的世界人设）。开场白里的 `{{user}}`
+   *   要按它展开。不传则按全局人设 —— 见 seedGreeting 的说明。
+   */
+  async function createSolo(
+    characterId: string | undefined,
+    title: string,
+    persona?: { name: string; description: string },
+  ): Promise<ChatMeta> {
     const meta = await chatsRepo.create({ kind: 'solo', title, characterId })
     meta.chat_metadata.chat_id_hash = fnv1a(meta.id)
     await chatsRepo.save(meta)
     list.value = [meta, ...list.value]
 
-    await seedGreeting(meta, characterId)
+    await seedGreeting(meta, characterId, persona)
     return meta
   }
 
@@ -99,6 +108,11 @@ export const useChatsStore = defineStore('chats', () => {
         const env = buildMacroEnv(
           {
             isGroup: true,
+            // ⚠️ 必须把 g 传进去。effectivePersona 里是
+            // `resolvePersona(input.isGroup ? input.group : undefined, …)` ——
+            // 只给 isGroup 不给 group，群人设会被整个跳过，开场白里的 {{user}}
+            // 用全局人设展开，而之后每轮生成用的却是群人设，前后对不上。
+            group: g,
             speaker: { id: char.id, name: char.data.name, char },
             members: g.members
               .map((m) => chars.byId(m))
@@ -128,8 +142,22 @@ export const useChatsStore = defineStore('chats', () => {
     return meta
   }
 
-  /** 开场白播种：仅当无消息且未 tainted */
-  async function seedGreeting(meta: ChatMeta, characterId: string | undefined) {
+  /**
+   * 开场白播种：仅当无消息且未 tainted。
+   *
+   * ⚠️ `persona` 必须由调用方传进来，不能在这里读 `meta.chat_metadata.rpg`：
+   * RPG 那条路是先 createSolo（此刻开场白已经渲染并落库）、**之后**才
+   * patchMetadata 写绑定，读的话永远是 undefined。
+   *
+   * ⚠️ 这里展开的宏是**一次性固化**的：`pickGreeting` 把整个开场白池都展开后
+   * 存进 `swipes`，而左右切换（ChatView 的 onSwipe）只做数组取值、不重新求值。
+   * 所以此处用错身份，池里每一条都错，且永久错 —— 没有二次修正的机会。
+   */
+  async function seedGreeting(
+    meta: ChatMeta,
+    characterId: string | undefined,
+    persona?: { name: string; description: string },
+  ) {
     if (meta.messageCount > 0 || meta.chat_metadata.tainted) return
     const chars = useCharactersStore()
     const settings = useSettingsStore()
@@ -137,6 +165,8 @@ export const useChatsStore = defineStore('chats', () => {
 
     const env = buildMacroEnv(
       {
+        // 两项留空等于不覆盖：effectivePersona 用 `||` 逐项回落全局
+        ...(persona ? { personaOverride: persona } : {}),
         isGroup: false,
         speaker: { id: char.id, name: char.data.name, char },
         members: [{ id: char.id, name: char.data.name, char }],

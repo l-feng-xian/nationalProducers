@@ -67,7 +67,9 @@ async function ensureChat(world: RpgWorld, npc: RpgNpc): Promise<string | null> 
 
   const card = chars.byId(npc.characterId)
   const { name } = resolveNpc(npc, card, world.name)
-  const meta = await chats.createSolo(npc.characterId, `${world.name} · ${name}`)
+  // 世界人设要在**建会话时**就传进去：开场白里的 {{user}} 在播种那一刻就被
+  // 展开并永久落库（整个 swipes 池都是），事后再补绑定也改不回来了
+  const meta = await chats.createSolo(npc.characterId, `${world.name} · ${name}`, world.persona)
   await chatsRepo.patchMetadata(meta.id, { rpg: bindingOf(world, npc) })
   npc.chatId = meta.id
   // ⚠️ 必须落库。只改内存的话重进游戏 chatId 又是空的，于是**每次说话都新建
