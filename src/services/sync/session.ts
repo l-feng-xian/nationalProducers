@@ -450,6 +450,7 @@ export class SyncSession {
         chats: file.chats.length,
         messages: file.messages.length,
         blobs: file.blobs.length,
+        rpgworlds: file.rpgworlds.length,
       },
       chatIds: file.chats.map((c) => idOf(c)),
       charIds: file.characters.map((c) => idOf(c)),

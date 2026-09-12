@@ -40,6 +40,7 @@ const SCOPE_ITEMS = [
   { key: 'groups', label: '群聊', hint: '含成员关系与用户身份' },
   { key: 'chats', label: '会话与消息', hint: '向量索引不传，对方会自动重建' },
   { key: 'settings', label: '设置', hint: '会整包覆盖对方的接口地址、模型与人设' },
+  { key: 'rpgworlds', label: 'RPG 世界', hint: '只含种子与 NPC，地形是算出来的' },
 ] as const
 
 const nothingPicked = computed(() => !SCOPE_ITEMS.some((i) => sync.scope[i.key]))

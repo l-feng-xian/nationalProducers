@@ -19,6 +19,7 @@ export interface SyncCounts {
   chats: number
   messages: number
   blobs: number
+  rpgworlds: number
 }
 
 export interface Manifest {
@@ -65,7 +66,7 @@ export function decodeFrame(s: string): Frame | null {
 }
 
 export function emptyCounts(): SyncCounts {
-  return { characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0 }
+  return { characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0, rpgworlds: 0 }
 }
 
 /** 「角色 4 · 世界书 2 · 会话 1 · 消息 17」，确认页与结果提示共用 */
@@ -77,5 +78,6 @@ export function describeCounts(c: SyncCounts): string {
   if (c.chats) parts.push(`会话 ${c.chats}`)
   if (c.messages) parts.push(`消息 ${c.messages}`)
   if (c.blobs) parts.push(`图片 ${c.blobs}`)
+  if (c.rpgworlds) parts.push(`世界 ${c.rpgworlds}`)
   return parts.join(' · ') || '空'
 }

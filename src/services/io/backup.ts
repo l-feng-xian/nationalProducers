@@ -26,6 +26,8 @@ export interface BackupFile {
   chats: unknown[]
   messages: unknown[]
   blobs: { id: string; mime: string; dataUrl: string }[]
+  /** RPG 世界存档。很小（地形是算出来的，只存种子与 NPC），随包走无压力 */
+  rpgworlds: unknown[]
 }
 
 function blobToDataUrl(b: Blob): Promise<string> {
@@ -74,6 +76,7 @@ export interface SyncScope {
   groups: boolean
   chats: boolean
   settings: boolean
+  rpgworlds: boolean
 }
 
 export const FULL_SCOPE: SyncScope = {
@@ -82,6 +85,7 @@ export const FULL_SCOPE: SyncScope = {
   groups: true,
   chats: true,
   settings: true,
+  rpgworlds: true,
 }
 
 /**
@@ -120,6 +124,7 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     groups,
     chats: s.chats ? await db.getAll('chats') : [],
     messages: s.chats ? await db.getAll('messages') : [],
+    rpgworlds: s.rpgworlds ? await db.getAll('rpgworlds') : [],
     blobs,
     // 注意：secrets（API Key）不导出
   }
@@ -137,6 +142,7 @@ export interface ImportResult {
   chats: number
   messages: number
   blobs: number
+  rpgworlds: number
 }
 
 /** 合并导入：同 id 覆盖，不清空现有数据 */
@@ -163,6 +169,7 @@ export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResu
     chats: 0,
     messages: 0,
     blobs: 0,
+    rpgworlds: 0,
   }
 
   // Blob 先还原，角色记录才有头像可指
@@ -179,7 +186,7 @@ export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResu
   }
 
   const bulk = async (
-    store: 'characters' | 'worldbooks' | 'groups' | 'chats' | 'messages',
+    store: 'characters' | 'worldbooks' | 'groups' | 'chats' | 'messages' | 'rpgworlds',
     rows: unknown[],
   ) => {
     for (const r of rows) {
@@ -193,6 +200,7 @@ export async function applyBackup(file: Partial<BackupFile>): Promise<ImportResu
   await bulk('groups', file.groups ?? [])
   await bulk('chats', (file.chats ?? []).map(stripMemIndex))
   await bulk('messages', file.messages ?? [])
+  await bulk('rpgworlds', file.rpgworlds ?? [])
 
   if (file.settings) await db.put('settings', toPlain(file.settings) as never)
   return out

@@ -14,6 +14,7 @@ import { createInput, type InputHandle } from './input'
 import { createScene, type SceneHandle } from './scene'
 import { createPlaceholderRig } from './rig'
 import { createSpineRig, loadSpine, type SpineAssetPaths } from './spineRig'
+import { nearestNpc, type RpgNpc } from '@/types/rpg'
 
 /** 移动速度，格/秒 */
 const SPEED = 5.2
@@ -39,6 +40,10 @@ export interface EngineHandle {
   position(): { x: number; y: number }
   /** 本帧是否在移动，UI 上要显示 */
   moving(): boolean
+  /** 当前够得着的 NPC，UI 上据此显示「按 E 交谈」。够不着为 null */
+  nearNpc(): RpgNpc | null
+  /** NPC 增删改后重新挂载 */
+  setNpcs(npcs: RpgNpc[]): void
   start(): void
   stop(): void
   dispose(): void
@@ -54,6 +59,8 @@ export interface CreateEngineArgs {
   forceWebGL?: boolean
   /** 玩家的 Spine 资源。不给、或加载失败，都自动退回程序化占位小人 */
   playerSpine?: SpineAssetPaths
+  /** 世界里的 NPC。位置是格坐标 */
+  npcs?: RpgNpc[]
 }
 
 /**
@@ -105,6 +112,45 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   }
   scene.addRig(player)
 
+  // ── NPC ──
+  // ⚠️ SkeletonData 可以共用，但每个 NPC 必须各建一份 Skeleton 与 AnimationState，
+  // 否则所有 NPC 会同步做一模一样的动作（连呼吸都同频，非常出戏）
+  const npcRigs = new Map<string, CharacterRig>()
+  let npcs: RpgNpc[] = args.npcs ?? []
+  let near: RpgNpc | null = null
+
+  function makeNpcRig(): CharacterRig {
+    if (spineLoad) {
+      return createSpineRig(spineLoad, {
+        THREE: scene.THREE,
+        pitch: scene.pitch,
+        height: PLAYER_H,
+      })
+    }
+    // 占位 NPC 换个色，好和玩家区分开
+    return createPlaceholderRig({ THREE: scene.THREE, pitch: scene.pitch, tint: '#4a7fd9' })
+  }
+
+  function syncNpcs(): void {
+    // 删掉已经不存在的
+    for (const [id, rig] of npcRigs) {
+      if (npcs.some((n) => n.id === id)) continue
+      scene.removeRig(rig)
+      rig.dispose()
+      npcRigs.delete(id)
+    }
+    for (const n of npcs) {
+      let rig = npcRigs.get(n.id)
+      if (!rig) {
+        rig = makeNpcRig()
+        npcRigs.set(n.id, rig)
+        scene.addRig(rig)
+      }
+      scene.placeRig(rig, n.x + 0.5, n.y + 0.5)
+    }
+  }
+  syncNpcs()
+
   // 窗口/容器尺寸变化要跟着走，否则转屏后画面被拉伸
   const ro = new ResizeObserver(() => scene.resize(host.clientWidth, host.clientHeight))
   ro.observe(host)
@@ -134,6 +180,11 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     playerRigKind,
     position: () => ({ x: px, y: py }),
     moving: () => isMoving,
+    nearNpc: () => near,
+    setNpcs(list) {
+      npcs = list
+      syncNpcs()
+    },
     start() {
       if (running) return
       running = true
@@ -148,6 +199,11 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     dispose() {
       handle.stop()
       ro.disconnect()
+      for (const rig of npcRigs.values()) {
+        scene.removeRig(rig)
+        rig.dispose()
+      }
+      npcRigs.clear()
       scene.removeRig(player)
       player.dispose()
       input.dispose()
@@ -169,6 +225,16 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     }
     player.play(dir.active ? 'walk' : 'idle')
     player.update(dt)
+
+    // NPC 原地待机。朝向玩家，好让「走过去搭话」时它是看着你的
+    for (const n of npcs) {
+      const rig = npcRigs.get(n.id)
+      if (!rig) continue
+      rig.setFacing(px - (n.x + 0.5), 0)
+      rig.play('idle')
+      rig.update(dt)
+    }
+    near = nearestNpc(npcs, px, py, world.params.width, world.params.height)
 
     scene.setPlayer(px, py)
     scene.placeRig(player, px, py)

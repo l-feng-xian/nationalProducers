@@ -65,10 +65,15 @@ export async function count(): Promise<number> {
  */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
-  const tx = db.transaction(['characters', 'blobs', 'chats', 'messages', 'groups'], 'readwrite')
+  const tx = db.transaction(
+    ['characters', 'blobs', 'chats', 'messages', 'groups', 'rpgworlds'],
+    'readwrite',
+  )
 
   const c = await tx.objectStore('characters').get(id)
   if (c?.avatarBlobId) await tx.objectStore('blobs').delete(c.avatarBlobId)
+  // 深度图也是这个角色的，一起收掉 —— 漏掉就是一张永远不会再被引用的孤儿图片
+  if (c?.depthBlobId) await tx.objectStore('blobs').delete(c.depthBlobId)
 
   const chatStore = tx.objectStore('chats')
   const chatIds = await chatStore.index('by_characterId').getAllKeys(id)
@@ -88,6 +93,32 @@ export async function remove(id: string): Promise<void> {
     delete g.layout[id]
     g.updatedAt = Date.now()
     await gStore.put(toPlain(g))
+  }
+
+  /**
+   * RPG 世界里引用了这张卡的 NPC。
+   *
+   * 不能只是把 characterId 清掉就完事：`resolveNpc` 在查不到卡时会回落到
+   * `npc.name || '无名者'`，而关联型 NPC 的 name 本来就是空的 —— 结果是
+   * 删掉一张卡，世界里那个 NPC **静默变成「无名者」**，站位还在、身份没了，
+   * 而且不报任何错。
+   *
+   * 所以解绑前先把卡上的名字与简介**落进 NPC 自己的字段**：NPC 留在原地、
+   * 还是那个人，只是从此不再跟着卡走。
+   */
+  const wStore = tx.objectStore('rpgworlds')
+  for (const w of await wStore.getAll()) {
+    let touched = false
+    for (const npc of w.npcs) {
+      if (npc.characterId !== id) continue
+      npc.name = npc.name || c?.data.name || '无名者'
+      npc.description = npc.description || c?.data.description || ''
+      delete npc.characterId
+      touched = true
+    }
+    if (!touched) continue
+    w.updatedAt = Date.now()
+    await wStore.put(toPlain(w))
   }
 
   await tx.objectStore('characters').delete(id)
