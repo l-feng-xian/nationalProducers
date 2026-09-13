@@ -8,8 +8,9 @@
  * 纯 service：不 import vue/pinia。
  */
 
-import type { World } from './world'
+import type { PropKind, World } from './world'
 import { findSpawn, findStandSpot, wrapDelta } from './world'
+import { TOOLS, ruleFor, type HarvestRule, type ToolId } from './harvest'
 import { findPath } from './pathfind'
 import { autoRoutine, fallbackRoutine, slotIndexAt } from './routine'
 import {
@@ -46,9 +47,49 @@ const MAX_DT = 0.05
 /** 角色的碰撞半径（格）。比 0.5 小，免得贴着岸边就卡住 */
 const RADIUS = 0.28
 
+/**
+ * 采集够得着的距离（格）。比交谈的 NPC_REACH(1.4) 略大 ——
+ * 树/石都是**挡路**道具，玩家只能站在它旁边而不能站上去，贴着站时中心距就已经
+ * 接近 1.0～1.4；给到 1.7 才不会出现「明明贴着树却说够不着」。
+ */
+const HARVEST_REACH = 1.7
+
+/** 够得着、且可采的一个目标。给 HUD 提示气泡与实际采集共用 */
+export interface HarvestTarget {
+  /** 格坐标（已回绕） */
+  x: number
+  y: number
+  kind: PropKind
+  rule: HarvestRule
+  /** 手里这件工具对不对 —— 不对就只提示「需要斧头」，不执行 */
+  ready: boolean
+}
+
 export interface EngineHandle {
   readonly scene: SceneHandle
   readonly input: InputHandle
+  /** 当前手持工具 */
+  tool(): ToolId
+  setTool(t: ToolId): void
+  /** 此刻够得着的可采目标（没有就是 null）。每帧由 HUD 读 */
+  harvestTarget(): HarvestTarget | null
+  /**
+   * 世界内容的版本号，每次 notifyWorldChanged 自增。
+   *
+   * HUD 的提示气泡不能每帧重算（要扫 5×5 格、每格一次带噪声的 propAt），只能在
+   * 「可能变了」时重算。玩家挪格、换工具都由视图自己知道，但**树被砍掉 / 长回来**
+   * 是引擎侧发生的 —— 没有这个版本号，刷新后提示气泡会一直停在过期状态
+   * （树明明回来了却不提示，或树没了还提示去砍）。
+   */
+  worldVersion(): number
+  /**
+   * 告诉引擎某一格的世界内容变了（采集掉了 / 刷新长回来了）。
+   *
+   * ⚠️ 必须调：引擎把「能不能站」按格记忆化了（standCache），而 chunk 网格是
+   * 启动时一次性烘焙的静态几何。不通知的话，砍掉的树**碰撞还在**（走不过去）
+   * 且**画面还在**；长回来的树则是碰撞有了、画面没有。
+   */
+  notifyWorldChanged(x: number, y: number): void
   /** 玩家当前格坐标（浮点，已回绕） */
   position(): { x: number; y: number }
   /** 本帧是否在移动，UI 上要显示 */
@@ -102,6 +143,17 @@ export interface CreateEngineArgs {
   clock0?: number
   /** 时间流速。0 = 冻结 */
   timeScale?: number
+  /**
+   * 采集状态的读写口。数据归游戏页（它才有存档），**定时**归引擎（它才有时钟）。
+   *
+   * 引擎每跨一个游戏分钟问一次 takeExpired：到点该长回来的格子由它取走，
+   * 引擎据此重建那几块 chunk。不这么分工的话，要么视图层得自己跑一条 rAF 去
+   * 轮询刷新，要么引擎得认识 IndexedDB —— 两种都更糟。
+   */
+  harvest?: {
+    /** 取走所有「刷新时刻 ≤ now」的格并从表中删除，返回它们 */
+    takeExpired(now: number): ReadonlyArray<{ x: number; y: number }>
+  }
 }
 
 export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle> {
@@ -217,6 +269,51 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   /** 环面距离（格） */
   const torusDist = (ax: number, ay: number, bx: number, by: number): number =>
     Math.hypot(wrapDelta(ax - bx, W), wrapDelta(ay - by, H))
+
+  // ── 采集 ──
+
+  let curTool: ToolId = 'hand'
+
+  /**
+   * 找此刻够得着的那个可采目标：5×5 邻域里离玩家最近的可采道具。
+   *
+   * 用「最近的」而不是「正前方那一格」：后者要求玩家先把朝向对准，在 2.5D 斜视
+   * 加摇杆的操作下相当别扭 —— 明明贴着树，只因为朝向差一点就采不到。
+   */
+  function harvestTarget(): HarvestTarget | null {
+    let best: HarvestTarget | null = null
+    let bestD = HARVEST_REACH
+    const gx = Math.floor(px)
+    const gy = Math.floor(py)
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const x = (((gx + dx) % W) + W) % W
+        const y = (((gy + dy) % H) + H) % H
+        const pr = world.propAt(x, y)
+        if (!pr) continue
+        const rule = ruleFor(pr.kind)
+        if (!rule) continue
+        // 量到道具的**实际落点**（含亚格偏移），否则贴着一棵偏了半格的树会判成够不着
+        const d = torusDist(px, py, x + 0.5 + pr.ox, y + 0.5 + pr.oy)
+        if (d >= bestD) continue
+        bestD = d
+        best = { x, y, kind: pr.kind, rule, ready: rule.tool === curTool }
+      }
+    }
+    return best
+  }
+
+  /** 世界内容版本号。见 EngineHandle.worldVersion */
+  let worldVer = 0
+
+  /** 某格内容变了：作废通行缓存、重建那一块网格、并让 HUD 知道该重算了 */
+  function notifyWorldChanged(x: number, y: number): void {
+    const gx = ((Math.floor(x) % W) + W) % W
+    const gy = ((Math.floor(y) % H) + H) % H
+    standCache.delete(gy * W + gx)
+    scene.rebuildAt(gx, gy)
+    worldVer++
+  }
 
   /**
    * 找 NPC 落点。实现搬到了 world.ts（创建向导要在没有引擎、没有 WebGPU 的
@@ -417,6 +514,13 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     position: () => ({ x: px, y: py }),
     moving: () => isMoving,
     nearNpc: () => near,
+    tool: () => curTool,
+    setTool(t) {
+      curTool = t
+    },
+    harvestTarget,
+    worldVersion: () => worldVer,
+    notifyWorldChanged,
     setNpcs(list) {
       npcs = list
       syncNpcs()
@@ -529,6 +633,18 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     lastMinute = Math.floor(clockTotal)
     // 天色也是每游戏分钟更新一次，不是每帧
     if (minuteChanged) scene.setTimeOfDay(clockMinuteOfDay)
+
+    // 到点的采集格长回来。每游戏分钟问一次，不是每帧 —— 刷新粒度本来就是分钟级
+    if (minuteChanged && args.harvest) {
+      for (const c of args.harvest.takeExpired(clockTotal)) notifyWorldChanged(c.x, c.y)
+    }
+
+    // 数字键选工具。槽位号从 1 起（与快捷栏上印的数字一致）
+    const slot = input.consumeSlot()
+    if (slot !== null) {
+      const t = TOOLS[slot - 1]
+      if (t) curTool = t.id
+    }
 
     const dir = input.direction()
     isMoving = dir.active

@@ -136,6 +136,22 @@ function normalize(w: RpgWorld): RpgWorld {
     typeof w.relationTemplate === 'string' && w.relationTemplate
       ? w.relationTemplate
       : DEFAULT_RELATION_TEMPLATE
+  // 采集覆盖层与背包是后加的。两张都是「键 → 有限数」的稀疏表，逐条过滤：
+  // 一个 NaN 刷新时刻会让那格**永远**长不回来（NaN 的比较恒为 false），
+  // 一个 NaN 数量会让背包显示成「木材 NaN」且再也加不回去
+  const harvestIn = w.harvested && typeof w.harvested === 'object' ? w.harvested : {}
+  const harvestOut: Record<string, number> = {}
+  for (const [k, v] of Object.entries(harvestIn)) {
+    if (typeof v === 'number' && Number.isFinite(v)) harvestOut[k] = v
+  }
+  w.harvested = harvestOut
+  const itemsIn = w.items && typeof w.items === 'object' ? w.items : {}
+  const itemsOut: Record<string, number> = {}
+  for (const [k, v] of Object.entries(itemsIn)) {
+    // 数量取整且不接受负数 —— 负库存会让「有没有」这类判断全错
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) itemsOut[k] = Math.floor(v)
+  }
+  w.items = itemsOut
   // 地形参数同样是后加的。逐字段兜底成 LEGACY_GEN —— 也就是参数化之前那版
   // 生成器的行为，老世界因此逐格不变。⚠️ 这里是整个向后兼容故事的落点
   w.gen = normalizeGen(w.gen)

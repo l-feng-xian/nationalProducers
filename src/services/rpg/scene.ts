@@ -117,6 +117,14 @@ export interface SceneHandle {
   removeRig(rig: CharacterRig): void
   /** 把某个 rig 立到格坐标 (x,y) 的地表上。rig 自己负责朝向 */
   placeRig(rig: CharacterRig, x: number, y: number): void
+  /**
+   * 重建 (x,y) 所在那一块 chunk 的网格。
+   *
+   * ⚠️ 采集掉一棵树、或树刷新长回来之后**必须**调它：chunk 网格是启动时一次性
+   * 烘焙好的静态几何，不重建的话砍掉的树会一直留在画面上（而碰撞已经没了），
+   * 或者长回来的树看不见（而碰撞已经有了）—— 两种都是「看到的和能走的不一致」。
+   */
+  rebuildAt(x: number, y: number): void
   resize(w: number, h: number): void
   /**
    * 按当天分钟调整天色。
@@ -282,10 +290,6 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     opacity: 0.25,
     depthWrite: false,
   })
-  const solidGeos: THREE_NS.BufferGeometry[] = []
-  const waterGeos: THREE_NS.BufferGeometry[] = []
-  const foamGeos: THREE_NS.BufferGeometry[] = []
-  const shadowGeos: THREE_NS.BufferGeometry[] = []
   /**
    * 一块 chunk 的全部层网格 + 它的中心 + 当前生效的平移量。
    *
@@ -294,6 +298,14 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
    */
   interface ChunkEntry {
     meshes: THREE_NS.Mesh[]
+    /**
+     * 这一块自己的几何体。
+     *
+     * ⚠️ 必须**按块**记，不能像原先那样堆进四个全局数组：采集要重建单块，
+     * 重建时得精确释放**这一块**的旧几何。堆在全局数组里的话，重建只会让数组
+     * 无限增长，旧几何永远不释放 —— 砍几十棵树就是几十份泄漏的顶点缓冲。
+     */
+    geos: THREE_NS.BufferGeometry[]
     cx: number
     cz: number
     /** 当前平移量（0 或 ±W/±H）。只在变化时才写矩阵 */
@@ -301,6 +313,9 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     oz: number
   }
   const chunks: ChunkEntry[] = []
+  /** chunk 左上角格键 → 该块。重建时要按坐标找到旧块 */
+  const chunkAt = new Map<number, ChunkEntry>()
+  const chunkKey = (cx0: number, cz0: number): number => cz0 * W + cx0
   /** 泡沫条的顶点色占位 —— 颜色完全由泡沫材质给 */
   const FOAM_COLOR: RGB = { r: 1, g: 1, b: 1 }
 
@@ -406,7 +421,24 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
         }
       }
     }
-    const entry: ChunkEntry = { meshes: [], cx: cx0 + cw / 2, cz: cz0 + ch / 2, ox: 0, oz: 0 }
+    // 重建：先把这一块的旧网格从场景摘掉并释放几何，再挂新的。
+    // 不摘的话旧树会和新空地**同时**画出来（深度相同，闪烁），而且几何泄漏
+    const prev = chunkAt.get(chunkKey(cx0, cz0))
+    if (prev) {
+      for (const m of prev.meshes) scene.remove(m)
+      for (const g of prev.geos) g.dispose()
+      const i = chunks.indexOf(prev)
+      if (i >= 0) chunks.splice(i, 1)
+      chunkAt.delete(chunkKey(cx0, cz0))
+    }
+    const entry: ChunkEntry = {
+      meshes: [],
+      geos: [],
+      cx: cx0 + cw / 2,
+      cz: cz0 + ch / 2,
+      ox: 0,
+      oz: 0,
+    }
     /** 挂一块 chunk 层网格：几何固定，位置由 setPlayer 按最近环面镜像改写 */
     const addChunkMesh = (
       g: THREE_NS.BufferGeometry,
@@ -424,25 +456,28 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     }
     if (land.triangles > 0) {
       const g = land.toGeometry(THREE)
-      solidGeos.push(g)
+      entry.geos.push(g)
       addChunkMesh(g, terrainMat, 0)
     }
     if (shadow.triangles > 0) {
       const g = shadow.toGeometry(THREE)
-      shadowGeos.push(g)
+      entry.geos.push(g)
       addChunkMesh(g, shadowMat, 1) // 贴地阴影最先画,水面泡沫盖在其上
     }
     if (water.triangles > 0) {
       const g = water.toGeometry(THREE)
-      waterGeos.push(g)
+      entry.geos.push(g)
       addChunkMesh(g, waterMat, 2)
     }
     if (foam.triangles > 0) {
       const g = foam.toGeometry(THREE)
-      foamGeos.push(g)
+      entry.geos.push(g)
       addChunkMesh(g, foamMat, 3)
     }
-    if (entry.meshes.length) chunks.push(entry)
+    if (entry.meshes.length) {
+      chunks.push(entry)
+      chunkAt.set(chunkKey(cx0, cz0), entry)
+    }
   }
 
   // 每 4 个 chunk 让出一帧，启动遮罩才有机会刷新
@@ -596,6 +631,13 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     // 用 in 做运行时探测，别为了过类型去断言一个可能不存在的属性
     backend: renderer.backend && 'isWebGPUBackend' in renderer.backend ? 'webgpu' : 'webgl',
     setPlayer,
+    rebuildAt(x: number, y: number) {
+      const gx = ((Math.floor(x) % W) + W) % W
+      const gy = ((Math.floor(y) % H) + H) % H
+      buildChunk(Math.floor(gx / CHUNK) * CHUNK, Math.floor(gy / CHUNK) * CHUNK)
+      // 新挂的网格平移量还是 0；不重跑一次镜像定位，这一块会闪到世界原点一帧
+      setPlayer(playerX, playerY)
+    },
     resize,
     setTimeOfDay(minuteOfDay: number) {
       const s = skyAt(minuteOfDay)
@@ -630,10 +672,7 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
       }),
     }),
     dispose: () => {
-      for (const g of solidGeos) g.dispose()
-      for (const g of waterGeos) g.dispose()
-      for (const g of foamGeos) g.dispose()
-      for (const g of shadowGeos) g.dispose()
+      for (const c of chunks) for (const g of c.geos) g.dispose()
       cloudGeo.dispose()
       terrainMat.dispose()
       waterMat.dispose()

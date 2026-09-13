@@ -22,6 +22,7 @@ import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { NPC_MAX, ROUTINE_KIND_LABEL, resolveNpc, type RpgNpc } from '@/types/rpg'
 import { TALK_MINUTES, formatTimeOfDay, phaseLabel, phaseOf } from '@/services/rpg/time'
+import { ITEMS, TOOLS, cellKey, propLabel, type ToolId } from '@/services/rpg/harvest'
 
 defineOptions({ name: 'RpgPlayView' })
 
@@ -44,8 +45,81 @@ const dayText = ref('')
 const timeText = ref('')
 const editorOpen = ref(false)
 
+/** 当前手持工具。引擎才是真相源，这里只是给模板用的响应式镜像 */
+const curTool = ref<ToolId>('hand')
+/** 上下文提示气泡的文案（靠近 NPC / 面对可采物 / 空） */
+const tip = ref('')
+
+/**
+ * 采集覆盖层的**非响应式**镜像：格键 → 长回来的时刻（游戏分钟）。
+ *
+ * ⚠️ 不直接读 `w.harvested`：那是 pinia 的响应式代理，而 propAt 光是建一次
+ * chunk 就要调六万多次，每次多一个代理 get 纯属白烧。这里留一份普通 Map 供查询，
+ * 采集时**双写**（Map 管查询、存档对象管落盘）。
+ */
+const harvestMap = new Map<string, number>()
+/** 当前游戏分钟。判断「长回来没有」要用，每帧由 onTick 刷新 */
+let nowMinutes = 0
+
+/** 注入世界：这一格此刻是不是空的（被采走且还没长回来） */
+function isHarvested(x: number, y: number): boolean {
+  const t = harvestMap.get(cellKey(x, y))
+  return t !== undefined && t > nowMinutes
+}
+
+/** 注入引擎：取走所有到点该长回来的格（引擎据此重建网格） */
+function takeExpired(now: number): Array<{ x: number; y: number }> {
+  const w = rpg.current
+  const out: Array<{ x: number; y: number }> = []
+  // ⚠️ 先拷一份再遍历：循环里在删同一张 Map
+  for (const [k, t] of [...harvestMap]) {
+    if (t > now) continue
+    harvestMap.delete(k)
+    if (w) delete w.harvested[k]
+    const c = k.split(',')
+    out.push({ x: Number(c[0]), y: Number(c[1]) })
+  }
+  return out
+}
+
+function toolName(id: ToolId): string {
+  return TOOLS.find((t) => t.id === id)?.name ?? id
+}
+
+function pickTool(id: ToolId): void {
+  engine.value?.setTool(id)
+  curTool.value = id
+  refreshTip()
+}
+
+/**
+ * 重算提示气泡。
+ *
+ * ⚠️ 刻意**不是每帧**算：harvestTarget 要扫 5×5 个格，每格一次 propAt（噪声采样
+ * 好几层）。每帧算就是每秒一千多次噪声，白白吃掉移动端的帧。目标只在「玩家换了
+ * 格子 / 换了工具 / 世界变了」时才会变，按这三件事触发即可。
+ */
+function refreshTip(): void {
+  const eng = engine.value
+  if (!eng) return
+  if (nearName.value) {
+    tip.value = `面向 ${nearName.value} · 空格交谈`
+    return
+  }
+  const t = eng.harvestTarget()
+  if (!t) {
+    tip.value = ''
+    return
+  }
+  tip.value = t.ready
+    ? `面向${propLabel(t.kind)} · 空格${t.rule.verb}`
+    : `面向${propLabel(t.kind)} · 需要${toolName(t.rule.tool)}`
+}
+
 /** 玩家位置每帧都在变，但只有跨格时才值得落盘 —— 否则一秒写几十次 IDB */
 let lastSavedTile = ''
+/** 提示气泡的重算依据：格坐标 + 工具 + 附近 NPC。变了才重算，见 refreshTip */
+let lastTipKey = ''
 /** 世界时刻的兜底落盘间隔（游戏分钟）。见 onTick 里的说明 */
 const CLOCK_SAVE_MINUTES = 30
 let lastSavedMinutes = 0
@@ -65,8 +139,14 @@ onMounted(async () => {
     return
   }
 
+  // 采集覆盖层：存档 → 非响应式镜像。必须在 createWorld 之前 —— 建 chunk 时
+  // propAt 就要查它，晚一步的话开局那一帧砍掉的树会又长出来
+  harvestMap.clear()
+  for (const [k, v] of Object.entries(w.harvested)) harvestMap.set(k, v)
+  nowMinutes = w.worldMinutes
+
   try {
-    const world = createWorld(worldParamsOf(w))
+    const world = createWorld(worldParamsOf(w), { isHarvested })
     // 向导里配好的名册 NPC 还没坐标（x=-1），第一次进世界按角色落位。
     // ⚠️ 必须在 createEngine 之前 —— 引擎 syncNpcs/initRt 会把 x<0 的人当「站错了」
     // 用通用兜底就近挪走，那样铁匠就不进村、农夫就不到田边了。落位是幂等的：
@@ -80,6 +160,7 @@ onMounted(async () => {
       npcs: w.npcs,
       clock0: w.worldMinutes,
       timeScale: w.timeScale,
+      harvest: { takeExpired },
       ...(w.playerX >= 0 ? { start: { x: w.playerX, y: w.playerY } } : {}),
       // ?webgl=1 强制走 WebGL 后端。这个入参一直都在，只是从没接到视图层 ——
       // 于是移动端唯一会走的那条回退路径至今**没法验**
@@ -125,6 +206,18 @@ function onTick() {
   }
   const c = eng.clock()
   w.worldMinutes = c.total
+  // propAt 判断「长回来没有」读的就是它
+  nowMinutes = c.total
+  curTool.value = eng.tool()
+  // 提示气泡按「格 + 工具 + 附近 NPC + 世界版本」变化触发重算，不是每帧（见 refreshTip）。
+  // ⚠️ 世界版本必须算进来：树被砍掉/长回来是引擎侧发生的，少了它提示会停在过期状态
+  const tipKey =
+    `${Math.floor(p.x)},${Math.floor(p.y)}|${curTool.value}|${nearName.value}` +
+    `|${eng.worldVersion()}`
+  if (tipKey !== lastTipKey) {
+    lastTipKey = tipKey
+    refreshTip()
+  }
   // HUD 的日期/时刻簇分两行显示（参考「小岛时光」）：上行「世界名 · 第 N 天」，
   // 下行「时段 HH:MM」。拆成两个 ref 而不是在模板里切字符串 —— 模板里做字符串
   // 处理，改一次格式就要同时改模板与这里，迟早对不上
@@ -140,8 +233,44 @@ function onTick() {
     if (!rpg.pending) void rpg.save()
   }
 
-  // 靠近时按交互键
-  if (eng.input.consumeInteract() && near && !rpg.talkingTo) openTalk(near)
+  // 交互键一键两用：身边有人就说话，没人就对着脚边的东西动手。
+  // 交谈优先 —— 站在树旁边的 NPC 更可能是你想搭话的对象
+  if (eng.input.consumeInteract() && !rpg.talkingTo) {
+    if (near) openTalk(near)
+    else doHarvest()
+  }
+}
+
+/**
+ * 采集一次。
+ *
+ * 产出与刷新时长全部来自 harvest.ts 的规则表，这里只负责「把结果落到存档、
+ * 告诉引擎这格变了、给玩家一个反馈」三件事。
+ */
+function doHarvest(): void {
+  const eng = engine.value
+  const w = rpg.current
+  if (!eng || !w) return
+  const t = eng.harvestTarget()
+  if (!t) return
+  if (!t.ready) {
+    toast.error(`需要${toolName(t.rule.tool)}才行`)
+    return
+  }
+  const key = cellKey(t.x, t.y)
+  // 存的是**长回来的时刻**而不是采集时刻，见 RpgWorld.harvested 的说明
+  const until = w.worldMinutes + t.rule.respawn
+  harvestMap.set(key, until)
+  w.harvested[key] = until
+  const def = ITEMS[t.rule.item]
+  w.items[t.rule.item] = (w.items[t.rule.item] ?? 0) + t.rule.count
+  // 通行缓存与那一块网格都要跟着变，否则「看到的」与「走得过去的」会对不上
+  eng.notifyWorldChanged(t.x, t.y)
+  toast.success(`${def.icon} ${def.name} ×${t.rule.count}`)
+  // 目标没了，提示气泡必须重算 —— 否则会一直提示去砍一棵已经没有的树
+  lastTipKey = ''
+  refreshTip()
+  void rpg.save()
 }
 
 function openTalk(npc: RpgNpc) {
@@ -208,6 +337,15 @@ async function send(text: string) {
 
 function onPad(x: number, y: number) {
   engine.value?.input.setStick(x, y)
+}
+
+/** 互动按钮 = 空格：身边有人就说话，没人就对脚边的东西动手 */
+function onAct(): void {
+  const eng = engine.value
+  if (!eng || rpg.talkingTo) return
+  const near = eng.nearNpc()
+  if (near) openTalk(near)
+  else doHarvest()
 }
 
 function placeNpc() {
@@ -325,13 +463,27 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <!-- ── 底部中央：上下文提示气泡 ── -->
-      <div v-if="nearName && !rpg.talkingTo" class="tip">
-        面向 <b>{{ nearName }}</b> · 空格交谈
-      </div>
+      <!-- ── 底部：上下文提示气泡（面前是什么 + 手里这件工具能做什么）── -->
+      <div v-if="tip && !rpg.talkingTo" class="tip">{{ tip }}</div>
+
+      <!-- ── 底部中央：工具快捷栏。数字键与点击等价 ── -->
+      <nav v-if="!booting && !bootError && !rpg.talkingTo" class="hotbar">
+        <button
+          v-for="(t, i) in TOOLS"
+          :key="t.id"
+          class="slot"
+          :class="{ 'slot--on': curTool === t.id }"
+          :title="`${t.name}（按 ${i + 1}）`"
+          @click="pickTool(t.id)"
+        >
+          <span class="slot__n">{{ i + 1 }}</span>
+          <span class="slot__icon">{{ t.icon }}</span>
+          <span class="slot__name">{{ t.name }}</span>
+        </button>
+      </nav>
 
       <!-- ── 右下：互动按钮（桌面与触屏都给，参考站即如此）── -->
-      <button v-if="nearName && !rpg.talkingTo" class="act" @click="openTalk(engine!.nearNpc()!)">
+      <button v-if="tip && !rpg.talkingTo" class="act" @click="onAct">
         互动<kbd class="act__key">空格</kbd>
       </button>
 
@@ -385,6 +537,8 @@ onBeforeUnmount(() => {
   /* 摇杆直径在这里定义、由 TouchPad 继承使用：靠近提示要抬到摇杆之上，
      两处尺寸必须同源，否则改了一边就会重新叠上去 */
   --rpg-pad-size: 112px;
+  /* 快捷栏高度。提示气泡要抬到它之上，两处必须同源 */
+  --rpg-hotbar-h: 74px;
   position: relative;
   flex: 1;
   min-height: 0;
@@ -517,7 +671,10 @@ onBeforeUnmount(() => {
 .tip {
   position: absolute;
   left: 50%;
-  bottom: max(var(--cbx-space-5), var(--cbx-safe-b));
+  /* 抬到快捷栏之上 —— 参考站也是「提示在上、工具栏在下」 */
+  bottom: calc(
+    max(var(--cbx-space-4), var(--cbx-safe-b)) + var(--rpg-hotbar-h) + var(--cbx-space-2)
+  );
   transform: translateX(-50%);
   z-index: 4;
   padding: 11px 22px;
@@ -529,6 +686,60 @@ onBeforeUnmount(() => {
   font-size: var(--cbx-fs-sm);
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* 底部中央：工具快捷栏 */
+.hotbar {
+  position: absolute;
+  left: 50%;
+  bottom: max(var(--cbx-space-4), var(--cbx-safe-b));
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--rpg-radius);
+  border: 1px solid rgba(255, 252, 231, 0.9);
+  background: var(--rpg-cream);
+  box-shadow: var(--rpg-shadow);
+  font-family: var(--rpg-font);
+}
+.slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 58px;
+  padding: 5px 3px;
+  border: 2px solid transparent;
+  border-radius: var(--rpg-radius-sm);
+  background: rgba(255, 255, 255, 0.55);
+  color: #4d6b51;
+  font-family: inherit;
+  font-size: var(--cbx-fs-xs);
+  cursor: pointer;
+}
+/* 选中态：暖黄底 + 绿描边 + 外圈浅绿，与参考站一致 */
+.slot--on {
+  background: var(--rpg-active);
+  border-color: var(--rpg-green);
+  box-shadow: 0 0 0 2px var(--rpg-green-soft);
+}
+.slot__n {
+  position: absolute;
+  top: 1px;
+  left: 5px;
+  font-size: 10px;
+  opacity: 0.55;
+}
+.slot__icon {
+  font-size: 20px;
+  line-height: 1.1;
+}
+.slot__name {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 /* 右下：互动按钮 */
@@ -567,10 +778,22 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
-  /* 手机上摇杆在左下角、互动键在右下角，居中的提示条要抬到它们之上 */
+  /* 手机上左下是摇杆、右下是互动键，中间塞不下快捷栏 —— 整摞往上挪：
+     摇杆/互动键一层，快捷栏在其上，提示气泡再在其上 */
+  .hotbar {
+    bottom: calc(
+      max(var(--cbx-space-4), var(--cbx-safe-b)) + var(--rpg-pad-size) + var(--cbx-space-2)
+    );
+    padding: 6px;
+    gap: 4px;
+  }
+  .slot {
+    width: 50px;
+  }
   .tip {
     bottom: calc(
-      max(var(--cbx-space-4), var(--cbx-safe-b)) + var(--rpg-pad-size) + var(--cbx-space-3)
+      max(var(--cbx-space-4), var(--cbx-safe-b)) + var(--rpg-pad-size) + var(--rpg-hotbar-h) +
+        var(--cbx-space-3)
     );
     font-size: var(--cbx-fs-xs);
   }

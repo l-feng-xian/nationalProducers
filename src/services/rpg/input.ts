@@ -19,8 +19,15 @@ export interface InputHandle {
   direction(): Direction
   /** 虚拟摇杆把自己的向量喂进来，各分量 -1..1 */
   setStick(x: number, y: number): void
-  /** 交互键（对话）。读一次就清掉，避免一次按键触发多帧 */
+  /** 交互键（对话 / 采集）。读一次就清掉，避免一次按键触发多帧 */
   consumeInteract(): boolean
+  /**
+   * 数字键选工具，返回 1..9（没按返回 null）。读一次就清掉。
+   *
+   * 返回的是**人看到的槽位号**（从 1 起）而不是下标：快捷栏上印的就是 1..7，
+   * 在这里减一会让「屏幕上的 3」与代码里的 3 不是一回事，早晚差一格。
+   */
+  consumeSlot(): number | null
   dispose(): void
 }
 
@@ -42,6 +49,7 @@ export function createInput(): InputHandle {
   let stickX = 0
   let stickY = 0
   let interact = false
+  let slot: number | null = null
 
   const onKeyDown = (e: KeyboardEvent): void => {
     // 正在输入框里打字时不要吞按键 —— 对话面板有输入框
@@ -54,6 +62,13 @@ export function createInput(): InputHandle {
     }
     if (INTERACT_KEYS.has(e.code)) {
       interact = true
+      e.preventDefault()
+      return
+    }
+    // 数字键选工具。主键盘与小键盘都认 —— 笔记本外接键盘用小键盘的人不少
+    const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code)
+    if (digit) {
+      slot = Number(digit[1])
       e.preventDefault()
     }
   }
@@ -101,6 +116,11 @@ export function createInput(): InputHandle {
     consumeInteract() {
       const v = interact
       interact = false
+      return v
+    },
+    consumeSlot() {
+      const v = slot
+      slot = null
       return v
     },
     dispose() {

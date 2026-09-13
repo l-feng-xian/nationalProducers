@@ -228,6 +228,19 @@ export interface RpgWorld {
   /** 关系渲染模板，见 DEFAULT_RELATION_TEMPLATE */
   relationTemplate: string
   /**
+   * 采集覆盖层：格键 `"x,y"` → **该格重新长出来的那一刻**（worldMinutes）。
+   *
+   * ⚠️ 这是世界里唯一「非确定性」的一层。地形与道具本来全由种子推导、零存储
+   * （见 world.ts），而采集必须让世界**可变**，所以只能把差异存下来。
+   *
+   * ⚠️ 存的是**刷新时刻**而不是采集时刻：判断「此刻这格空不空」只要比一个数，
+   * 不必反查那格原本是什么道具 —— 反查会绕回 propAt，而 propAt 正要用这张表，
+   * 直接成环。到点后条目会被清掉，表不会无限增长。
+   */
+  harvested: Record<string, number>
+  /** 背包：物品 id → 数量。见 services/rpg/harvest.ts 的 ITEMS */
+  items: Record<string, number>
+  /**
    * 世界诞生以来的总游戏分钟。唯一真相源 —— 天数与当天时刻都从它算。
    * 不存成两个字段是因为两个字段迟早会对不上（跨天时先写哪个都错一帧）。
    *
@@ -260,6 +273,8 @@ export function emptyWorld(id: string, name = '新世界', seed?: number): RpgWo
     relations: [],
     layout: {},
     relationTemplate: DEFAULT_RELATION_TEMPLATE,
+    harvested: {},
+    items: {},
     // 第 0 天 08:00。刻意不随机 —— 新世界一进去就是深夜、屏幕一片黑，
     // 第一印象就砸了
     worldMinutes: 480,

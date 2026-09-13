@@ -234,7 +234,21 @@ export interface Village {
   fy: number
 }
 
-export function createWorld(p: WorldParams): World {
+/**
+ * 世界的外部钩子。世界本身是纯推导的，这里是**唯一**允许外部影响它的缝。
+ */
+export interface WorldHooks {
+  /**
+   * 该格的道具是否已被采集、还没长回来。缺省恒 false。
+   *
+   * ⚠️ 由游戏页注入而不是 world 自己去读存档：world.ts 是纯 service，不认识
+   * IndexedDB 也不认识时钟。缩略预览、落位、寻路都不传它 —— 它们只关心
+   * 「这个种子长什么样」，与某一局的采集进度无关。
+   */
+  isHarvested?: (x: number, y: number) => boolean
+}
+
+export function createWorld(p: WorldParams, hooks: WorldHooks = {}): World {
   const sampler = createSampler(p)
   const { wrapX, wrapY } = sampler
   const W = sampler.width
@@ -595,6 +609,8 @@ export function createWorld(p: WorldParams): World {
     const wy = wrapY(Math.floor(y))
     const b = sampler.biomeAt(wx, wy)
     if (b === BIOME.water || b === BIOME.shallow) return null
+    // 已被采集、还没长回来 —— 这一格此刻就是空地
+    if (hooks.isHarvested?.(wx, wy)) return null
     // 村庄之间的道路上不摆东西（roadAt 已避开村庄内部，不会误伤水井/田/村道十字）
     if (roadAt(wx, wy)) return null
 
