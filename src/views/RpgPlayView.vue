@@ -12,6 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import DialogueBar from '@/components/rpg/DialogueBar.vue'
 import NpcEditor from '@/components/rpg/NpcEditor.vue'
+import Backpack from '@/components/rpg/Backpack.vue'
 import TouchPad from '@/components/rpg/TouchPad.vue'
 import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
@@ -44,6 +45,7 @@ const dayText = ref('')
 /** HUD 时刻簇：「下午 15:51」 */
 const timeText = ref('')
 const editorOpen = ref(false)
+const bagOpen = ref(false)
 
 /** 当前手持工具。引擎才是真相源，这里只是给模板用的响应式镜像 */
 const curTool = ref<ToolId>('hand')
@@ -394,20 +396,22 @@ function onRederive(id: string) {
 }
 
 /**
- * HUD 快捷键。目前只有 N（身份面板）—— 按键提示芯片上写了什么，就必须真的能按，
+ * HUD 快捷键：N = 身份面板，B = 背包 —— 按键提示芯片上写了什么，就必须真的能按，
  * 否则 UI 在撒谎。
  *
  * ⚠️ 正在输入时绝不抢键：对话框里打「n」不该弹出身份面板。带修饰键也放过，
  * 那些是浏览器/系统的快捷键。
  */
 function onKey(e: KeyboardEvent): void {
-  if (e.key !== 'n' && e.key !== 'N') return
+  const k = e.key.toLowerCase()
+  if (k !== 'n' && k !== 'b') return
   if (e.ctrlKey || e.metaKey || e.altKey) return
   const t = e.target as HTMLElement | null
   if (t && (t.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
   if (rpg.talkingTo) return
   e.preventDefault()
-  editorOpen.value = !editorOpen.value
+  if (k === 'n') editorOpen.value = !editorOpen.value
+  else bagOpen.value = !bagOpen.value
 }
 window.addEventListener('keydown', onKey)
 
@@ -456,6 +460,7 @@ onBeforeUnmount(() => {
         >
           放 NPC
         </button>
+        <button class="pill" @click="bagOpen = true">背包<kbd class="pill__key">B</kbd></button>
         <button class="pill" @click="editorOpen = true">身份<kbd class="pill__key">N</kbd></button>
         <!-- 后端不能藏掉 —— 它正是移动端回退路径 (?webgl=1) 唯一的观测点 -->
         <span v-if="backend" class="pill pill--flat">
@@ -488,6 +493,8 @@ onBeforeUnmount(() => {
       </button>
 
       <TouchPad v-if="!rpg.talkingTo" @move="onPad" />
+
+      <Backpack v-if="bagOpen" :items="rpg.current?.items ?? {}" @close="bagOpen = false" />
 
       <DialogueBar
         v-if="rpg.talkingTo"
@@ -778,6 +785,26 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
+  /* 390px 下两个 HUD 簇会正面相撞（左簇右缘 ~111px，右簇宽 ~347px）。
+     触屏本来就没有键盘，按键提示芯片在这里纯属占地方 —— 收掉它并收紧内边距，
+     右簇就落回两百出头，两边不再打架 */
+  .pill__key {
+    display: none;
+  }
+  .pill {
+    padding: 6px 9px;
+    gap: 0;
+    font-size: var(--cbx-fs-xs);
+  }
+  .hud--tl,
+  .hud--tr {
+    top: 8px;
+  }
+  .hud__sun {
+    width: 26px;
+    height: 26px;
+    font-size: 14px;
+  }
   /* 手机上左下是摇杆、右下是互动键，中间塞不下快捷栏 —— 整摞往上挪：
      摇杆/互动键一层，快捷栏在其上，提示气泡再在其上 */
   .hotbar {
