@@ -504,8 +504,12 @@ export function addPropShadow(
 }
 
 /**
- * 阔叶树（参考图的「宝塔式圆冠」）：短粗方柱树干 + 三层下大上小的圆冠，
- * 下层压暗、顶层提亮出同棵双色；variant 偶数是果树 —— 冠面点几颗白点。
+ * 阔叶树（块感体素）：短粗方柱树干 + 一簇方块堆成的「块状树冠」。
+ *
+ * 块感体素的取舍：少量**大方块**而不是一堆小球 —— 一个核心大立方 + 四面各贴一个
+ * 半尺寸方块把轮廓撑圆一点 + 顶上一个提亮的小方块收顶，共 6 块。竖直方向刻意压扁
+ * （核心比宽度矮），远看是一团横向铺开的方冠而不是一根柱子。顶亮底暗出同棵双色。
+ * variant 偶数是果树 —— 冠面点几颗白方块。
  */
 export function addTree(
   b: MeshBuilder,
@@ -515,43 +519,32 @@ export function addTree(
   variant: number,
 ): void {
   const s = 0.95 + (variant % 3) * 0.14
-  // 干比原先高一截：原来树顶才 1.3，和 1.55 高的小人差不多，读起来像灌木。
-  // 参考图里树是**盖过人**的，抬到 ~2.0 之后才有「树荫下」的感觉
-  // 干要细、要**大半藏在冠里**。粗干 + 高冠会露出一截光秃秃的棕色柱子，
-  // 参考图里的树几乎看不到主干
-  b.box(x, groundY + 0.3 * s, z, 0.15 * s, 0.6 * s, 0.15 * s, TRUNK)
+  // 干要细、要大半藏在冠里 —— 露出一截光秃秃的柱子就不像树了
+  b.box(x, groundY + 0.34 * s, z, 0.2 * s, 0.68 * s, 0.2 * s, TRUNK)
   const leaf = CANOPY[variant % CANOPY.length]!
 
-  /**
-   * 树冠：一圈矮多边形「瓣」拼成的疙瘩状轮廓。
-   *
-   * ⚠️ 每瓣都刻意降到 `seg=5, rings=3`（20 个三角）而不是默认的 6×4（36 个）。
-   * 原来三颗默认球是 108 个三角，现在五瓣只要 100 —— **轮廓更碎更手作，
-   * 三角反而更少**。低模风格里瓣数比单瓣精度重要得多，而整张世界是一次性
-   * 预生成 64 个 chunk 的，这里每多一个三角都要乘以全图的树。
-   */
-  const lobe = (dx: number, dy: number, dz: number, r: number, k: number, sq = 0.9): void => {
-    b.sphere(x + dx * s, groundY + dy * s, z + dz * s, r * s, tint(leaf, k), sq, 6, 3)
-  }
-  // 一大团压扁的主冠 + 沿冠沿几个凸起。
-  // ⚠️ 关键是几瓣**高度相近**、只在水平方向错开：把它们竖着垒起来会变成宝塔，
-  // 而参考图里的树冠是一朵横向铺开的「西兰花」。squash 也从 0.8 收到 0.9 ——
-  // 0.8 配 rings=3 出来是一摞盘子，没有体积
-  lobe(0, 0.82, 0, 0.62, 0.9, 0.8)
-  lobe(-0.36, 0.96, 0.14, 0.33, 1.02)
-  lobe(0.34, 0.93, -0.16, 0.31, 0.95)
-  lobe(0.08, 1.0, 0.34, 0.29, 1.06)
-  lobe(-0.1, 1.16, -0.06, 0.3, 1.12)
+  // 核心大方冠（压扁）
+  b.box(x, groundY + 0.98 * s, z, 0.98 * s, 0.78 * s, 0.98 * s, leaf)
+  // 四面半尺寸方块，把方冠的硬棱撑成「块状圆」；明暗交错，别是一整坨死绿
+  b.box(x - 0.4 * s, groundY + 0.92 * s, z + 0.06 * s, 0.5 * s, 0.56 * s, 0.5 * s, tint(leaf, 0.9))
+  b.box(x + 0.4 * s, groundY + 0.92 * s, z - 0.06 * s, 0.5 * s, 0.56 * s, 0.5 * s, tint(leaf, 0.96))
+  b.box(x + 0.06 * s, groundY + 0.94 * s, z + 0.4 * s, 0.5 * s, 0.56 * s, 0.5 * s, tint(leaf, 1.04))
+  b.box(x - 0.06 * s, groundY + 0.94 * s, z - 0.4 * s, 0.5 * s, 0.56 * s, 0.5 * s, tint(leaf, 0.94))
+  // 收顶的提亮小方块
+  b.box(x, groundY + 1.42 * s, z, 0.6 * s, 0.44 * s, 0.6 * s, tint(leaf, 1.12))
 
   // 花/果白点。樱与金秋不挂白点 —— 它们自己就是画面的亮色，再点就脏了
   if ((variant & 1) === 0 && variant < 6) {
-    b.box(x - 0.3 * s, groundY + 0.96 * s, z + 0.32 * s, 0.07, 0.07, 0.07, FRUIT)
-    b.box(x + 0.34 * s, groundY + 1.16 * s, z - 0.2 * s, 0.07, 0.07, 0.07, FRUIT)
-    b.box(x + 0.04 * s, groundY + 1.3 * s, z + 0.2 * s, 0.06, 0.06, 0.06, FRUIT)
+    b.box(x - 0.34 * s, groundY + 0.98 * s, z + 0.36 * s, 0.08, 0.08, 0.08, FRUIT)
+    b.box(x + 0.38 * s, groundY + 1.14 * s, z - 0.22 * s, 0.08, 0.08, 0.08, FRUIT)
+    b.box(x + 0.04 * s, groundY + 1.5 * s, z + 0.22 * s, 0.07, 0.07, 0.07, FRUIT)
   }
 }
 
-/** 松树：短方柱干 + 四层锥，越往上越亮，高海拔与湿冷区森林的主角 */
+/**
+ * 松树（块感体素）：短方柱干 + 四层**下大上小的方块**堆成的阶梯塔尖，
+ * 越往上越窄越亮。用方块替掉圆锥后就是经典的体素针叶树。
+ */
 export function addPine(
   b: MeshBuilder,
   x: number,
@@ -560,20 +553,18 @@ export function addPine(
   variant: number,
 ): void {
   const s = 0.95 + (variant % 3) * 0.1
-  b.box(x, groundY + 0.13, z, 0.2, 0.26, 0.2, TRUNK)
+  b.box(x, groundY + 0.14, z, 0.22, 0.28, 0.22, TRUNK)
   const leaf = PINE_LEAF[variant % PINE_LEAF.length]!
-  b.cone(x, groundY + 0.18, z, 0.46 * s, 0.5, 6, tint(leaf, 0.9))
-  b.cone(x, groundY + 0.52, z, 0.36 * s, 0.48, 6, leaf)
-  b.cone(x, groundY + 0.86, z, 0.26 * s, 0.42, 6, tint(leaf, 1.08))
-  b.cone(x, groundY + 1.14, z, 0.15 * s, 0.3, 6, tint(leaf, 1.15))
+  // 四层方块塔：宽度递减、每层略有旋转错位，塔尖不至于是一根规整的方柱
+  b.box(x, groundY + 0.42, z, 0.92 * s, 0.42, 0.92 * s, tint(leaf, 0.9))
+  b.box(x, groundY + 0.76, z, 0.72 * s, 0.4, 0.72 * s, leaf, 0.4)
+  b.box(x, groundY + 1.08, z, 0.5 * s, 0.38, 0.5 * s, tint(leaf, 1.08))
+  b.box(x, groundY + 1.36, z, 0.3 * s, 0.34, 0.3 * s, tint(leaf, 1.16), 0.4)
 }
 
 /**
- * 灌木：三瓣一丛。
- *
- * 原先是孤零零一颗球，远看就是地上一个绿点。参考图里的灌木都是**几坨挤在一起**
- * 的，边缘毛糙。同样用 `seg=5, rings=3` 的矮多边形球，三瓣 60 个三角，
- * 比原来一颗默认球（36）只多一点，轮廓却完全不同。
+ * 灌木（块感体素）：三块矮方块挤成一丛，高低错开、明暗各异 —— 比一颗孤零零的
+ * 球更像「几坨挤在一起」的低矮灌木，也彻底方块化。
  */
 export function addBush(
   b: MeshBuilder,
@@ -584,9 +575,26 @@ export function addBush(
 ): void {
   const leaf = LEAF[variant % LEAF.length]!
   const s = 1 + (variant % 2) * 0.18
-  b.sphere(x, groundY + 0.15 * s, z, 0.23 * s, leaf, 0.74, 5, 3)
-  b.sphere(x - 0.16 * s, groundY + 0.11 * s, z + 0.1 * s, 0.16 * s, tint(leaf, 0.9), 0.76, 5, 3)
-  b.sphere(x + 0.15 * s, groundY + 0.12 * s, z - 0.09 * s, 0.15 * s, tint(leaf, 1.08), 0.76, 5, 3)
+  b.box(x, groundY + 0.17 * s, z, 0.42 * s, 0.34 * s, 0.42 * s, leaf, 0.3)
+  b.box(
+    x - 0.2 * s,
+    groundY + 0.13 * s,
+    z + 0.12 * s,
+    0.28 * s,
+    0.26 * s,
+    0.28 * s,
+    tint(leaf, 0.9),
+  )
+  b.box(
+    x + 0.19 * s,
+    groundY + 0.14 * s,
+    z - 0.1 * s,
+    0.26 * s,
+    0.28 * s,
+    0.26 * s,
+    tint(leaf, 1.08),
+    0.5,
+  )
 }
 
 /**
@@ -721,18 +729,18 @@ export function addHouse(
   b.box(cx0, groundY + KH * 1.26, cz0, KH * 0.17, KH * 0.05, KH * 0.17, rgb('#6e6259'), yaw)
 }
 
-/** 水井：石筒 + 双柱 + 小坡顶，放在村心 */
+/** 水井（块感体素）：方石井台 + 深色水面 + 双柱 + 小坡顶，放在村心 */
 export function addWell(b: MeshBuilder, x: number, z: number, groundY: number): void {
   /** 放大到与 1.55 高的玩家相称：水井原先井台 0.32、顶棚 0.91，人比井棚还高 */
   const KW = 1.6
-  b.cylinder(x, groundY, z, KW * 0.26, KW * 0.3, KW * 0.32, 7, rgb('#9a9a92'))
-  b.cylinder(x, groundY + KW * 0.32, z, KW * 0.2, KW * 0.2, KW * 0.04, 7, rgb('#3e5a66'))
+  b.box(x, groundY + KW * 0.16, z, KW * 0.56, KW * 0.32, KW * 0.56, rgb('#9a9a92'))
+  b.box(x, groundY + KW * 0.33, z, KW * 0.4, KW * 0.05, KW * 0.4, rgb('#3e5a66'))
   b.box(x - KW * 0.26, groundY + KW * 0.5, z, KW * 0.07, KW * 0.42, KW * 0.07, WOOD_LIGHT)
   b.box(x + KW * 0.26, groundY + KW * 0.5, z, KW * 0.07, KW * 0.42, KW * 0.07, WOOD_LIGHT)
   b.roof(x, groundY + KW * 0.71, z, KW * 0.62, KW * 0.2, KW * 0.5, ROOFS[0]!)
 }
 
-/** 干草垛：一墩圆锥，村口的丰收感 */
+/** 干草垛（块感体素）：三层下大上小、逐层旋错的方草垛，村口的丰收感 */
 export function addHaystack(
   b: MeshBuilder,
   x: number,
@@ -743,8 +751,9 @@ export function addHaystack(
   const yaw = variant * 0.9
   /** 放大到与 1.55 高的玩家相称：草垛原先 0.56，比一捆干草还矮 */
   const KY = 1.8
-  b.cylinder(x, groundY, z, KY * 0.3, KY * 0.34, KY * 0.08, 7, rgb('#c9a04e'))
-  b.cone(x, groundY + KY * 0.06, z, KY * 0.34, KY * 0.5, 7, rgb('#dcb35c'), yaw)
+  b.box(x, groundY + KY * 0.1, z, KY * 0.66, KY * 0.2, KY * 0.66, rgb('#c9a04e'), yaw)
+  b.box(x, groundY + KY * 0.3, z, KY * 0.5, KY * 0.22, KY * 0.5, rgb('#dcb35c'), yaw + 0.4)
+  b.box(x, groundY + KY * 0.48, z, KY * 0.28, KY * 0.2, KY * 0.28, rgb('#e6c06a'), yaw + 0.8)
 }
 
 /** 围栏：双柱双横杆，rot 决定走向 */
@@ -769,14 +778,15 @@ export function addCrop(
 ): void {
   b.box(x, groundY + 0.03, z, 0.88, 0.06, 0.88, rgb('#8a6a48'))
   const leaf = LEAF[(variant + 2) % LEAF.length]!
+  // 一排三簇方块菜叶，垄线平行（rot 恒 0，见 world.ts）
   for (let i = -1; i <= 1; i++) {
-    b.sphere(x + i * 0.26, groundY + 0.16, z, 0.13, leaf, 0.8)
+    b.box(x + i * 0.26, groundY + 0.17, z, 0.2, 0.24, 0.2, leaf)
   }
 }
 
 // ── 以下是为「聊天 AI RPG」补的村庄/荒野小件 ──
 
-/** 石头：一两墩压扁的灰石，荒野与水岸的散件 */
+/** 石头（块感体素）：一两块转了角度的压扁方石 —— 方块本就适合演棱角分明的岩石 */
 export function addRock(
   b: MeshBuilder,
   x: number,
@@ -785,9 +795,9 @@ export function addRock(
   variant: number,
 ): void {
   const s = 0.8 + (variant % 3) * 0.2
-  b.sphere(x, groundY + 0.09 * s, z, 0.2 * s, rgb('#a8a294'), 0.62)
+  b.box(x, groundY + 0.14 * s, z, 0.4 * s, 0.28 * s, 0.34 * s, rgb('#a8a294'), 0.5 + variant * 0.3)
   if (variant & 1) {
-    b.sphere(x + 0.18 * s, groundY + 0.06, z - 0.08, 0.12 * s, rgb('#98928a'), 0.7)
+    b.box(x + 0.2 * s, groundY + 0.09, z - 0.1, 0.22 * s, 0.18 * s, 0.2 * s, rgb('#98928a'), 0.9)
   }
 }
 
@@ -810,7 +820,8 @@ export function addLantern(b: MeshBuilder, x: number, z: number, groundY: number
   b.box(x, groundY + KL * 0.04, z, KL * 0.18, KL * 0.08, KL * 0.18, rgb('#9a9a92'))
   b.box(x, groundY + KL * 0.47, z, KL * 0.07, KL * 0.86, KL * 0.07, rgb('#5e4a35'))
   b.box(x, groundY + KL * 0.96, z, KL * 0.16, KL * 0.16, KL * 0.16, GLOW)
-  b.cone(x, groundY + KL * 1.04, z, KL * 0.14, KL * 0.1, 4, rgb('#5f6b5a'))
+  // 灯罩小坡顶（方楔）替掉原来的锥
+  b.roof(x, groundY + KL * 1.04, z, KL * 0.22, KL * 0.12, KL * 0.22, rgb('#5f6b5a'), 0.79)
 }
 
 /** 指示牌：双板小牌，AI RPG 里给「去哪儿找谁」的方位感 */
@@ -867,7 +878,8 @@ export function addScarecrow(
   b.box(x, groundY + KC * 0.5, z, KC * 0.06, KC * 1.0, KC * 0.06, rgb('#8a6a48'))
   b.box(x, groundY + KC * 0.72, z, KC * 0.56, KC * 0.05, KC * 0.05, rgb('#8a6a48'))
   b.box(x, groundY + KC * 0.56, z, KC * 0.3, KC * 0.36, KC * 0.18, shirts[variant % shirts.length]!)
-  b.sphere(x, groundY + KC * 0.88, z, KC * 0.11, rgb('#e8d5a0'), KC * 0.9)
-  b.cylinder(x, groundY + KC * 0.94, z, KC * 0.16, KC * 0.16, KC * 0.03, 7, rgb('#e8c968'))
-  b.cylinder(x, groundY + KC * 0.97, z, KC * 0.09, KC * 0.1, KC * 0.08, 7, rgb('#e8c968'))
+  // 方脑袋 + 方草帽（帽檐 + 帽冠），全方块化
+  b.box(x, groundY + KC * 0.86, z, KC * 0.22, KC * 0.22, KC * 0.22, rgb('#e8d5a0'))
+  b.box(x, groundY + KC * 0.98, z, KC * 0.34, KC * 0.04, KC * 0.34, rgb('#e8c968'))
+  b.box(x, groundY + KC * 1.03, z, KC * 0.18, KC * 0.1, KC * 0.18, rgb('#e8c968'))
 }

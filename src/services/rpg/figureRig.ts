@@ -123,9 +123,9 @@ export function createFigureRig(opts: FigureOptions): CharacterRig {
   head.add(
     part((b) => {
       if (strawHat) {
-        // 草帽：宽帽檐 + 圆帽冠
-        b.cylinder(0, 0.4, 0, 0.32, 0.32, 0.05, 8, STRAW)
-        b.cylinder(0, 0.45, 0, 0.18, 0.2, 0.14, 8, STRAW)
+        // 草帽（块感体素）：方帽檐 + 方帽冠，与全身方块造型统一
+        b.box(0, 0.41, 0, 0.62, 0.06, 0.62, STRAW)
+        b.box(0, 0.48, 0, 0.36, 0.16, 0.36, STRAW)
       } else {
         b.box(0, 0.36, 0, 0.46, 0.1, 0.4, hair)
       }
