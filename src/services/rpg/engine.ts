@@ -10,6 +10,7 @@
 
 import type { World } from './world'
 import { findSpawn, findStandSpot, wrapDelta } from './world'
+import { findPath } from './pathfind'
 import { autoRoutine, fallbackRoutine, slotIndexAt } from './routine'
 import {
   DEFAULT_TIME_SCALE,
@@ -163,10 +164,20 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     stuck: number
     /** 上次测距时离目标多远，配合 stuck 判定「有没有进展」 */
     lastD: number
-    /** 绕行点；非 null 时先去它，到了再续原目标 */
+    /** 绕行点；非 null 时先去它，到了再续原目标（A* 失败时的贪心兜底用） */
     detour: { x: number; y: number } | null
     /** 这一段没能走到 POI（卡死阶梯的最后一级）。只影响提示词措辞 */
     stranded: boolean
+    /**
+     * A* 算出的航点（格心），沿它逐点走。空 = 没有路可循 → 回落到贪心 + 卡死阶梯。
+     *
+     * ⚠️ **只在起程时算一次**（世界静态，路不会失效）。为了不让「同一分钟全村同时
+     * 通勤」在一帧里挤爆 A*，起程时先只标 routePending，真正的求路在 tick 里按每帧
+     * 预算摊开算（见 astarBudget）。算好之前这一两帧先用贪心，NPC 照样在动。
+     */
+    route: { x: number; y: number }[]
+    routeIdx: number
+    routePending: boolean
   }
   const npcRigs = new Map<string, CharacterRig>()
   const npcRt = new Map<string, NpcRt>()
@@ -267,9 +278,23 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       lastD: Infinity,
       detour: null,
       stranded: false,
+      route: [],
+      routeIdx: 0,
+      routePending: false,
     }
     npcRt.set(n.id, rt)
     return rt
+  }
+
+  /**
+   * 起程去 travel：进入 travel 相位并**标记待求路**（真正的 A* 在 tick 里按每帧
+   * 预算摊开算，见 astarBudget）。求出来之前的一两帧先走贪心，NPC 不会呆站。
+   */
+  const beginTravel = (rt: NpcRt): void => {
+    rt.phase = 'travel'
+    rt.route = []
+    rt.routeIdx = 0
+    rt.routePending = true
   }
 
   /**
@@ -304,7 +329,7 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         rt.detour = null
         rt.stuck = 0
         rt.lastD = Infinity
-        rt.phase = 'travel'
+        beginTravel(rt)
       }
       return
     }
@@ -322,7 +347,7 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     if (torusDist(rt.x, rt.y, rt.hx, rt.hy) <= rt.roam) return
     rt.tx = rt.hx
     rt.ty = rt.hy
-    rt.phase = 'travel'
+    beginTravel(rt)
   }
 
   function makeNpcRig(npc: RpgNpc): CharacterRig {
@@ -443,6 +468,9 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       rt.stuck = 0
       rt.lastD = Infinity
       rt.stranded = false
+      rt.route = []
+      rt.routeIdx = 0
+      rt.routePending = false
       rt.phase = 'idle'
       rt.t = 0.2
       return n.routine
@@ -521,6 +549,11 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     // 摆人，用上一帧的锚点会让接缝附近的 NPC 慢一帧才归位
     scene.setPlayer(px, py)
 
+    // 每帧最多算这么多次 A*。防「同一游戏分钟全村同时通勤」在一帧里挤爆寻路 ——
+    // 超预算的 NPC 这一帧先走贪心，routePending 留着，下一帧补算（作息本就有抖动，
+    // 真同时起程的极少）。这是每帧预算不变量的一部分：绝不让一帧里的寻路无上限。
+    let astarBudget = 4
+
     // NPC 漫游：锚点半径内走走停停;玩家走近(够得着交谈)就停下转身看你
     for (const n of npcs) {
       const rig = npcRigs.get(n.id)
@@ -562,9 +595,34 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         rig.play('idle')
       } else {
         const travelling = rt.phase === 'travel'
-        // 通勤时的目标可能是绕行点
-        const goalX = travelling && rt.detour ? rt.detour.x : rt.tx
-        const goalY = travelling && rt.detour ? rt.detour.y : rt.ty
+        // 起程时按每帧预算算一次 A* 路径（世界静态，一条路算出来就一直有效）。
+        // 失败/超限返回 null → route 空 → 回落到贪心 + 卡死阶梯，与从前完全一样
+        if (travelling && rt.routePending && astarBudget > 0) {
+          astarBudget--
+          rt.routePending = false
+          rt.route =
+            findPath(
+              world,
+              canStand,
+              Math.floor(rt.x),
+              Math.floor(rt.y),
+              Math.floor(rt.tx),
+              Math.floor(rt.ty),
+            ) ?? []
+          rt.routeIdx = 0
+        }
+        // 有 A* 航点就逐点走；没有（求路失败或还没轮到）就回落到贪心（含绕行点）
+        const followingRoute = travelling && rt.route.length > 0
+        const goalX = followingRoute
+          ? rt.route[rt.routeIdx]!.x
+          : travelling && rt.detour
+            ? rt.detour.x
+            : rt.tx
+        const goalY = followingRoute
+          ? rt.route[rt.routeIdx]!.y
+          : travelling && rt.detour
+            ? rt.detour.y
+            : rt.ty
         // 轴分离试探（与玩家同一套手感：贴墙会滑行）
         const step = Math.min((travelling ? NPC_TRAVEL_SPEED : NPC_SPEED) * dt, 0.2)
         // ⚠️ 必须是**环面**位移。裸差值会让接缝对面的目标看起来在 251 格之外，
@@ -592,7 +650,18 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         const reached =
           Math.abs(wrapDelta(goalX - rt.x, W)) <= 0.05 &&
           Math.abs(wrapDelta(goalY - rt.y, H)) <= 0.05
-        if (reached && travelling && rt.detour) {
+        if (reached && followingRoute) {
+          // 到当前航点就切下一个；走完最后一个航点 = 到达 POI
+          rt.routeIdx++
+          if (rt.routeIdx >= rt.route.length) {
+            rt.route = []
+            rt.phase = 'idle'
+            rt.t = 2 + Math.random() * 4
+            rig.play('idle')
+          } else {
+            rig.play('walk') // 继续走向下一个航点
+          }
+        } else if (reached && travelling && rt.detour) {
           // 到了绕行点，续原目标
           rt.detour = null
           rt.stuck = 0
@@ -606,7 +675,8 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
           rig.play('walk')
         }
 
-        if (travelling) {
+        // 沿 A* 航点走时不跑卡死阶梯、不拴绳：路是静态可走的、逐点必达
+        if (travelling && !followingRoute) {
           // 卡死阶梯：每 0.75s 量一次到目标的距离，没进展就插一个垂直绕行点；
           // 再不行就**体面放弃** —— 绝不瞬移
           rt.t -= dt
@@ -642,7 +712,7 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
               rt.stranded = true
             }
           }
-        } else {
+        } else if (!travelling) {
           // 硬拴绳:无论怎么撞怎么滑,绝不离开锚点半径(+半格容差)。
           // ⚠️ 只在漫游时生效 —— 通勤时的目的地本身就是绳子
           //
