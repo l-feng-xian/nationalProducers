@@ -13,7 +13,7 @@
 import type { PropKind } from './world'
 
 /** 工具 id。空手也是一件「工具」—— 与参考站一致，它占第 1 格 */
-export type ToolId = 'hand' | 'axe' | 'pick'
+export type ToolId = 'hand' | 'axe' | 'pick' | 'rod' | 'net'
 
 export interface Tool {
   id: ToolId
@@ -27,9 +27,23 @@ export const TOOLS: readonly Tool[] = [
   { id: 'hand', name: '空手', icon: '✋' },
   { id: 'axe', name: '斧头', icon: '🪓' },
   { id: 'pick', name: '矿镐', icon: '⛏️' },
+  { id: 'rod', name: '鱼竿', icon: '🎣' },
+  { id: 'net', name: '捕虫网', icon: '🥅' },
 ]
 
-export type ItemId = 'wood' | 'stone' | 'branch' | 'flower' | 'veggie'
+export type ItemId =
+  | 'wood'
+  | 'stone'
+  | 'branch'
+  | 'flower'
+  | 'veggie'
+  // 鱼与虫。每种生物对应一件收藏品，与参考站的「自然手册」同一思路
+  | 'fish_crucian'
+  | 'fish_bass'
+  | 'fish_koi'
+  | 'bug_butterfly'
+  | 'bug_beetle'
+  | 'bug_firefly'
 
 export interface ItemDef {
   id: ItemId
@@ -43,6 +57,12 @@ export const ITEMS: Readonly<Record<ItemId, ItemDef>> = {
   branch: { id: 'branch', name: '树枝', icon: '🌿' },
   flower: { id: 'flower', name: '花', icon: '🌼' },
   veggie: { id: 'veggie', name: '蔬菜', icon: '🥬' },
+  fish_crucian: { id: 'fish_crucian', name: '鲫鱼', icon: '🐟' },
+  fish_bass: { id: 'fish_bass', name: '鲈鱼', icon: '🐠' },
+  fish_koi: { id: 'fish_koi', name: '锦鲤', icon: '🎏' },
+  bug_butterfly: { id: 'bug_butterfly', name: '蝴蝶', icon: '🦋' },
+  bug_beetle: { id: 'bug_beetle', name: '甲虫', icon: '🪲' },
+  bug_firefly: { id: 'bug_firefly', name: '萤火虫', icon: '✨' },
 }
 
 export interface HarvestRule {

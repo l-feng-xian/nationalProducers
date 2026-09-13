@@ -47,7 +47,7 @@ import {
   addWell,
   type RGB,
 } from './blocks'
-import { REGION_TINT, tintOf } from './palette'
+import { REGION_TINT, rgb, tintOf } from './palette'
 import { BIOME, WATER_SURFACE_Y } from './noise'
 import { skyAt } from './time'
 
@@ -117,6 +117,17 @@ export interface SceneHandle {
   removeRig(rig: CharacterRig): void
   /** 把某个 rig 立到格坐标 (x,y) 的地表上。rig 自己负责朝向 */
   placeRig(rig: CharacterRig, x: number, y: number): void
+  /**
+   * 建一只生物的网格（鱼影 / 虫）并挂进场景。
+   *
+   * 生物数量很少（十几只封顶），所以一只一个 Mesh、一份几何，不做实例化 ——
+   * 实例化在这个量级上省不下什么，却要多一套 InstancedMesh 的生命周期要管。
+   * `flat=true` 出扁长的鱼影，false 出小方块的虫。
+   */
+  addCreature(color: string, size: number, flat: boolean): THREE_NS.Object3D
+  removeCreature(o: THREE_NS.Object3D): void
+  /** 把生物摆到格坐标 (x,y)、世界高度 worldY 上（走最近环面镜像，与 placeRig 同源） */
+  placeCreature(o: THREE_NS.Object3D, x: number, y: number, worldY: number): void
   /**
    * 重建 (x,y) 所在那一块 chunk 的网格。
    *
@@ -544,6 +555,38 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     )
   }
 
+  // ── 生物（鱼影 / 虫）──
+  /** 它们的几何是一只一份，dispose 时要收干净 */
+  const creatureGeos = new Set<THREE_NS.BufferGeometry>()
+
+  function addCreature(color: string, size: number, flat: boolean): THREE_NS.Object3D {
+    const b = new MeshBuilder()
+    const c = rgb(color)
+    // 鱼影：扁而长的一片，贴在水面上；虫：一个小方块
+    if (flat) b.box(0, 0, 0, size * 1.7, 0.05, size * 0.85, c)
+    else b.box(0, 0, 0, size, size, size, c)
+    const g = b.toGeometry(THREE)
+    creatureGeos.add(g)
+    const m = new THREE.Mesh(g, figureMat)
+    // 与角色同材质：昼夜调色是覆盖在 figureMat 上的，共用它生物才会跟着天色走
+    m.matrixAutoUpdate = false
+    scene.add(m)
+    return m
+  }
+
+  function removeCreature(o: THREE_NS.Object3D): void {
+    scene.remove(o)
+    const m = o as THREE_NS.Mesh
+    const g = m.geometry as THREE_NS.BufferGeometry | undefined
+    if (g && creatureGeos.delete(g)) g.dispose()
+  }
+
+  function placeCreature(o: THREE_NS.Object3D, x: number, y: number, worldY: number): void {
+    o.position.set(playerX - wrapDelta(playerX - x, W), worldY, playerY - wrapDelta(playerY - y, H))
+    // matrixAutoUpdate 关着，改了位置必须自己写矩阵（与 chunk 网格同一约定）
+    o.updateMatrix()
+  }
+
   /**
    * 可见半径（格）的平方，由视口在 resize 里推导。
    *
@@ -627,6 +670,9 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     addRig,
     removeRig,
     placeRig,
+    addCreature,
+    removeCreature,
+    placeCreature,
     // @types/three 0.185 的 Backend 上没有 isWebGPUBackend 字段（运行时是有的），
     // 用 in 做运行时探测，别为了过类型去断言一个可能不存在的属性
     backend: renderer.backend && 'isWebGPUBackend' in renderer.backend ? 'webgpu' : 'webgl',
@@ -673,6 +719,8 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
     }),
     dispose: () => {
       for (const c of chunks) for (const g of c.geos) g.dispose()
+      for (const g of creatureGeos) g.dispose()
+      creatureGeos.clear()
       cloudGeo.dispose()
       terrainMat.dispose()
       waterMat.dispose()

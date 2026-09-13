@@ -10,7 +10,9 @@
 
 import type { PropKind, World } from './world'
 import { findSpawn, findStandSpot, wrapDelta } from './world'
-import { TOOLS, ruleFor, type HarvestRule, type ToolId } from './harvest'
+import { TOOLS, propLabel, ruleFor, type ItemId, type ToolId } from './harvest'
+import { pickSpecies, type CreatureDef, type CreatureKind } from './creatures'
+import { BIOME, WATER_SURFACE_Y } from './noise'
 import { findPath } from './pathfind'
 import { autoRoutine, fallbackRoutine, slotIndexAt } from './routine'
 import {
@@ -54,15 +56,48 @@ const RADIUS = 0.28
  */
 const HARVEST_REACH = 1.7
 
-/** 够得着、且可采的一个目标。给 HUD 提示气泡与实际采集共用 */
-export interface HarvestTarget {
-  /** 格坐标（已回绕） */
-  x: number
-  y: number
-  kind: PropKind
-  rule: HarvestRule
+// ── 生物（鱼 / 虫）──
+/** 生成环带（格）：太近会当着面凭空冒出来，太远看不见白算 */
+const CRE_SPAWN_MIN = 6
+const CRE_SPAWN_MAX = 18
+/** 离这么远就收走。比生成环带外沿再宽一圈，免得在边界上反复生成/收走 */
+const CRE_DESPAWN = 28
+/** 每类同时最多几只 */
+const CRE_MAX_PER_KIND = 6
+/** 补生成的间隔（秒） */
+const CRE_SPAWN_EVERY = 1.6
+/**
+ * 够得着的距离。钓鱼是**站在岸上够水里**，必须比捕虫宽得多 ——
+ * 按捕虫那 1.9 来的话，玩家得站进水里才钓得到，而水是走不进去的（深水不可行走）。
+ */
+const FISH_REACH = 3.4
+const BUG_REACH = 1.9
+/** 游动/飞舞速度（格/秒）。都比玩家慢得多，抓得住才有乐趣 */
+const FISH_SPEED = 0.55
+const BUG_SPEED = 0.95
+
+/**
+ * 此刻够得着的那个可动作对象 —— 可能是地上的道具（树/石/花），也可能是
+ * 会动的生物（鱼/虫）。两者归一成同一个形状，HUD 的提示气泡与执行动作
+ * 就只需要认一种东西。
+ */
+export interface ActionTarget {
+  type: 'prop' | 'creature'
+  /** 提示气泡里的名字：「树木」「鲫鱼」 */
+  label: string
+  /** 动作词：「砍伐」「钓起」「捕捉」 */
+  verb: string
+  /** 需要的工具 */
+  tool: ToolId
   /** 手里这件工具对不对 —— 不对就只提示「需要斧头」，不执行 */
   ready: boolean
+  /** 产出 */
+  item: ItemId
+  count: number
+  /** type='prop' 时有：格坐标与刷新所需的游戏分钟 */
+  cell?: { x: number; y: number; respawn: number }
+  /** type='creature' 时有：运行时 id，抓到后交给 consumeCreature */
+  creatureId?: string
 }
 
 export interface EngineHandle {
@@ -71,8 +106,10 @@ export interface EngineHandle {
   /** 当前手持工具 */
   tool(): ToolId
   setTool(t: ToolId): void
-  /** 此刻够得着的可采目标（没有就是 null）。每帧由 HUD 读 */
-  harvestTarget(): HarvestTarget | null
+  /** 此刻够得着的可动作对象（道具或生物；没有就是 null）。HUD 与动作共用 */
+  actionTarget(): ActionTarget | null
+  /** 抓走一只生物（钓/捕成功后调）。找不到返回 false */
+  consumeCreature(id: string): boolean
   /**
    * 世界内容的版本号，每次 notifyWorldChanged 自增。
    *
@@ -275,32 +312,249 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
   let curTool: ToolId = 'hand'
 
   /**
-   * 找此刻够得着的那个可采目标：5×5 邻域里离玩家最近的可采道具。
+   * 找此刻够得着的那个可采道具：5×5 邻域里离玩家最近的一个。
    *
    * 用「最近的」而不是「正前方那一格」：后者要求玩家先把朝向对准，在 2.5D 斜视
    * 加摇杆的操作下相当别扭 —— 明明贴着树，只因为朝向差一点就采不到。
+   *
+   * 返回值带上「占自身够得着距离的比例」，好与生物目标公平比较。
    */
-  function harvestTarget(): HarvestTarget | null {
-    let best: HarvestTarget | null = null
-    let bestD = HARVEST_REACH
+  /**
+   * 5×5 邻域里的可采道具**候选**，按「所在格 + 世界版本」缓存。
+   *
+   * ⚠️ 缓存的是**扫描结果**而不是最终目标：扫描要 25 次 propAt（每次好几层噪声），
+   * 是这里唯一贵的部分，且只在玩家换格或世界变了时才会不同；而距离要拿**当前**
+   * 的浮点坐标算 —— 把距离也一起缓存的话，在同一格内挪动时目标会僵住，
+   * 边缘处就会出现「明明走近了却还说够不着」。
+   */
+  let propScan: {
+    key: string
+    cells: Array<{ x: number; y: number; cx: number; cy: number; kind: PropKind }>
+  } | null = null
+
+  function propCandidates(): ReadonlyArray<{
+    x: number
+    y: number
+    cx: number
+    cy: number
+    kind: PropKind
+  }> {
     const gx = Math.floor(px)
     const gy = Math.floor(py)
+    const key = `${gx},${gy}|${worldVer}`
+    if (propScan && propScan.key === key) return propScan.cells
+    const cells: Array<{ x: number; y: number; cx: number; cy: number; kind: PropKind }> = []
     for (let dy = -2; dy <= 2; dy++) {
       for (let dx = -2; dx <= 2; dx++) {
         const x = (((gx + dx) % W) + W) % W
         const y = (((gy + dy) % H) + H) % H
         const pr = world.propAt(x, y)
-        if (!pr) continue
-        const rule = ruleFor(pr.kind)
-        if (!rule) continue
-        // 量到道具的**实际落点**（含亚格偏移），否则贴着一棵偏了半格的树会判成够不着
-        const d = torusDist(px, py, x + 0.5 + pr.ox, y + 0.5 + pr.oy)
-        if (d >= bestD) continue
-        bestD = d
-        best = { x, y, kind: pr.kind, rule, ready: rule.tool === curTool }
+        if (!pr || !ruleFor(pr.kind)) continue
+        // 记道具的**实际落点**（含亚格偏移）：贴着一棵偏了半格的树不该判成够不着
+        cells.push({ x, y, cx: x + 0.5 + pr.ox, cy: y + 0.5 + pr.oy, kind: pr.kind })
+      }
+    }
+    propScan = { key, cells }
+    return cells
+  }
+
+  /**
+   * 找此刻够得着的那个可采道具：邻域里离玩家最近的一个。
+   *
+   * 用「最近的」而不是「正前方那一格」：后者要求玩家先把朝向对准，在 2.5D 斜视
+   * 加摇杆的操作下相当别扭 —— 明明贴着树，只因为朝向差一点就采不到。
+   *
+   * 返回值带上「占自身够得着距离的比例」，好与生物目标公平比较。
+   */
+  function propTarget(): { t: ActionTarget; ratio: number } | null {
+    let best: { t: ActionTarget; ratio: number } | null = null
+    let bestD = HARVEST_REACH
+    for (const c of propCandidates()) {
+      const d = torusDist(px, py, c.cx, c.cy)
+      if (d >= bestD) continue
+      const rule = ruleFor(c.kind)
+      if (!rule) continue
+      bestD = d
+      best = {
+        ratio: d / HARVEST_REACH,
+        t: {
+          type: 'prop',
+          label: propLabel(c.kind),
+          verb: rule.verb,
+          tool: rule.tool,
+          ready: rule.tool === curTool,
+          item: rule.item,
+          count: rule.count,
+          cell: { x: c.x, y: c.y, respawn: rule.respawn },
+        },
       }
     }
     return best
+  }
+
+  // ── 生物运行时：鱼在水里游、虫在草上飞。只活在内存里，不进存档 ──
+
+  interface CreatureRt {
+    id: string
+    def: CreatureDef
+    obj: ReturnType<SceneHandle['addCreature']>
+    /** 浮点世界坐标 */
+    x: number
+    y: number
+    /** 当前游动目标 */
+    tx: number
+    ty: number
+    /** 换目标倒计时（秒） */
+    t: number
+    /** 飞舞相位，只给虫用 —— 上下浮动才像在飞 */
+    bob: number
+  }
+  const creatures: CreatureRt[] = []
+  let creSeq = 0
+  let creSpawnT = 0
+
+  const reachOf = (k: CreatureKind): number => (k === 'fish' ? FISH_REACH : BUG_REACH)
+
+  /** 这一格能不能放某类生物：鱼要水，虫要能站人的草地 */
+  function creatureCellOk(kind: CreatureKind, x: number, y: number): boolean {
+    const b = world.biomeAt(x + 0.5, y + 0.5)
+    if (kind === 'fish') return b === BIOME.water || b === BIOME.shallow
+    return b === BIOME.grass && canStand(x + 0.5, y + 0.5)
+  }
+
+  /** 在玩家周围的环带里随机找一个能放的格 */
+  function findCreatureCell(kind: CreatureKind): { x: number; y: number } | null {
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2
+      const r = CRE_SPAWN_MIN + Math.random() * (CRE_SPAWN_MAX - CRE_SPAWN_MIN)
+      const x = ((Math.floor(px + Math.cos(a) * r) % W) + W) % W
+      const y = ((Math.floor(py + Math.sin(a) * r) % H) + H) % H
+      if (creatureCellOk(kind, x, y)) return { x, y }
+    }
+    return null
+  }
+
+  function spawnCreature(kind: CreatureKind): void {
+    const night = phaseOf(Math.floor(clockTotal) % MINUTES_PER_DAY)
+    const isNight = night === 'night' || night === 'lateNight'
+    const def = pickSpecies(kind, Math.random(), isNight)
+    if (!def) return
+    const cell = findCreatureCell(kind)
+    if (!cell) return
+    const obj = scene.addCreature(def.color, def.size, kind === 'fish')
+    creatures.push({
+      id: `c${++creSeq}`,
+      def,
+      obj,
+      x: cell.x + 0.5,
+      y: cell.y + 0.5,
+      tx: cell.x + 0.5,
+      ty: cell.y + 0.5,
+      t: 0,
+      bob: Math.random() * Math.PI * 2,
+    })
+  }
+
+  function despawnCreature(i: number): void {
+    const c = creatures[i]
+    if (!c) return
+    scene.removeCreature(c.obj)
+    creatures.splice(i, 1)
+  }
+
+  function updateCreatures(dt: number): void {
+    // 补生成：每类都维持在上限附近
+    creSpawnT -= dt
+    if (creSpawnT <= 0) {
+      creSpawnT = CRE_SPAWN_EVERY
+      for (const k of ['fish', 'bug'] as const) {
+        if (creatures.filter((c) => c.def.kind === k).length < CRE_MAX_PER_KIND) spawnCreature(k)
+      }
+    }
+    for (let i = creatures.length - 1; i >= 0; i--) {
+      const c = creatures[i]!
+      // 走远了就收走 —— 否则玩家绕世界一圈会拖着一长串鱼
+      if (torusDist(c.x, c.y, px, py) > CRE_DESPAWN) {
+        despawnCreature(i)
+        continue
+      }
+      // 换个目标点接着晃
+      c.t -= dt
+      if (c.t <= 0) {
+        c.t = 1.5 + Math.random() * 2.5
+        const a = Math.random() * Math.PI * 2
+        const r = 1 + Math.random() * 3
+        const nx = ((Math.floor(c.x + Math.cos(a) * r) % W) + W) % W
+        const ny = ((Math.floor(c.y + Math.sin(a) * r) % H) + H) % H
+        if (creatureCellOk(c.def.kind, nx, ny)) {
+          c.tx = nx + 0.5
+          c.ty = ny + 0.5
+        }
+      }
+      const speed = c.def.kind === 'fish' ? FISH_SPEED : BUG_SPEED
+      const step = Math.min(speed * dt, 0.2)
+      const mdx = wrapDelta(c.tx - c.x, W)
+      const mdy = wrapDelta(c.ty - c.y, H)
+      const len = Math.hypot(mdx, mdy)
+      if (len > 0.05) {
+        const nx2 = c.x + (mdx / len) * step
+        const ny2 = c.y + (mdy / len) * step
+        // 只在自己的介质里游：鱼绝不上岸，虫绝不下水
+        if (creatureCellOk(c.def.kind, Math.floor(nx2), Math.floor(ny2))) {
+          c.x = ((nx2 % W) + W) % W
+          c.y = ((ny2 % H) + H) % H
+        } else {
+          c.t = 0 // 撞边界，立刻换个方向
+        }
+      }
+      c.bob += dt * 3
+      const y =
+        c.def.kind === 'fish'
+          ? WATER_SURFACE_Y + 0.04
+          : world.heightAt(c.x, c.y) + 0.55 + Math.sin(c.bob) * 0.12
+      scene.placeCreature(c.obj, c.x, c.y, y)
+    }
+  }
+
+  /** 最近的、够得着的一只生物 */
+  function creatureTarget(): { t: ActionTarget; ratio: number } | null {
+    let best: { t: ActionTarget; ratio: number } | null = null
+    let bestRatio = 1
+    for (const c of creatures) {
+      const reach = reachOf(c.def.kind)
+      const ratio = torusDist(c.x, c.y, px, py) / reach
+      if (ratio >= bestRatio) continue
+      bestRatio = ratio
+      best = {
+        ratio,
+        t: {
+          type: 'creature',
+          label: c.def.name,
+          verb: c.def.verb,
+          tool: c.def.tool,
+          ready: c.def.tool === curTool,
+          item: c.def.item,
+          count: 1,
+          creatureId: c.id,
+        },
+      }
+    }
+    return best
+  }
+
+  /** 道具与生物里挑「相对更够得着」的那个 —— 两者的够得着距离不同，比绝对距离不公平 */
+  function actionTarget(): ActionTarget | null {
+    const a = propTarget()
+    const b = creatureTarget()
+    if (a && b) return a.ratio <= b.ratio ? a.t : b.t
+    return a?.t ?? b?.t ?? null
+  }
+
+  function consumeCreature(id: string): boolean {
+    const i = creatures.findIndex((c) => c.id === id)
+    if (i < 0) return false
+    despawnCreature(i)
+    return true
   }
 
   /** 世界内容版本号。见 EngineHandle.worldVersion */
@@ -518,7 +772,8 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
     setTool(t) {
       curTool = t
     },
-    harvestTarget,
+    actionTarget,
+    consumeCreature,
     worldVersion: () => worldVer,
     notifyWorldChanged,
     setNpcs(list) {
@@ -606,6 +861,8 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
       }
       npcRigs.clear()
       npcRt.clear()
+      // 生物的几何是一只一份，交还给场景去释放
+      for (let i = creatures.length - 1; i >= 0; i--) despawnCreature(i)
       scene.removeRig(player)
       player.dispose()
       input.dispose()
@@ -861,6 +1118,9 @@ export async function createEngine(args: CreateEngineArgs): Promise<EngineHandle
         handle.onNpcMoved?.()
       }
     }
+    // 生物在 NPC 之后更新：它们也要按「离玩家最近的环面镜像」摆位，
+    // 而那个锚点是本帧前面的 scene.setPlayer 定的
+    updateCreatures(dt)
     near = nearestNpc(npcs, px, py, world.params.width, world.params.height)
 
     scene.placeRig(player, px, py)

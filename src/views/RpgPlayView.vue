@@ -23,7 +23,7 @@ import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { NPC_MAX, ROUTINE_KIND_LABEL, resolveNpc, type RpgNpc } from '@/types/rpg'
 import { TALK_MINUTES, formatTimeOfDay, phaseLabel, phaseOf } from '@/services/rpg/time'
-import { ITEMS, TOOLS, cellKey, propLabel, type ToolId } from '@/services/rpg/harvest'
+import { ITEMS, TOOLS, cellKey, type ToolId } from '@/services/rpg/harvest'
 
 defineOptions({ name: 'RpgPlayView' })
 
@@ -97,9 +97,9 @@ function pickTool(id: ToolId): void {
 /**
  * 重算提示气泡。
  *
- * ⚠️ 刻意**不是每帧**算：harvestTarget 要扫 5×5 个格，每格一次 propAt（噪声采样
- * 好几层）。每帧算就是每秒一千多次噪声，白白吃掉移动端的帧。目标只在「玩家换了
- * 格子 / 换了工具 / 世界变了」时才会变，按这三件事触发即可。
+ * 每帧调是安全的：贵的那部分（扫 5×5 格的 propAt）在引擎里按「所在格 + 世界版本」
+ * 缓存了，这里只剩十几次距离运算。**必须**每帧 —— 鱼和虫自己会游会飞，
+ * 它们进出够得着范围时玩家可能一动没动，按「玩家换格」触发的话提示永远不会亮。
  */
 function refreshTip(): void {
   const eng = engine.value
@@ -108,20 +108,18 @@ function refreshTip(): void {
     tip.value = `面向 ${nearName.value} · 空格交谈`
     return
   }
-  const t = eng.harvestTarget()
+  const t = eng.actionTarget()
   if (!t) {
     tip.value = ''
     return
   }
   tip.value = t.ready
-    ? `面向${propLabel(t.kind)} · 空格${t.rule.verb}`
-    : `面向${propLabel(t.kind)} · 需要${toolName(t.rule.tool)}`
+    ? `面向${t.label} · 空格${t.verb}`
+    : `面向${t.label} · 需要${toolName(t.tool)}`
 }
 
 /** 玩家位置每帧都在变，但只有跨格时才值得落盘 —— 否则一秒写几十次 IDB */
 let lastSavedTile = ''
-/** 提示气泡的重算依据：格坐标 + 工具 + 附近 NPC。变了才重算，见 refreshTip */
-let lastTipKey = ''
 /** 世界时刻的兜底落盘间隔（游戏分钟）。见 onTick 里的说明 */
 const CLOCK_SAVE_MINUTES = 30
 let lastSavedMinutes = 0
@@ -211,15 +209,8 @@ function onTick() {
   // propAt 判断「长回来没有」读的就是它
   nowMinutes = c.total
   curTool.value = eng.tool()
-  // 提示气泡按「格 + 工具 + 附近 NPC + 世界版本」变化触发重算，不是每帧（见 refreshTip）。
-  // ⚠️ 世界版本必须算进来：树被砍掉/长回来是引擎侧发生的，少了它提示会停在过期状态
-  const tipKey =
-    `${Math.floor(p.x)},${Math.floor(p.y)}|${curTool.value}|${nearName.value}` +
-    `|${eng.worldVersion()}`
-  if (tipKey !== lastTipKey) {
-    lastTipKey = tipKey
-    refreshTip()
-  }
+  // 每帧重算：鱼虫会自己游进游出，按「玩家换格」触发的话提示永远不会亮（见 refreshTip）
+  refreshTip()
   // HUD 的日期/时刻簇分两行显示（参考「小岛时光」）：上行「世界名 · 第 N 天」，
   // 下行「时段 HH:MM」。拆成两个 ref 而不是在模板里切字符串 —— 模板里做字符串
   // 处理，改一次格式就要同时改模板与这里，迟早对不上
@@ -239,38 +230,42 @@ function onTick() {
   // 交谈优先 —— 站在树旁边的 NPC 更可能是你想搭话的对象
   if (eng.input.consumeInteract() && !rpg.talkingTo) {
     if (near) openTalk(near)
-    else doHarvest()
+    else doAction()
   }
 }
 
 /**
- * 采集一次。
+ * 动作一次：砍 / 敲 / 摘 / 钓 / 捕，走同一条路。
  *
- * 产出与刷新时长全部来自 harvest.ts 的规则表，这里只负责「把结果落到存档、
- * 告诉引擎这格变了、给玩家一个反馈」三件事。
+ * 产出与刷新时长全部来自规则表（harvest.ts / creatures.ts），这里只负责
+ * 「把结果落到存档、告诉引擎目标没了、给玩家一个反馈」三件事。
  */
-function doHarvest(): void {
+function doAction(): void {
   const eng = engine.value
   const w = rpg.current
   if (!eng || !w) return
-  const t = eng.harvestTarget()
+  const t = eng.actionTarget()
   if (!t) return
   if (!t.ready) {
-    toast.error(`需要${toolName(t.rule.tool)}才行`)
+    toast.error(`需要${toolName(t.tool)}才行`)
     return
   }
-  const key = cellKey(t.x, t.y)
-  // 存的是**长回来的时刻**而不是采集时刻，见 RpgWorld.harvested 的说明
-  const until = w.worldMinutes + t.rule.respawn
-  harvestMap.set(key, until)
-  w.harvested[key] = until
-  const def = ITEMS[t.rule.item]
-  w.items[t.rule.item] = (w.items[t.rule.item] ?? 0) + t.rule.count
-  // 通行缓存与那一块网格都要跟着变，否则「看到的」与「走得过去的」会对不上
-  eng.notifyWorldChanged(t.x, t.y)
-  toast.success(`${def.icon} ${def.name} ×${t.rule.count}`)
-  // 目标没了，提示气泡必须重算 —— 否则会一直提示去砍一棵已经没有的树
-  lastTipKey = ''
+  if (t.type === 'creature') {
+    // ⚠️ 以 consumeCreature 的返回值为准：鱼虫一直在动，从看到提示到按下键之间
+    // 它完全可能已经游走/被收走了。抢先发物品的话会凭空多出一条鱼
+    if (!t.creatureId || !eng.consumeCreature(t.creatureId)) return
+  } else if (t.cell) {
+    const key = cellKey(t.cell.x, t.cell.y)
+    // 存的是**长回来的时刻**而不是采集时刻，见 RpgWorld.harvested 的说明
+    const until = w.worldMinutes + t.cell.respawn
+    harvestMap.set(key, until)
+    w.harvested[key] = until
+    // 通行缓存与那一块网格都要跟着变，否则「看到的」与「走得过去的」会对不上
+    eng.notifyWorldChanged(t.cell.x, t.cell.y)
+  }
+  const def = ITEMS[t.item]
+  w.items[t.item] = (w.items[t.item] ?? 0) + t.count
+  toast.success(`${def.icon} ${def.name} ×${t.count}`)
   refreshTip()
   void rpg.save()
 }
@@ -347,7 +342,7 @@ function onAct(): void {
   if (!eng || rpg.talkingTo) return
   const near = eng.nearNpc()
   if (near) openTalk(near)
-  else doHarvest()
+  else doAction()
 }
 
 function placeNpc() {
