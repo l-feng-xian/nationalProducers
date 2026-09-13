@@ -392,8 +392,13 @@ const WOOD = rgb('#8a5a33')
 const WOOD_LIGHT = rgb('#a97e4f')
 /** 树干用浅木色方柱 —— 参考图的特征：短粗、奶黄 */
 const TRUNK = rgb('#9a7246')
-/** 阔叶树冠。比原先的抹茶色饱和不少 —— 参考图里的树是画面的主色，不是背景 */
-const LEAF = [rgb('#4f9b3f'), rgb('#5aa848'), rgb('#469238'), rgb('#63b150')]
+/**
+ * 阔叶树冠 / 灌木。
+ *
+ * ⚠️ 色相与地表一同向参考站（「小岛时光」）对齐：暖而低饱和的鼠尾草绿，
+ * 不是鲜绿。树是画面主色，它一「塑料」整张图就跟着塑料。
+ */
+const LEAF = [rgb('#5f8f46'), rgb('#6a9a50'), rgb('#558640'), rgb('#74a45c')]
 /**
  * 树冠色族。`variant` 0..7 直接索引（见 world.ts 的 `h & 7`）。
  *
@@ -402,18 +407,18 @@ const LEAF = [rgb('#4f9b3f'), rgb('#5aa848'), rgb('#469238'), rgb('#63b150')]
  * 走近才发现夹着几株开花的。
  */
 const CANOPY = [
-  rgb('#4f9b3f'),
-  rgb('#5aa848'),
-  rgb('#469238'),
-  rgb('#63b150'),
-  rgb('#3f8a44'),
-  rgb('#6cb85a'),
+  rgb('#5f8f46'),
+  rgb('#6a9a50'),
+  rgb('#558640'),
+  rgb('#74a45c'),
+  rgb('#4f8449'),
+  rgb('#7fae64'),
   /** 樱 */
   rgb('#f0a6c4'),
   /** 金秋 */
-  rgb('#efa73f'),
+  rgb('#e9a545'),
 ]
-const PINE_LEAF = [rgb('#2f6b4a'), rgb('#276043'), rgb('#3a7b55')]
+const PINE_LEAF = [rgb('#3d6f52'), rgb('#35634a'), rgb('#487a5c')]
 /** 果树上的白点(花/果) */
 const FRUIT = rgb('#f5f2e8')
 
