@@ -17,7 +17,6 @@
 
 import {
   BIOME,
-  BLOCK_H,
   SHALLOW_BED_Y,
   WATER_BED_Y,
   createSampler,
@@ -399,7 +398,10 @@ export function createWorld(p: WorldParams): World {
     const b = sampler.biomeAt(wx, wy)
     if (b === BIOME.water) return WATER_BED_Y
     if (b === BIOME.shallow) return SHALLOW_BED_Y
-    return sampler.levelAt(wx, wy) * BLOCK_H
+    // 陆地一律平整（需求：地面除水面外设为平整）—— 不再按 levelAt 抬成梯田/悬崖。
+    // ⚠️ 只是**高度**不随 levelAt 起伏；levelAt 本身照旧供草色分级与村庄/房屋落点
+    // 判定（它们读的是「等级」而非「高度」）。水/浅滩/海床仍各保留深度，岸线的落差照旧。
+    return 0
   }
 
   const pathAt = (x: number, y: number): boolean => {
