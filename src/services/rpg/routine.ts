@@ -119,7 +119,8 @@ export function autoRoutine(
   // `includes('村')` 只认得出其中一种，剩下五种的村民会被判成「游荡者」——
   // 而游荡者没有社交时段，整个村子于是白天各走各的、傍晚也不串门
   const inVillage = world.villageAt(anchor.x, anchor.y) !== null
-  const kind = kindOf(marks, inVillage)
+  // 用户在向导里指定了身份就以它为准；没指定（脚下随手放的 NPC）才按地貌推断
+  const kind = npc.role ?? kindOf(marks, inVillage)
   const h = fnv1a(npc.id)
 
   // 家：最近的房子旁；没有房子就守着锚点

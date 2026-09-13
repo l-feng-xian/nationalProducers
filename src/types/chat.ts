@@ -137,6 +137,14 @@ export interface RpgChatBinding {
    * 碰上的」,而不是每次都当作初次见面
    */
   situation?: string
+  /**
+   * 与该 NPC 相关的角色关系，已渲染成文本（每行一条有向边）。
+   *
+   * 创建向导里配的关系图谱经 renderRelations() 渲成这段，拼进【场景】—— 这样
+   * 「你是她哥哥」「你暗恋村长女儿」这类设定真正影响 NPC 说话。与 worldDescription
+   * 一样是稳定配置，随每轮 binding 重写，聊天页续聊/↻ 也带得上（不像 situation 会过期）。
+   */
+  relations?: string
 }
 
 /**

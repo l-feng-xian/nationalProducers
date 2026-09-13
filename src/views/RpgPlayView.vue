@@ -17,6 +17,7 @@ import { useRpgStore } from '@/stores/rpg'
 import { useCharactersStore } from '@/stores/characters'
 import { useToast } from '@/composables/useToast'
 import { createWorld, worldParamsOf } from '@/services/rpg/world'
+import { placeRoster } from '@/services/rpg/placement'
 import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { NPC_MAX, ROUTINE_KIND_LABEL, resolveNpc, type RpgNpc } from '@/types/rpg'
@@ -65,6 +66,11 @@ onMounted(async () => {
 
   try {
     const world = createWorld(worldParamsOf(w))
+    // 向导里配好的名册 NPC 还没坐标（x=-1），第一次进世界按角色落位。
+    // ⚠️ 必须在 createEngine 之前 —— 引擎 syncNpcs/initRt 会把 x<0 的人当「站错了」
+    // 用通用兜底就近挪走，那样铁匠就不进村、农夫就不到田边了。落位是幂等的：
+    // 已经有坐标的人 placeRoster 直接跳过
+    if (placeRoster(world, w.npcs)) await rpg.save()
     const el = host.value
     if (!el) return
     const eng = await createEngine({

@@ -17,6 +17,26 @@ import { useCharactersStore } from '@/stores/characters'
 import { useSettingsStore } from '@/stores/settings'
 import { useGenerationStore } from '@/stores/generation'
 import { resolveNpc, type RpgNpc, type RpgWorld } from '@/types/rpg'
+import { USER_NODE_ID } from '@/types/group'
+import { renderRelations } from '@/services/prompt/relations'
+
+/**
+ * 把与这个 NPC 相关的关系渲成一段文本，进【场景】。
+ *
+ * 只取**与本 NPC 相连**的有向边（from 或 to 是它）—— 把整张图谱塞进每个 NPC
+ * 的提示词又长又吵，而它真正需要知道的是「我和谁什么关系」。
+ * 节点名：npcId 走 resolveNpc（关联卡就用卡名）；玩家哨兵用世界人设名。
+ */
+function renderNpcRelations(world: RpgWorld, npc: RpgNpc): string {
+  const rels = world.relations.filter((r) => r.from === npc.id || r.to === npc.id)
+  if (!rels.length) return ''
+  const chars = useCharactersStore()
+  const nameOf = new Map<string, string>()
+  nameOf.set(USER_NODE_ID, world.persona.name.trim() || '我')
+  for (const n of world.npcs)
+    nameOf.set(n.id, resolveNpc(n, chars.byId(n.characterId), world.name).name)
+  return renderRelations({ relations: rels, nameOf, template: world.relationTemplate })
+}
 
 export interface TalkResult {
   ok: boolean
@@ -42,6 +62,7 @@ export interface TalkResult {
  * 每轮都该带上它此刻在哪、在干什么。
  */
 function bindingOf(world: RpgWorld, npc: RpgNpc, situation?: string): RpgChatBinding {
+  const relations = renderNpcRelations(world, npc)
   return {
     worldId: world.id,
     npcId: npc.id,
@@ -51,6 +72,7 @@ function bindingOf(world: RpgWorld, npc: RpgNpc, situation?: string): RpgChatBin
     ...(npc.characterId ? { characterId: npc.characterId } : {}),
     npcName: npc.name,
     npcDescription: npc.description,
+    ...(relations ? { relations } : {}),
     // 时间戳与 situation 必须同生同死：只写一个的话，要么老时间戳给新 situation
     // 背书（提前过期），要么新时间戳给老 situation 续命（永不过期）
     ...(situation ? { situation, situationAt: Date.now() } : {}),

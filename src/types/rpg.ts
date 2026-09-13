@@ -5,6 +5,7 @@
  */
 
 import { emptyCharacter, type Character } from './character'
+import { DEFAULT_RELATION_TEMPLATE, type GroupNodeLayout, type GroupRelation } from './group'
 
 /** 世界尺寸与噪声参数都由种子决定，所以存档本身很小 —— 地形是算出来的，不是存出来的 */
 export const RPG_WORLD_SIZE = 256
@@ -55,6 +56,13 @@ export interface RpgNpc {
   /** 未关联角色卡时使用 */
   name: string
   description: string
+  /**
+   * 用户在创建向导里指定的身份，同时驱动**落位**（村里/田边/野外）与**作息**。
+   *
+   * 缺省（旧存档、或游戏里脚下随手放的 NPC）时，引擎按周边地貌自动推断 —— 见
+   * routine.ts 的 kindOf。填了就以它为准，不再被地貌覆盖。
+   */
+  role?: RpgRoutineKind
   /** 与该 NPC 的会话 id。第一次说话时创建并记住，之后继续同一段对话 */
   chatId?: string
   /**
@@ -206,6 +214,20 @@ export interface RpgWorld {
   persona: RpgPersona
   npcs: RpgNpc[]
   /**
+   * 角色关系图谱。创建向导里配好，进对话时由 renderRelations() 拼进【场景】，
+   * 让配置的关系真正影响 NPC 说话。
+   *
+   * ⚠️ 直接复用群聊那套类型（GroupRelation/GroupNodeLayout），连同
+   * RelationGraph.vue、graphGeometry.ts、renderRelations() 一起复用，不另造一份。
+   * 但**节点 id 用 RpgNpc.id，不是 characterId** —— 同一张卡可以放多个 NPC，
+   * 玩家节点用哨兵 USER_NODE_ID。
+   */
+  relations: GroupRelation[]
+  /** 图谱节点的画布坐标，键是 RpgNpc.id 或 USER_NODE_ID */
+  layout: Record<string, GroupNodeLayout>
+  /** 关系渲染模板，见 DEFAULT_RELATION_TEMPLATE */
+  relationTemplate: string
+  /**
    * 世界诞生以来的总游戏分钟。唯一真相源 —— 天数与当天时刻都从它算。
    * 不存成两个字段是因为两个字段迟早会对不上（跨天时先写哪个都错一帧）。
    *
@@ -235,6 +257,9 @@ export function emptyWorld(id: string, name = '新世界', seed?: number): RpgWo
     playerY: -1,
     persona: { name: '', description: '' },
     npcs: [],
+    relations: [],
+    layout: {},
+    relationTemplate: DEFAULT_RELATION_TEMPLATE,
     // 第 0 天 08:00。刻意不随机 —— 新世界一进去就是深夜、屏幕一片黑，
     // 第一印象就砸了
     worldMinutes: 480,

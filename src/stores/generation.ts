@@ -233,9 +233,12 @@ export const useGenerationStore = defineStore('generation', () => {
     const card = b.characterId ? chars.byId(b.characterId) : undefined
     return {
       persona: b.persona,
-      // 世界简介说「这是哪」,situation 说「此刻在哪、在干什么」—— 两行拼进同一个【场景】。
-      // situation 过了保质期就整句丢掉：陈旧的位置比没有位置更糟
-      scenarioPrefix: [b.worldDescription, freshSituation(b)].filter(Boolean).join('\n'),
+      // 世界简介说「这是哪」、relations 说「你和谁什么关系」、situation 说「此刻在哪、
+      // 在干什么」—— 拼进同一个【场景】。situation 过了保质期就整句丢掉：陈旧的位置
+      // 比没有位置更糟；relations 是稳定配置，不设保质期
+      scenarioPrefix: [b.worldDescription, b.relations, freshSituation(b)]
+        .filter(Boolean)
+        .join('\n'),
       speaker: card ?? synthNpcCard(b.npcId, b.npcName ?? '', b.npcDescription ?? '', b.worldName),
     }
   }

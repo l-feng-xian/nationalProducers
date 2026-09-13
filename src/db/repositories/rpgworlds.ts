@@ -11,9 +11,11 @@ import {
   DEFAULT_TIME_SCALE,
   emptyWorld,
   normalizeGen,
+  ROUTINE_KIND_LABEL,
   type RpgNpc,
   type RpgWorld,
 } from '@/types/rpg'
+import { DEFAULT_RELATION_TEMPLATE, type GroupNodeLayout, type GroupRelation } from '@/types/group'
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 
@@ -63,6 +65,8 @@ function normalizeNpc(raw: unknown): RpgNpc | null {
   if (typeof n.homeX === 'number' && Number.isFinite(n.homeX)) out.homeX = Math.floor(n.homeX)
   if (typeof n.homeY === 'number' && Number.isFinite(n.homeY)) out.homeY = Math.floor(n.homeY)
   if (typeof n.roamR === 'number' && Number.isFinite(n.roamR) && n.roamR > 0) out.roamR = n.roamR
+  // role 必须是已知的四类之一，否则丢掉让引擎按地貌自动推断（缺省行为）
+  if (typeof n.role === 'string' && n.role in ROUTINE_KIND_LABEL) out.role = n.role
   // 作息要么完整、要么整个丢掉让引擎重推 —— 半个对象比没有更危险
   const r = n.routine
   if (r && Array.isArray(r.pois) && Array.isArray(r.slots) && r.pois.length) {
@@ -102,6 +106,36 @@ function normalize(w: RpgWorld): RpgWorld {
   }
   // 世界简介是后加的字段，本模块上线前存的世界都没有它
   if (typeof w.description !== 'string') w.description = ''
+  // 关系图谱是后加的。逐条兜底：边必须有 string 的 id/from/to/label；坐标必须是数。
+  // 图谱要进对话提示词与画布，半个对象会让 renderRelations / RelationGraph 抛错
+  w.relations = Array.isArray(w.relations)
+    ? w.relations.filter(
+        (r): r is GroupRelation =>
+          !!r &&
+          typeof r === 'object' &&
+          typeof (r as GroupRelation).id === 'string' &&
+          typeof (r as GroupRelation).from === 'string' &&
+          typeof (r as GroupRelation).to === 'string' &&
+          typeof (r as GroupRelation).label === 'string',
+      )
+    : []
+  const layoutIn = w.layout && typeof w.layout === 'object' ? w.layout : {}
+  const layoutOut: Record<string, GroupNodeLayout> = {}
+  for (const [k, v] of Object.entries(layoutIn)) {
+    if (
+      v &&
+      typeof v === 'object' &&
+      Number.isFinite((v as GroupNodeLayout).x) &&
+      Number.isFinite((v as GroupNodeLayout).y)
+    ) {
+      layoutOut[k] = { x: (v as GroupNodeLayout).x, y: (v as GroupNodeLayout).y }
+    }
+  }
+  w.layout = layoutOut
+  w.relationTemplate =
+    typeof w.relationTemplate === 'string' && w.relationTemplate
+      ? w.relationTemplate
+      : DEFAULT_RELATION_TEMPLATE
   // 地形参数同样是后加的。逐字段兜底成 LEGACY_GEN —— 也就是参数化之前那版
   // 生成器的行为，老世界因此逐格不变。⚠️ 这里是整个向后兼容故事的落点
   w.gen = normalizeGen(w.gen)
