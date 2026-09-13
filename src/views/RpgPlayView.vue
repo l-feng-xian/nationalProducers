@@ -21,7 +21,7 @@ import { placeRoster } from '@/services/rpg/placement'
 import { createEngine, type EngineHandle } from '@/services/rpg/engine'
 import { stopTalking, talkToNpc } from '@/services/rpg/dialogue'
 import { NPC_MAX, ROUTINE_KIND_LABEL, resolveNpc, type RpgNpc } from '@/types/rpg'
-import { TALK_MINUTES, formatClock, formatTimeOfDay } from '@/services/rpg/time'
+import { TALK_MINUTES, formatTimeOfDay, phaseLabel, phaseOf } from '@/services/rpg/time'
 
 defineOptions({ name: 'RpgPlayView' })
 
@@ -38,9 +38,10 @@ const booting = ref(true)
 const bootError = ref('')
 const backend = ref('')
 const nearName = ref('')
-const clockText = ref('')
-/** 窄屏只显示时刻。390px 下「第 2 天 05:03」会折成三行，把标题挤成一条缝 */
-const clockShort = ref('')
+/** HUD 日期簇：「第 N 天」 */
+const dayText = ref('')
+/** HUD 时刻簇：「下午 15:51」 */
+const timeText = ref('')
 const editorOpen = ref(false)
 
 /** 玩家位置每帧都在变，但只有跨格时才值得落盘 —— 否则一秒写几十次 IDB */
@@ -124,8 +125,11 @@ function onTick() {
   }
   const c = eng.clock()
   w.worldMinutes = c.total
-  clockText.value = formatClock(c)
-  clockShort.value = formatTimeOfDay(c.minuteOfDay)
+  // HUD 的日期/时刻簇分两行显示（参考「小岛时光」）：上行「世界名 · 第 N 天」，
+  // 下行「时段 HH:MM」。拆成两个 ref 而不是在模板里切字符串 —— 模板里做字符串
+  // 处理，改一次格式就要同时改模板与这里，迟早对不上
+  dayText.value = `第 ${c.day + 1} 天`
+  timeText.value = `${phaseLabel(phaseOf(c.minuteOfDay))} ${formatTimeOfDay(c.minuteOfDay)}`
   // 时刻主要搭既有落盘的顺风车（跨格 / 关对话 / 离开页面）。但只靠顺风车不行：
   // 站着不动看风景半小时再关掉标签页，onBeforeUnmount 在硬刷新/关页时并不保证
   // 跑得到，下次进来世界时间就**倒流**回上一次存档。所以再补一道粗粒度的兜底，
@@ -251,7 +255,26 @@ function onRederive(id: string) {
   toast.success(`已按当前位置重新推导：${ROUTINE_KIND_LABEL[r.kind]}`)
 }
 
+/**
+ * HUD 快捷键。目前只有 N（身份面板）—— 按键提示芯片上写了什么，就必须真的能按，
+ * 否则 UI 在撒谎。
+ *
+ * ⚠️ 正在输入时绝不抢键：对话框里打「n」不该弹出身份面板。带修饰键也放过，
+ * 那些是浏览器/系统的快捷键。
+ */
+function onKey(e: KeyboardEvent): void {
+  if (e.key !== 'n' && e.key !== 'N') return
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  const t = e.target as HTMLElement | null
+  if (t && (t.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
+  if (rpg.talkingTo) return
+  e.preventDefault()
+  editorOpen.value = !editorOpen.value
+}
+window.addEventListener('keydown', onKey)
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
   // 同 closeTalk：离开本页后 RPG 侧再也没有停止入口，不掐就会把全局 busy
   // 一直占着，殃及聊天页
   if (rpg.pending) stopTalking()
@@ -266,34 +289,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <AppTopbar :title="rpg.current?.name ?? '世界'">
-      <template #actions>
-        <span v-if="clockText" class="chip">
-          <span class="wide">{{ clockText }}</span
-          ><span class="narrow">{{ clockShort }}</span>
-        </span>
-        <!-- 窄屏缩成 GPU/GL：390px 的顶栏要同时塞下时钟、后端、两颗按钮和标题，
-             全称会把标题挤成「【…」。后端不能整个藏掉 —— 它正是移动端回退路径
-             (?webgl=1) 唯一的观测点 -->
-        <span v-if="backend" class="chip">
-          <span class="wide">{{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}</span>
-          <span class="narrow">{{ backend === 'webgpu' ? 'GPU' : 'GL' }}</span>
-        </span>
-        <!-- 窄屏放不下全称：390px 下两颗全称按钮会把标题挤成一条缝 -->
-        <!-- 满编就先灰掉：点了才被拒绝是最差的一种反馈 -->
-        <button
-          class="cbx-btn cbx-btn--ghost sm"
-          :disabled="rpg.npcFull"
-          :title="rpg.npcFull ? `已达上限 ${NPC_MAX} 个` : ''"
-          @click="placeNpc"
-        >
-          <span class="wide">在脚下放 NPC</span><span class="narrow">＋NPC</span>
-        </button>
-        <button class="cbx-btn cbx-btn--ghost sm" @click="editorOpen = true">
-          <span class="wide">NPC 与身份</span><span class="narrow">身份</span>
-        </button>
-      </template>
-    </AppTopbar>
+    <!-- 顶栏只留标题与抽屉入口：游戏控件全部挪进画面里的 HUD（参考「小岛时光」）-->
+    <AppTopbar :title="rpg.current?.name ?? '世界'" />
 
     <div class="stage">
       <div ref="host" class="canvas-host" />
@@ -301,14 +298,42 @@ onBeforeUnmount(() => {
       <p v-if="booting" class="overlay">正在生成世界…</p>
       <p v-else-if="bootError" class="overlay overlay--err">⚠️ 渲染器启动失败：{{ bootError }}</p>
 
-      <!-- 靠近 NPC 的提示。对话开着时不显示 -->
-      <div v-if="nearName && !rpg.talkingTo" class="prompt">
-        <strong>{{ nearName }}</strong>
-        <span class="prompt__key">按 E / 空格 交谈</span>
-        <button class="cbx-btn cbx-btn--primary sm talk-btn" @click="openTalk(engine!.nearNpc()!)">
-          交谈
-        </button>
+      <!-- ── 左上：日期 / 时刻簇 ── -->
+      <div v-if="!booting && !bootError && dayText" class="hud hud--tl">
+        <span class="hud__sun" aria-hidden="true">☀</span>
+        <span class="hud__clock">
+          <b class="hud__day">{{ dayText }}</b>
+          <span class="hud__time">{{ timeText }}</span>
+        </span>
       </div>
+
+      <!-- ── 右上：胶囊按钮 ── -->
+      <div v-if="!booting && !bootError" class="hud hud--tr">
+        <!-- 满编就先灰掉：点了才被拒绝是最差的一种反馈 -->
+        <button
+          class="pill"
+          :disabled="rpg.npcFull"
+          :title="rpg.npcFull ? `已达上限 ${NPC_MAX} 个` : '在脚下放一个 NPC'"
+          @click="placeNpc"
+        >
+          放 NPC
+        </button>
+        <button class="pill" @click="editorOpen = true">身份<kbd class="pill__key">N</kbd></button>
+        <!-- 后端不能藏掉 —— 它正是移动端回退路径 (?webgl=1) 唯一的观测点 -->
+        <span v-if="backend" class="pill pill--flat">
+          {{ backend === 'webgpu' ? 'WebGPU' : 'WebGL' }}
+        </span>
+      </div>
+
+      <!-- ── 底部中央：上下文提示气泡 ── -->
+      <div v-if="nearName && !rpg.talkingTo" class="tip">
+        面向 <b>{{ nearName }}</b> · 空格交谈
+      </div>
+
+      <!-- ── 右下：互动按钮（桌面与触屏都给，参考站即如此）── -->
+      <button v-if="nearName && !rpg.talkingTo" class="act" @click="openTalk(engine!.nearNpc()!)">
+        互动<kbd class="act__key">空格</kbd>
+      </button>
 
       <TouchPad v-if="!rpg.talkingTo" @move="onPad" />
 
@@ -336,6 +361,24 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+
+  /* ── cozy HUD 令牌（参考「小岛时光」，色值取自该站实测）──
+     ⚠️ 刻意**写死字面值、不接 --cbx-***：全局是 ChatboxAI 设计系统且带明暗主题，
+     而游戏 HUD 永远浮在明亮的世界之上；跟着暗色主题走会糊成一团看不清。
+     作用域只到本页，聊天端的观感一个像素都不动。*/
+  --rpg-cream: rgba(247, 245, 221, 0.93);
+  --rpg-cream-light: rgba(255, 253, 240, 0.95);
+  --rpg-ink: #244f4a;
+  --rpg-green: #507f50;
+  --rpg-green-soft: #93b075;
+  --rpg-active: #fff5c4;
+  --rpg-radius: 19px;
+  --rpg-radius-sm: 11px;
+  --rpg-radius-pill: 30px;
+  /* 无模糊的硬投影是这套视觉的签名 —— 纸片/贴纸感，而不是常见的柔和浮起 */
+  --rpg-shadow: 0 5px 0 rgba(71, 115, 84, 0.19);
+  --rpg-shadow-sm: 0 4px 0 rgba(40, 95, 90, 0.12);
+  --rpg-font: ui-rounded, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 /* 舞台是定位上下文：canvas、摇杆、对话条、提示都 absolute 在它内部 */
 .stage {
@@ -370,62 +413,172 @@ onBeforeUnmount(() => {
 .overlay--err {
   color: var(--cbx-warning);
 }
-.prompt {
+/* ── HUD 通用 ── */
+.hud {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--rpg-font);
+  color: var(--rpg-ink);
+  /* HUD 只是浮层，不该吃掉画布上的拖拽；内部可点元素各自再打开 */
+  pointer-events: none;
+}
+.hud button {
+  pointer-events: auto;
+}
+.hud--tl {
+  left: max(14px, var(--cbx-safe-l, 0px));
+  top: 12px;
+}
+.hud--tr {
+  right: max(14px, var(--cbx-safe-r, 0px));
+  top: 12px;
+}
+
+/* 左上：日期 / 时刻 */
+.hud__sun {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--rpg-cream-light);
+  box-shadow: var(--rpg-shadow-sm);
+  font-size: 16px;
+  line-height: 1;
+}
+.hud__clock {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  /* 直接压在世界上，用一点白描边保证在深色树冠上也读得清 */
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75),
+    0 0 6px rgba(255, 255, 255, 0.5);
+}
+.hud__day {
+  font-size: var(--cbx-fs-sm);
+  font-weight: 700;
+}
+.hud__time {
+  font-size: var(--cbx-fs-xs);
+  opacity: 0.85;
+}
+
+/* 右上：胶囊按钮 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: var(--rpg-radius-sm);
+  background: var(--rpg-cream);
+  box-shadow: var(--rpg-shadow-sm);
+  color: var(--rpg-ink);
+  font-family: inherit;
+  font-size: var(--cbx-fs-sm);
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pill:hover:not(:disabled) {
+  background: var(--rpg-cream-light);
+}
+/* 按下时把硬投影压掉并下沉 1px —— 贴纸被按到纸面上的手感 */
+.pill:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(40, 95, 90, 0.12);
+}
+.pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pill--flat {
+  font-weight: 400;
+  font-size: var(--cbx-fs-xs);
+  opacity: 0.8;
+  cursor: default;
+}
+.pill__key {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--rpg-active);
+  box-shadow: inset 0 0 0 1px var(--rpg-green-soft);
+  color: var(--rpg-green);
+  font-family: inherit;
+  font-size: var(--cbx-fs-xs);
+  font-weight: 700;
+}
+
+/* 底部中央：上下文提示气泡 */
+.tip {
   position: absolute;
   left: 50%;
   bottom: max(var(--cbx-space-5), var(--cbx-safe-b));
   transform: translateX(-50%);
   z-index: 4;
-  display: flex;
-  align-items: center;
-  gap: var(--cbx-space-3);
-  padding: var(--cbx-space-2) var(--cbx-space-4);
-  border-radius: var(--cbx-radius-pill);
-  background: rgba(0, 0, 0, 0.62);
-  color: #fff;
+  padding: 11px 22px;
+  border-radius: var(--rpg-radius-pill);
+  background: var(--rpg-cream-light);
+  box-shadow: var(--rpg-shadow-sm);
+  color: var(--rpg-ink);
+  font-family: var(--rpg-font);
+  font-size: var(--cbx-fs-sm);
   white-space: nowrap;
-}
-.prompt__key {
-  font-size: var(--cbx-fs-xs);
-  opacity: 0.8;
-}
-.chip {
-  padding: 0 var(--cbx-space-2);
-  border-radius: var(--cbx-radius-pill);
-  background: var(--cbx-bg-secondary);
-  font-size: var(--cbx-fs-xs);
-  color: var(--cbx-text-secondary);
-  /* 时钟每分钟变宽变窄,不钉住就会在窄屏上折行并把标题挤没 */
-  white-space: nowrap;
-}
-.narrow {
-  display: none;
+  pointer-events: none;
 }
 
-/* 桌面用键盘，不需要那颗按钮；触屏没有键盘，必须给 */
-@media (hover: hover) and (pointer: fine) {
-  .talk-btn {
-    display: none;
-  }
+/* 右下：互动按钮 */
+.act {
+  position: absolute;
+  right: max(16px, var(--cbx-safe-r, 0px));
+  bottom: max(var(--cbx-space-5), var(--cbx-safe-b));
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 22px;
+  border: 0;
+  border-radius: var(--rpg-radius-pill);
+  background: var(--rpg-cream);
+  box-shadow: var(--rpg-shadow);
+  color: var(--rpg-ink);
+  font-family: var(--rpg-font);
+  font-size: var(--cbx-fs-md);
+  font-weight: 700;
+  cursor: pointer;
 }
+.act:active {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(71, 115, 84, 0.19);
+}
+.act__key {
+  padding: 2px 8px;
+  border-radius: 7px;
+  background: var(--rpg-active);
+  box-shadow: inset 0 0 0 1px var(--rpg-green-soft);
+  color: var(--rpg-green);
+  font-family: inherit;
+  font-size: var(--cbx-fs-xs);
+  font-weight: 700;
+}
+
 @media (max-width: 767px) {
-  .prompt__key {
-    display: none;
-  }
-  .talk-btn {
-    min-height: var(--cbx-tap-min);
-  }
-  /* 手机上摇杆就在左下角，居中的提示条会压在它上面 —— 抬到摇杆之上 */
-  .prompt {
+  /* 手机上摇杆在左下角、互动键在右下角，居中的提示条要抬到它们之上 */
+  .tip {
     bottom: calc(
       max(var(--cbx-space-4), var(--cbx-safe-b)) + var(--rpg-pad-size) + var(--cbx-space-3)
     );
+    font-size: var(--cbx-fs-xs);
   }
-  .wide {
+  .act {
+    min-height: var(--cbx-tap-min);
+  }
+  .act__key {
     display: none;
-  }
-  .narrow {
-    display: inline;
   }
 }
 </style>
