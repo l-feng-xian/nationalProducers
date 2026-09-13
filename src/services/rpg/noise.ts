@@ -130,6 +130,22 @@ export interface WorldSampler {
    */
   district(x: number, y: number): number
   /**
+   * 宏生态场，约 -1..1。比湿度低得多的频率（环面半径缩到 0.22），划出「大片
+   * 森林省 / 大片荒野省」。regionAt 把它叠在湿度上：于是生态不再是「湿度过某线
+   * 就变森林」的一刀切，而是「本就偏林的大区里、又够湿的地方」才成林 —— 分区
+   * 成片，边界更像自然的省界而非等高线。
+   */
+  macro(x: number, y: number): number
+  /**
+   * 域扭曲（domain warp）偏移，单位是格。把生态的采样点整体错开一段，
+   * 让森林/草甸/荒野的分界从光滑大团 blob 变成有机、交错的犬牙状。
+   *
+   * ⚠️ 两个分量本身也是环面周期场，所以「采样点 = 原点 + 偏移」在接缝两侧
+   * 仍然连续 —— 域扭曲不会把无缝拓扑破坏掉。
+   */
+  warpX(x: number, y: number): number
+  warpY(x: number, y: number): number
+  /**
    * 地表台阶等级（整数）：陆地 0..MAX_LEVEL，浅滩 -2、深水 -3。
    * 数值翻成世界高度是渲染层的事（见 world.heightAt）。
    */
@@ -168,6 +184,11 @@ export function createSampler(p: WorldParams): WorldSampler {
   // 湖场：第四个独立种子。与前三个都不相关，否则湖会永远长在森林里（或永远
   // 贴着海岸）—— 那样它就不像湖，像高度场的某种副产品
   const noiseL = createNoise4D(seededRandom(p.seed ^ 0x2e7d1a55))
+  // 宏生态省 + 两个域扭曲分量：各自独立种子，互不相关，否则「省界」会与湿度或
+  // 高度锁死，退化成又一条等高线
+  const noiseMacro = createNoise4D(seededRandom(p.seed ^ 0x1b873593))
+  const noiseWx = createNoise4D(seededRandom(p.seed ^ 0x85ebca6b))
+  const noiseWy = createNoise4D(seededRandom(p.seed ^ 0xc2b2ae35))
   const lakes = p.lakes === true
 
   const TAU = Math.PI * 2
@@ -218,6 +239,17 @@ export function createSampler(p: WorldParams): WorldSampler {
   // 必须一起移动，否则会长出「按荒原密度长树的森林」
   const moisture = (x: number, y: number): number => fbm(noiseM, x, y) + moistureBias
   const district = (x: number, y: number): number => fbm(noiseD, x, y, 0.28, 2)
+
+  // 宏生态省：比湿度低得多的频率，出大片成省的生态倾向
+  const macro = (x: number, y: number): number => fbm(noiseMacro, x, y, 0.22, 2)
+
+  /**
+   * 域扭曲偏移。振幅约 ±WARP_CELLS 格，频率介于湿度与宏场之间 —— 太高会把
+   * 分界搅成噪点，太低则整片一起平移、看不出交错。
+   */
+  const WARP_CELLS = 7
+  const warpX = (x: number, y: number): number => fbm(noiseWx, x, y, 0.6, 2) * WARP_CELLS
+  const warpY = (x: number, y: number): number => fbm(noiseWy, x, y, 0.6, 2) * WARP_CELLS
 
   /** 湖场：低频两倍频 —— 出「几片大湖」而不是满地水洼 */
   const lakeField = (x: number, y: number): number => fbm(noiseL, x, y, 0.55, 2)
@@ -291,6 +323,9 @@ export function createSampler(p: WorldParams): WorldSampler {
     height01,
     moisture,
     district,
+    macro,
+    warpX,
+    warpY,
     levelAt,
     biomeAt,
     isLakeAt,

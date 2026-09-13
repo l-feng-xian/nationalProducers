@@ -14,7 +14,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { createWorld, findSpawn, worldParamsOf, type Village } from '@/services/rpg/world'
-import { TERRAIN, cssOf } from '@/services/rpg/palette'
+import { REGION_TINT, TERRAIN, tintOf } from '@/services/rpg/palette'
 import type { RpgGenParams } from '@/types/rpg'
 
 const props = defineProps<{
@@ -81,12 +81,18 @@ async function render(): Promise<void> {
         } else if (b === 1) {
           put(i, TERRAIN.waterShallow, 1)
           water++
+        } else if (world.pathAt(wx, wy) || world.roadAt(wx, wy)) {
+          // 村道 + 村庄之间的大路：陶土色，让路网在缩略图上也看得见
+          put(i, TERRAIN.path, 1)
+          land++
         } else if (b === 2) {
           put(i, TERRAIN.sand, 1)
           land++
         } else {
-          // 用台阶等级做明暗，地势才看得出来
-          const g = TERRAIN.grassLevels[Math.max(0, Math.min(8, lv))] ?? TERRAIN.grassLevels[0]
+          // 用台阶等级做明暗，地势才看得出来；再按生态分区染色，森林/草甸/干草原分得开
+          const g0 = TERRAIN.grassLevels[Math.max(0, Math.min(8, lv))] ?? TERRAIN.grassLevels[0]
+          const tint = REGION_TINT[world.regionAt(wx, wy) as 'forest' | 'meadow' | 'wilds']
+          const g = g0 && tint ? tintOf(g0, tint) : g0
           if (g) put(i, g, 1)
           land++
         }

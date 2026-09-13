@@ -80,6 +80,27 @@ export const TERRAIN = {
 }
 
 /**
+ * 生态分区的地表**染色系数**（需求 2：让生态分界更明显）。
+ *
+ * 是**乘在草色上**的系数，不是替换色 —— 这样台阶明暗（grassLevels 的层次）
+ * 原样保留，只是整片森林偏冷深、草甸偏亮暖、干草原偏橄榄土黄，一眼能分出
+ * 三种地。系数写在线性空间（草色本就是线性），各分量都 <1/略 >1，不会把
+ * 顶点色顶爆。只作用于**草**格；沙/水/村道各有自己的颜色，不染。
+ *
+ * ⚠️ 与 scene.ts、WorldPreview 共用同一张表，游戏里与缩略图才配得上。
+ */
+export const REGION_TINT: Record<'forest' | 'meadow' | 'wilds', RGB> = {
+  forest: { r: 0.86, g: 1.02, b: 0.8 },
+  meadow: { r: 1.06, g: 1.05, b: 0.82 },
+  wilds: { r: 1.04, g: 0.94, b: 0.66 },
+}
+
+/** 分量相乘（染色）。放这里让 scene 与预览共用同一处 */
+export function tintOf(c: RGB, t: RGB): RGB {
+  return { r: c.r * t.r, g: c.g * t.g, b: c.b * t.b }
+}
+
+/**
  * 0..1 线性分量 → 'rgb(r,g,b)'，给 canvas 2D 用。
  *
  * ⚠️ 必须转回 sRGB。canvas 2D 的 fillStyle 收的是 sRGB 数值，没有任何色彩管理；

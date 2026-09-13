@@ -47,6 +47,7 @@ import {
   addWell,
   type RGB,
 } from './blocks'
+import { REGION_TINT, tintOf } from './palette'
 import { BIOME, WATER_SURFACE_Y } from './noise'
 import { skyAt } from './time'
 
@@ -340,8 +341,13 @@ export async function createScene(args: CreateSceneArgs): Promise<SceneHandle> {
         else {
           const lv = Math.min(8, Math.max(0, world.sampler.levelAt(x, z)))
           top = TERRAIN.grassLevels[lv]!
+          // 生态染色：森林偏冷深、草甸偏亮暖、干草原偏橄榄 —— 让分区一眼可辨。
+          // 草格的 regionAt 只会是 forest/meadow/wilds（beach/water 是沙/水，不到这支）
+          const region = world.regionAt(x, z)
+          const tint = REGION_TINT[region as 'forest' | 'meadow' | 'wilds']
+          if (tint) top = tintOf(top, tint)
         }
-        if (world.pathAt(x, z)) top = TERRAIN.path
+        if (world.pathAt(x, z) || world.roadAt(x, z)) top = TERRAIN.path
         // 草地/沙地按格哈希撒两档明度，打破大色块的死板
         if ((b === BIOME.grass || b === BIOME.sand) && hashTile(world.params.seed, x, z) & 0x40) {
           top = scaled(top, 0.955)

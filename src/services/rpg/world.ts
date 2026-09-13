@@ -30,6 +30,18 @@ import { fnv1a, hashTile } from '@/services/hash'
 import type { RpgGenParams } from '@/types/rpg'
 import { WILD_REGION, villageName, wildName, type TerrainClass } from './names'
 
+/**
+ * 生态分区（需求 2）。五个值，是**一处真相** —— 道具摆放、地貌措辞、地表着色
+ * 都从 regionAt 取，不再各自读一遍湿度阈值。
+ *
+ * - water：海或湖（不可行走）
+ * - beach：挨着水的沙（沙滩）
+ * - forest：成林的湿润陆地
+ * - meadow：中等湿度的开阔草甸（零星树 + 成片花）
+ * - wilds：干旱地 —— 内陆沙漠（沙）或干草原（草），由 biome 再分表现
+ */
+export type Region = 'water' | 'beach' | 'forest' | 'meadow' | 'wilds'
+
 /** 场景装饰物的种类 */
 export type PropKind =
   | 'tree'
@@ -71,8 +83,16 @@ export interface World {
   blockedAt(x: number, y: number): boolean
   /** 该格地表顶面的世界高度。角色与道具都站在它上面；水格是海床 */
   heightAt(x: number, y: number): number
-  /** 该格是不是村道（影响地块颜色，也不摆装饰物） */
+  /** 该格是不是村内土路（村心十字，影响地块颜色，也不摆装饰物） */
   pathAt(x: number, y: number): boolean
+  /**
+   * 该格是不是**村庄之间的道路**（影响地块颜色，也不摆装饰物）。
+   * 与 pathAt 分开：pathAt 是村内十字、绕村心；roadAt 是连接各村的主干道，
+   * 走在野地里、绕开村庄内部。渲染两者同色，寻路（阶段三）都偏好走。
+   */
+  roadAt(x: number, y: number): boolean
+  /** 该格所属的生态分区。道具/措辞/着色的唯一真相源 */
+  regionAt(x: number, y: number): Region
   /** 该格的装饰物。确定性：同一格永远算出同一个结果 */
   propAt(x: number, y: number): PropInstance | null
   /** 一句话描述该格所在的区域（村庄/森林/沙滩……），给对话情境用 */
@@ -111,6 +131,47 @@ const BLOCKERS: ReadonlySet<PropKind> = new Set([
   'signpost',
   'scarecrow',
 ])
+
+/** 一条密度规则：哈希分 r < upto 就摆这个道具（按 upto 升序判定） */
+interface PropRoll {
+  upto: number
+  kind: PropKind
+}
+
+/**
+ * 各生态带的道具密度（比例）表（需求 2「注意各元素比例」）。
+ *
+ * 原先这些 `r<0.4` 之类的魔法数散落在 propAt 的四个分支里，想调「树多花少」得
+ * 满文件找。收进一张表后，比例一眼可读、可核、可调；阶段四换体素道具尺度时，
+ * 只改这里的数就能重新配平，不必再动逻辑。
+ *
+ * zone 是 propAt 内部的道具带，与对外的 Region 有个小映射：beach 与内陆沙漠
+ * 共用 'sand'（两者本就同密度，只是地名不同），wilds 的草地部分是 'steppe'。
+ * 'forest' 的 tree 会在高地/极湿处升级成 pine（见 propAt）。
+ */
+const PROP_MIX: Record<'forest' | 'meadow' | 'steppe' | 'sand', PropRoll[]> = {
+  forest: [
+    { upto: 0.4, kind: 'tree' },
+    { upto: 0.45, kind: 'bush' },
+    { upto: 0.47, kind: 'rock' },
+  ],
+  meadow: [
+    { upto: 0.03, kind: 'tree' },
+    { upto: 0.05, kind: 'bush' },
+    { upto: 0.16, kind: 'flower' },
+    { upto: 0.2, kind: 'rock' },
+  ],
+  steppe: [
+    { upto: 0.018, kind: 'tree' },
+    { upto: 0.03, kind: 'bush' },
+    { upto: 0.04, kind: 'flower' },
+    { upto: 0.075, kind: 'rock' },
+  ],
+  sand: [
+    { upto: 0.012, kind: 'bush' },
+    { upto: 0.035, kind: 'rock' },
+  ],
+}
 
 // hashTile 搬去了 services/hash —— names.ts 也要用它，留在这里会绕成
 // world ⇄ names 的循环依赖（现在能跑只是因为函数声明被提升，改天谁加一行
@@ -356,6 +417,173 @@ export function createWorld(p: WorldParams): World {
     return (hashTile(seed ^ 0x7a11, wx, wy) >>> 4) % 5 !== 0
   }
 
+  /** 半径 r 内有没有水。给措辞与生态分区用（沙滩 = 挨着水的沙） */
+  const waterWithin = (x: number, y: number, r: number): boolean => {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const b = sampler.biomeAt(wrapX(x + dx), wrapY(y + dy))
+        if (b === BIOME.water || b === BIOME.shallow) return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * 生态分区（需求 2 的核心）—— 多层噪声叠加，让分界成片、有机、清晰。
+   *
+   * 不再是「湿度 > 0.18 就是森林」的单场一刀切，而是三层叠加：
+   *  1. **宏生态省** macro：极低频，定「这一大片本就偏林还是偏荒」；
+   *  2. **域扭曲** warp：把湿度的采样点错开，令森林/草甸的边界犬牙交错而非光滑椭圆；
+   *  3. 扭曲后的**湿度**：在省的基调上决定这一小块的干湿。
+   * 三者相加得 forestScore，再按两道阈值切出 forest / meadow / wilds。
+   * 于是「大片森林里嵌着几块空地、荒野边缘有零星林」这种层次自然出现。
+   */
+  const regionAt = (x: number, y: number): Region => {
+    const wx = wrapX(Math.floor(x))
+    const wy = wrapY(Math.floor(y))
+    const b = sampler.biomeAt(wx, wy)
+    if (b === BIOME.water || b === BIOME.shallow) return 'water'
+    if (b === BIOME.sand) {
+      // 沙有两种成因：近岸（沙滩）与内陆干旱（荒漠，归 wilds）—— 见 describeArea 同款判据
+      return waterWithin(wx, wy, 3) ? 'beach' : 'wilds'
+    }
+    // 陆地（草）：域扭曲后的湿度 + 宏省 叠加
+    const mx = wx + sampler.warpX(wx, wy)
+    const my = wy + sampler.warpY(wx, wy)
+    const forestScore = sampler.moisture(mx, my) + sampler.macro(wx, wy) * 0.45
+    if (forestScore > 0.2) return 'forest'
+    if (forestScore > -0.02) return 'meadow'
+    return 'wilds'
+  }
+
+  // ── 村庄之间的道路（需求 2：地图缺少道路）──
+  //
+  // 村庄是确定性的固定集合，所以路网也能确定性地一次算好、之后 O(1) 查表。
+  // 连边用最小生成树（MST）保证**每个村庄都连得上**，再补几条近邻边成环，
+  // 让路网不是一根光秃秃的链。每条边在环面上碾出一条带轻微摆动的路。
+
+  /** 路面格集合（键 = wy*W+wx）。首次 roadAt 时惰性构建、之后一直复用 */
+  let roadCells: Set<number> | null = null
+  /** 道路摆动幅度（格）。借用域扭曲场当平滑的随机偏移，路才不是直尺画的 */
+  const ROAD_WOBBLE = 0.35
+
+  /** 标记一格为路面：只铺在可走的陆地上，且避开村庄内部（村内交给十字村道） */
+  const markRoadCell = (cells: Set<number>, gx: number, gy: number): void => {
+    const wx = wrapX(gx)
+    const wy = wrapY(gy)
+    const b = sampler.biomeAt(wx, wy)
+    if (b !== BIOME.grass && b !== BIOME.sand) return // 不铺过水/浅滩，遇水断口
+    if (villageNear(wx, wy)) return
+    cells.add(wy * W + wx)
+  }
+
+  /** 在环面上把 a、b 两村心之间碾出一条路 */
+  const carveRoad = (cells: Set<number>, a: Village, b: Village): void => {
+    const dx = wrapDelta(b.cx - a.cx, W)
+    const dy = wrapDelta(b.cy - a.cy, H)
+    const steps = Math.max(Math.abs(dx), Math.abs(dy))
+    if (steps === 0) return
+    const len = Math.hypot(dx, dy) || 1
+    // 垂直于路向的单位向量，摆动往这个方向加
+    const px = -dy / len
+    const py = dx / len
+    let prevX = NaN
+    let prevY = NaN
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const bx = a.cx + dx * t
+      const by = a.cy + dy * t
+      const wob = sampler.warpX(Math.round(bx), Math.round(by)) * ROAD_WOBBLE
+      const gx = wrapX(Math.round(bx + px * wob))
+      const gy = wrapY(Math.round(by + py * wob))
+      // 4-连通：与上一格若走成对角，补一个正交角格 —— 否则 NPC（阶段三）沿路走时
+      // 会在对角缺口处判成「路断了」
+      if (!Number.isNaN(prevX)) {
+        const adx = Math.abs(wrapDelta(gx - prevX, W))
+        const ady = Math.abs(wrapDelta(gy - prevY, H))
+        if (adx >= 1 && ady >= 1) markRoadCell(cells, gx, prevY)
+      }
+      markRoadCell(cells, gx, gy)
+      prevX = gx
+      prevY = gy
+    }
+  }
+
+  /** 一次性构建整张路网 */
+  const buildRoads = (): Set<number> => {
+    const cells = new Set<number>()
+    const vs = listVillages()
+    const n = vs.length
+    if (n < 2) return cells
+
+    const dist2 = (a: Village, b: Village): number => {
+      const ex = wrapDelta(a.cx - b.cx, W)
+      const ey = wrapDelta(a.cy - b.cy, H)
+      return ex * ex + ey * ey
+    }
+
+    // Prim 最小生成树：确定性（同距离按索引序破平），保证全连通
+    const inTree = new Array<boolean>(n).fill(false)
+    const edges: Array<[number, number]> = []
+    inTree[0] = true
+    for (let added = 1; added < n; added++) {
+      let bi = -1
+      let bj = -1
+      let bd = Infinity
+      for (let i = 0; i < n; i++) {
+        if (!inTree[i]) continue
+        for (let j = 0; j < n; j++) {
+          if (inTree[j]) continue
+          const d = dist2(vs[i]!, vs[j]!)
+          if (d < bd) {
+            bd = d
+            bi = i
+            bj = j
+          }
+        }
+      }
+      if (bj < 0) break
+      inTree[bj] = true
+      edges.push([bi, bj])
+    }
+
+    // 近邻增边：每个村再连它最近的一个村（去重）—— 给路网加环，更像真实路网而非一根链。
+    // ⚠️ 要求那个邻村**够远**（村心距 > 两村半径之和 + 3）才连：否则两个「贴脸」的村
+    // 之间那条边会整段落在村庄影响圈内被 markRoadCell 全部丢弃，等于没连 —— 结果就是
+    // 某个村明明在 MST 里连通、却一条看得见的路都没有。挑够远的邻村保证每个村至少碾出一条路。
+    const seen = new Set(edges.map(([i, j]) => (i < j ? i * n + j : j * n + i)))
+    for (let i = 0; i < n; i++) {
+      let bj = -1
+      let bd = Infinity
+      for (let j = 0; j < n; j++) {
+        if (j === i) continue
+        const gap = vs[i]!.r + vs[j]!.r + 3
+        const d = dist2(vs[i]!, vs[j]!)
+        if (d <= gap * gap) continue // 太近，边会被村庄影响圈整段吃掉
+        if (d < bd) {
+          bd = d
+          bj = j
+        }
+      }
+      if (bj < 0) continue
+      const key = i < bj ? i * n + bj : bj * n + i
+      if (!seen.has(key)) {
+        seen.add(key)
+        edges.push([i, bj])
+      }
+    }
+
+    for (const [i, j] of edges) carveRoad(cells, vs[i]!, vs[j]!)
+    return cells
+  }
+
+  const roadAt = (x: number, y: number): boolean => {
+    if (!roadCells) roadCells = buildRoads()
+    const wx = wrapX(Math.floor(x))
+    const wy = wrapY(Math.floor(y))
+    return roadCells.has(wy * W + wx)
+  }
+
   /**
    * 每格的装饰物（确定性、零存储）。
    * 格坐标哈希出一个稳定随机数，再按「村庄 / 森林 / 花田 / 干草原」分层摆放。
@@ -365,6 +593,8 @@ export function createWorld(p: WorldParams): World {
     const wy = wrapY(Math.floor(y))
     const b = sampler.biomeAt(wx, wy)
     if (b === BIOME.water || b === BIOME.shallow) return null
+    // 村庄之间的道路上不摆东西（roadAt 已避开村庄内部，不会误伤水井/田/村道十字）
+    if (roadAt(wx, wy)) return null
 
     const h = hashTile(seed, wx, wy)
     const r = (h >>> 8) / 0x1000000 // 0..1
@@ -463,162 +693,28 @@ export function createWorld(p: WorldParams): World {
       return null
     }
 
-    // ── 荒野 ──
-    if (b === BIOME.sand) {
-      if (r < 0.012) {
-        return {
-          kind: 'bush',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.3),
-          oy: jitter(19, 0.3),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      if (r < 0.035) {
-        return {
-          kind: 'rock',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.25),
-          oy: jitter(19, 0.25),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      return null
-    }
-    // 森林：高密度树。高海拔或很湿 → 针叶，低地 → 阔叶
-    if (m > 0.18) {
-      const pine = lv >= 3 || m > 0.4
-      if (r < 0.4) {
-        return {
-          kind: pine ? 'pine' : 'tree',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.3),
-          oy: jitter(19, 0.3),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      if (r < 0.45) {
-        return {
-          kind: 'bush',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.3),
-          oy: jitter(19, 0.3),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      if (r < 0.47) {
-        return {
-          kind: 'rock',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.25),
-          oy: jitter(19, 0.25),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      return null
-    }
-    // 花田草原：零星树 + 成片小花
-    if (m > 0) {
-      if (r < 0.03) {
-        return {
-          kind: 'tree',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.3),
-          oy: jitter(19, 0.3),
-          variant: h & 7,
-          rot: 0,
-        }
-      }
-      if (r < 0.05) {
-        return {
-          kind: 'bush',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.3),
-          oy: jitter(19, 0.3),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      if (r < 0.16) {
-        return {
-          kind: 'flower',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.32),
-          oy: jitter(19, 0.32),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      if (r < 0.2) {
-        return {
-          kind: 'rock',
-          x: wx,
-          y: wy,
-          ox: jitter(3, 0.25),
-          oy: jitter(19, 0.25),
-          variant: h & 3,
-          rot: 0,
-        }
-      }
-      return null
-    }
-    // 干草原
-    if (r < 0.018) {
-      return {
-        kind: 'tree',
-        x: wx,
-        y: wy,
-        ox: jitter(3, 0.3),
-        oy: jitter(19, 0.3),
-        variant: h & 7,
-        rot: 0,
-      }
-    }
-    if (r < 0.03) {
-      return {
-        kind: 'bush',
-        x: wx,
-        y: wy,
-        ox: jitter(3, 0.3),
-        oy: jitter(19, 0.3),
-        variant: h & 3,
-        rot: 0,
-      }
-    }
-    if (r < 0.04) {
-      return {
-        kind: 'flower',
-        x: wx,
-        y: wy,
-        ox: jitter(3, 0.3),
-        oy: jitter(19, 0.3),
-        variant: h & 3,
-        rot: 0,
-      }
-    }
-    if (r < 0.075) {
-      return {
-        kind: 'rock',
-        x: wx,
-        y: wy,
-        ox: jitter(3, 0.25),
-        oy: jitter(19, 0.25),
-        variant: h & 3,
-        rot: 0,
-      }
+    // ── 野地：按生态分区查 PROP_MIX ──
+    // 分区是「一处真相」，但 wilds 要按 biome 再分：内陆沙漠走 sand 表（稀疏灌木/石），
+    // 干草原走 steppe 表（零星树/花）—— 两者地表色本就不同，道具也该不同。
+    const region = regionAt(wx, wy)
+    if (region === 'water') return null // 上面 biome 已挡住水，这里只为收窄类型
+    const zone =
+      region === 'beach'
+        ? 'sand'
+        : region === 'wilds'
+          ? b === BIOME.sand
+            ? 'sand'
+            : 'steppe'
+          : region // 'forest' | 'meadow'
+    for (const roll of PROP_MIX[zone]) {
+      if (r >= roll.upto) continue
+      // 森林里的阔叶树在高地/极湿处升级成针叶；其余原样
+      const kind =
+        roll.kind === 'tree' && zone === 'forest' && (lv >= 3 || m > 0.4) ? 'pine' : roll.kind
+      const amp = roll.kind === 'rock' ? 0.25 : 0.3
+      // 开阔地的树用更宽的变体位（h&7）挑更多样式；森林树与灌木/花/石用 h&3
+      const variant = roll.kind === 'tree' && zone !== 'forest' ? h & 7 : h & 3
+      return { kind, x: wx, y: wy, ox: jitter(3, amp), oy: jitter(19, amp), variant, rot: 0 }
     }
     return null
   }
@@ -634,8 +730,11 @@ export function createWorld(p: WorldParams): World {
     const wx = wrapX(Math.floor(x))
     const wy = wrapY(Math.floor(y))
     const pr = propAt(wx, wy)
+    // ⚠️ 生态分区与道路也要摘进来：它们各自决定了地表着色与道具，只摘 biome 的话
+    // 「同 biome 不同 region」或「路碾过的格」会被误判成「一样」，兼容性预言机就漏了
     return fnv1a(
-      `${sampler.biomeAt(wx, wy)}:${sampler.levelAt(wx, wy)}:${pathAt(wx, wy) ? 'p' : '-'}:` +
+      `${sampler.biomeAt(wx, wy)}:${sampler.levelAt(wx, wy)}:${regionAt(wx, wy)}:` +
+        `${pathAt(wx, wy) ? 'p' : '-'}:${roadAt(wx, wy) ? 'r' : '-'}:` +
         `${pr?.kind ?? '-'}:${pr?.variant ?? -1}:${pr?.rot ?? -1}:` +
         `${(pr?.ox ?? 0).toFixed(3)}:${(pr?.oy ?? 0).toFixed(3)}`,
     )
@@ -651,17 +750,6 @@ export function createWorld(p: WorldParams): World {
     haybale: '谷仓边',
     lantern: '路灯下',
     scarecrow: '稻草人旁',
-  }
-
-  /** 半径 r 内有没有水。只给措辞用，describeArea 一轮对话才调一次，代价可忽略 */
-  const waterWithin = (x: number, y: number, r: number): boolean => {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        const b = sampler.biomeAt(wrapX(x + dx), wrapY(y + dy))
-        if (b === BIOME.water || b === BIOME.shallow) return true
-      }
-    }
-    return false
   }
 
   /**
@@ -696,6 +784,8 @@ export function createWorld(p: WorldParams): World {
         : `${wildName(seed, gx, gy, 'water')}畔`
     }
     if (pathAt(wx, wy)) return v ? `${v.name}的村道上` : '村道上'
+    // 村庄之间的大路（roadAt 已避开村内，这里 v 必为 null）
+    if (roadAt(wx, wy)) return '村外的大路上'
     // 半径 2 格内找最近的地标
     for (let r = 1; r <= 2; r++) {
       for (let dy = -r; dy <= r; dy++) {
@@ -716,12 +806,13 @@ export function createWorld(p: WorldParams): World {
     // 判据直接问「附近有没有水」而不是反推生成成因：沙滩的定义本来就是「挨着水的沙」，
     // 这样无论将来沙从哪儿来都不会再说错。三格内有水才算滩。
     if (b === BIOME.sand) return waterWithin(wx, wy, 3) ? '沙滩上' : '荒漠中'
-    // 野地用比村庄粗得多的网格命名 —— 每走两步换个地名反而出戏
+    // 野地用比村庄粗得多的网格命名 —— 每走两步换个地名反而出戏。
+    // 措辞跟着 regionAt 走，与地表着色/道具同一套分区，不再各读一遍湿度阈值
     const gx = Math.floor(wx / WILD_REGION)
     const gy = Math.floor(wy / WILD_REGION)
-    const m = sampler.moisture(wx, wy)
-    if (m > 0.18) return `${wildName(seed, gx, gy, 'forest')}中`
-    if (m > 0) return `${wildName(seed, gx, gy, 'plain')}上`
+    const region = regionAt(wx, wy)
+    if (region === 'forest') return `${wildName(seed, gx, gy, 'forest')}中`
+    if (region === 'meadow') return `${wildName(seed, gx, gy, 'plain')}上`
     return `${wildName(seed, gx, gy, 'hill')}中`
   }
 
@@ -733,6 +824,8 @@ export function createWorld(p: WorldParams): World {
     blockedAt,
     heightAt,
     pathAt,
+    roadAt,
+    regionAt,
     propAt,
     describeArea,
     signatureAt,
