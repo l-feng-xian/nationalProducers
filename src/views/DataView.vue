@@ -266,7 +266,7 @@ async function doExport() {
 function openBackup() {
   backupInput.value?.click()
 }
-/** store 名 → 人话。跳过统计里要显示，别把 'rpgworlds' 这种内部名甩给用户 */
+/** 导入跳过统计使用用户可读的分类名称。 */
 const STORE_LABEL: Record<string, string> = {
   characters: '角色',
   worldbooks: '世界书',
@@ -274,7 +274,6 @@ const STORE_LABEL: Record<string, string> = {
   chats: '会话',
   messages: '消息',
   blobs: '图片',
-  rpgworlds: '世界',
   settings: '设置',
 }
 
@@ -283,9 +282,7 @@ async function doImport(e: Event) {
   if (!file) return
   try {
     const r = await importAll(await file.text())
-    const line =
-      `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}` +
-      (r.rpgworlds ? ` · 世界 ${r.rpgworlds}` : '')
+    const line = `导入完成：角色 ${r.characters} · 世界书 ${r.worldbooks} · 会话 ${r.chats} · 消息 ${r.messages}`
     // 跳过的行必须说出来。不说的话「导入完成」会盖住「其实有 300 条没进来」，
     // 而用户是在事后翻不到某段对话时才发现的 —— 那时已经无从查起
     if (r.skipped) {

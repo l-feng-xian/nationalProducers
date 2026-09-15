@@ -107,27 +107,6 @@ export interface SpeakerLite {
 }
 
 export interface BuildPromptInput {
-  /**
-   * 覆盖本轮的用户身份。
-   *
-   * 为 RPG 而加：1v1 路径下 `resolvePersona` 的 group 参数恒为 undefined，
-   * 于是「玩家在这个世界里是谁」原本**没有任何入口**能送进提示词。
-   *
-   * 之所以不走「临时改 settings.persona 再还原」：settings 的落盘是 400ms
-   * 防抖的全局 timer，覆盖窗口期内只要别处触发一次 touch()，这份**临时**身份
-   * 就会被固化成用户的全局人设 —— 那是会真损坏用户数据的竞态。
-   *
-   * 两项留空等于不覆盖：resolvePersona 用的是 `|| fallback`，空串照样回落。
-   */
-  personaOverride?: { name: string; description: string }
-  /**
-   * 追加在【场景】最前面的一段设定。RPG 用它送「世界简介」。
-   *
-   * 刻意是**追加**而不是替换：角色卡自带的 scenario 是作者写的相遇情境，
-   * 顶掉它就等于悄悄丢掉卡的一部分。世界简介说的是「这是个什么地方」，
-   * 卡的 scenario 说的是「你们怎么碰上的」，两件事并不冲突。
-   */
-  scenarioPrefix?: string
   isGroup: boolean
   speaker: SpeakerLite
   /** 1vN 全体成员（含静音）；1v1 = [speaker] */
@@ -196,26 +175,9 @@ function roleByName(r: string): 0 | 1 | 2 {
   return r === 'user' ? EXT_ROLE.USER : r === 'assistant' ? EXT_ROLE.ASSISTANT : EXT_ROLE.SYSTEM
 }
 
-/**
- * 本轮实际生效的用户身份：**RPG 世界身份 > 群聊身份 > 全局人设**。
- *
- * ⚠️ 不能把 personaOverride 直接当成 resolvePersona 的 fallback 传进去 ——
- * 那样传一个两项都空的覆盖会解析成「空身份」，而不是回落到全局人设。
- * 空串必须继续往下落，这与 GroupPersona 的既有语义一致（group.ts 用 `||`）。
- */
-/** 世界简介拼在角色卡 scenario 前面，两段都可能为空 */
-function withScenarioPrefix(prefix: string, scenario: string): string {
-  return [prefix.trim(), scenario.trim()].filter(Boolean).join('\n\n')
-}
-
+/** 本轮用户身份：群聊身份优先，未设置时使用全局人设。 */
 function effectivePersona(input: BuildPromptInput): { name: string; description: string } {
-  const base = resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
-  const o = input.personaOverride
-  if (!o) return base
-  return {
-    name: o.name.trim() || base.name,
-    description: o.description.trim() || base.description,
-  }
+  return resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
 }
 
 /** 构建宏求值环境 */
@@ -294,10 +256,7 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   const card = {
     description: joined ? joined.description : base(c.data.description),
     personality: joined ? joined.personality : base(c.data.personality),
-    scenario: withScenarioPrefix(
-      base(input.scenarioPrefix ?? ''),
-      joined ? joined.scenario : base(c.data.scenario),
-    ),
+    scenario: joined ? joined.scenario : base(c.data.scenario),
     mesExample: joined ? joined.mesExample : base(c.data.mes_example),
     persona: base(persona.description),
     // system_prompt 刻意**不在这里**求值：它要吃 {{original}}，而那个值是

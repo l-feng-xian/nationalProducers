@@ -12,8 +12,7 @@ import { selectSpeakers } from '@/services/group/activation'
 import { cleanGroupMessage, groupStopStrings } from '@/services/group/cards'
 import { group_activation_strategy, type Group } from '@/types/group'
 import type { Character } from '@/types/character'
-import { freshSituation, type ChatMeta } from '@/types/chat'
-import { synthNpcCard } from '@/types/rpg'
+import type { ChatMeta } from '@/types/chat'
 import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
@@ -215,43 +214,10 @@ export const useGenerationStore = defineStore('generation', () => {
     return cfg
   }
 
-  /**
-   * 会话自带的 RPG 身份（玩家是谁、对面是谁、身处哪个世界）。
-   *
-   * ⚠️ 这一层的存在意义：NPC 会话就是普通 solo 会话，侧栏点得进去。玩家在
-   * 聊天页接着聊、或者点 ↻ 重新生成，走的都不是 dialogue.ts，一个 override
-   * 都传不进来。身份记在会话上、在这里同步取出，所有入口才会一致。
-   *
-   * 必须同步：build() 拿不到 await（见下方检索那段注释），所以绑定里存的是
-   * 自包含的数据，不去查世界存档。
-   */
-  function rpgBinding(meta: ChatMeta) {
-    const b = meta.chat_metadata.rpg
-    if (!b) return null
-    const chars = useCharactersStore()
-    // 有卡以**卡**为准：卡改了立刻跟着变。查不到（卡被删了）就退回自填身份
-    const card = b.characterId ? chars.byId(b.characterId) : undefined
-    return {
-      persona: b.persona,
-      // 世界简介说「这是哪」、relations 说「你和谁什么关系」、situation 说「此刻在哪、
-      // 在干什么」—— 拼进同一个【场景】。situation 过了保质期就整句丢掉：陈旧的位置
-      // 比没有位置更糟；relations 是稳定配置，不设保质期
-      scenarioPrefix: [b.worldDescription, b.relations, freshSituation(b)]
-        .filter(Boolean)
-        .join('\n'),
-      speaker: card ?? synthNpcCard(b.npcId, b.npcName ?? '', b.npcDescription ?? '', b.worldName),
-    }
-  }
-
   /** 本轮发言者。build() 与 send() 必须算出同一个人，所以只此一处 */
-  function resolveSpeaker(meta: ChatMeta, override?: Character): Character {
+  function resolveSpeaker(meta: ChatMeta): Character {
     const chars = useCharactersStore()
-    return (
-      override ??
-      rpgBinding(meta)?.speaker ??
-      chars.byId(meta.characterId) ??
-      defaultAssistantCharacter()
-    )
+    return chars.byId(meta.characterId) ?? defaultAssistantCharacter()
   }
 
   /** 组装本轮提示词（dryRun 也走这里，用于预览面板） */
@@ -260,16 +226,6 @@ export const useGenerationStore = defineStore('generation', () => {
       composerText?: string
       isContinue?: boolean
       isDryRun?: boolean
-      /** RPG：本轮用玩家在世界里的身份，而不是全局人设 */
-      personaOverride?: { name: string; description: string }
-      /**
-       * RPG：本轮的发言者用这张卡，而不是按 meta.characterId 去查。
-       *
-       * 为「没有关联角色卡的纯游戏 NPC」而加：那种 NPC 的名字与简介只存在
-       * 存档里，`chars.byId(undefined)` 查不到就会**静默回落成「一个乐于
-       * 助人的 AI 助手」** —— 用户填的 NPC 简介一个字都进不了提示词。
-       */
-      speakerOverride?: Character
     } = {},
   ): BuiltPrompt | null {
     const chats = useChatsStore()
@@ -279,8 +235,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const meta = chats.current
     if (!meta) return null
 
-    const bind = rpgBinding(meta)
-    const char = resolveSpeaker(meta, opts.speakerOverride)
+    const char = resolveSpeaker(meta)
     const speaker = { id: char.id, name: char.data.name, char }
 
     // 需求 5：全局世界书只在全局配置启用；角色世界书随角色带入
@@ -311,12 +266,7 @@ export const useGenerationStore = defineStore('generation', () => {
       ? toPlain(meta.chat_metadata.timedWorldInfo)
       : meta.chat_metadata.timedWorldInfo
 
-    // 显式传参优先；没传就用会话自带的绑定（聊天页 / ↻ 重新生成走的是这条）
-    const persona = opts.personaOverride ?? bind?.persona
-    const scenarioPrefix = bind?.scenarioPrefix ?? ''
     const built = buildChatPrompt({
-      ...(persona ? { personaOverride: persona } : {}),
-      ...(scenarioPrefix ? { scenarioPrefix } : {}),
       isGroup: false,
       speaker,
       members: [speaker],
@@ -339,12 +289,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   /** 发送一轮：组装 → 流式 → 落盘 */
-  async function send(
-    opts: {
-      personaOverride?: { name: string; description: string }
-      speakerOverride?: Character
-    } = {},
-  ): Promise<void> {
+  async function send(): Promise<void> {
     const chats = useChatsStore()
     const chars = useCharactersStore()
     const settings = useSettingsStore()
@@ -358,15 +303,7 @@ export const useGenerationStore = defineStore('generation', () => {
       return
     }
 
-    /**
-     * ⚠️ busy 与 controller 必须在**第一个 await 之前**立起来，两件事都靠它：
-     *  ① 原先 prepareRecall / appendAi 在闸门之后、置位之前 await，两次快点击
-     *     能双双通过 `!busy.value`，同一轮发两遍请求、留两条 assistant；
-     *  ② 这段时间 controller 还是 null，stop() 是**空操作**。聊天页的停止按钮
-     *     `v-if="busy"` 此刻还没出现所以看不出来，但 RPG 页的停止按钮盯的是
-     *     rpg.pending（在 talkToNpc 之前就置位了），按下去毫无反应。
-     * 从守卫到这里之间只许留同步代码。
-     */
+    // 第一个 await 前就锁定本轮并创建取消控制器，避免重复发送且支持预检时停止。
     busy.value = true
     const ctl = new AbortController()
     controller = ctl
@@ -384,13 +321,10 @@ export const useGenerationStore = defineStore('generation', () => {
       // 预检期间用户按了停止：此刻还没有占位行，干净退出即可
       if (ctl.signal.aborted) return
 
-      const built = build({
-        ...(opts.personaOverride ? { personaOverride: opts.personaOverride } : {}),
-        ...(opts.speakerOverride ? { speakerOverride: opts.speakerOverride } : {}),
-      })
+      const built = build()
       if (!built) return
 
-      const char = resolveSpeaker(meta, opts.speakerOverride)
+      const char = resolveSpeaker(meta)
       row = await chats.appendAi(char.data.name, char.id)
       if (!row) return
       await chats.markTainted()
@@ -492,7 +426,7 @@ export const useGenerationStore = defineStore('generation', () => {
   async function sendGroup(opts: { forceId?: string; isUserInput?: boolean } = {}): Promise<void> {
     // ⚠️ 进门就复位，别只依赖上一轮 finally 的清理。
     // `stop()` 会把 aborted 置 true，而它**只在本函数的 finally 里复位** ——
-    // 于是在 1v1（含 RPG 的 NPC 对话）里按过一次停止之后，标志会一直挂着，
+    // 于是在 1v1 里按过一次停止之后，标志会一直挂着，
     // 下一次群聊在第一个发言者结束时就 `if (aborted) break` 静默停掉其余成员，
     // 表现是「群里只有一个人说话」且毫无报错。
     aborted = false

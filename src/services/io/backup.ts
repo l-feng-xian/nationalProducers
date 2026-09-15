@@ -26,8 +26,6 @@ export interface BackupFile {
   chats: unknown[]
   messages: unknown[]
   blobs: { id: string; mime: string; dataUrl: string }[]
-  /** RPG 世界存档。很小（地形是算出来的，只存种子与 NPC），随包走无压力 */
-  rpgworlds: unknown[]
 }
 
 function blobToDataUrl(b: Blob): Promise<string> {
@@ -57,9 +55,10 @@ async function dataUrlToBlob(url: string): Promise<Blob> {
  */
 function stripMemIndex(row: unknown): unknown {
   if (!row || typeof row !== 'object') return row
-  const meta = (row as { chat_metadata?: { memIndex?: unknown } }).chat_metadata
-  if (!meta || typeof meta !== 'object' || !('memIndex' in meta)) return row
-  const { memIndex: _drop, ...rest } = meta
+  const meta = (row as { chat_metadata?: { memIndex?: unknown; rpg?: unknown } }).chat_metadata
+  if (!meta || typeof meta !== 'object') return row
+  // 旧备份中的世界绑定已失效，导入时一并去掉。
+  const { memIndex: _drop, rpg: _legacy, ...rest } = meta
   return { ...(row as object), chat_metadata: rest }
 }
 
@@ -76,7 +75,6 @@ export interface SyncScope {
   groups: boolean
   chats: boolean
   settings: boolean
-  rpgworlds: boolean
 }
 
 export const FULL_SCOPE: SyncScope = {
@@ -85,7 +83,6 @@ export const FULL_SCOPE: SyncScope = {
   groups: true,
   chats: true,
   settings: true,
-  rpgworlds: true,
 }
 
 /**
@@ -124,7 +121,6 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     groups,
     chats: s.chats ? await db.getAll('chats') : [],
     messages: s.chats ? await db.getAll('messages') : [],
-    rpgworlds: s.rpgworlds ? await db.getAll('rpgworlds') : [],
     blobs,
     // 注意：secrets（API Key）不导出
   }
@@ -142,13 +138,12 @@ export interface ImportResult {
   chats: number
   messages: number
   blobs: number
-  rpgworlds: number
   /**
    * 写不进去、被跳过的行数。
    *
    * 备份是**零校验原样回写**的（这是有意的：校验在各仓储的读路径 normalize 里）。
    * 但「不校验」不等于「什么都写得进去」——IndexedDB 自己有一道硬门槛：
-   * 取不出主键的行会直接抛 DataError。缺 id 的世界、缺 seq 的消息（复合主键
+   * 取不出主键的行会直接抛 DataError。缺 id 的角色、缺 seq 的消息（复合主键
    * `[chatId, seq]`）都属于这一类。
    *
    * ⚠️ 以前这里没有 try/catch：**第一行坏数据就会掀掉整次导入**，而前面已经写进去的
@@ -167,7 +162,6 @@ type BackupStore =
   | 'groups'
   | 'chats'
   | 'messages'
-  | 'rpgworlds'
   | 'blobs'
   | 'settings'
 
@@ -177,7 +171,6 @@ const INDEXED_BY_UPDATED_AT: ReadonlySet<string> = new Set([
   'worldbooks',
   'groups',
   'chats',
-  'rpgworlds',
 ])
 
 /**
@@ -188,7 +181,7 @@ const INDEXED_BY_UPDATED_AT: ReadonlySet<string> = new Set([
  *
  * IndexedDB 对索引键的处理是「不是合法键就把这行从索引里略过」，而**行本身正常存下**，
  * 不报错。于是 `updatedAt` 缺失 / 为 null / 为布尔 / 为 NaN 的一行会安静地进库。
- * 而 characters / worldbooks / groups / chats / rpgworlds 的 list() 全都走
+ * 而 characters / worldbooks / groups / chats 的 list() 全都走
  * `getAllFromIndex('by_updatedAt')`，`.map(normalize)` 映的是那个查询的**结果** ——
  * 被索引丢掉的行根本不在数组里，normalize 永远没机会跑。
  *
@@ -244,7 +237,6 @@ export async function applyBackup(
     chats: 0,
     messages: 0,
     blobs: 0,
-    rpgworlds: 0,
     skipped: 0,
     skippedBy: {},
   }
@@ -284,7 +276,7 @@ export async function applyBackup(
   }
 
   const bulk = async (
-    store: 'characters' | 'worldbooks' | 'groups' | 'chats' | 'messages' | 'rpgworlds',
+    store: 'characters' | 'worldbooks' | 'groups' | 'chats' | 'messages',
     rows: unknown[],
   ) => {
     for (const r of rows) {
@@ -305,7 +297,6 @@ export async function applyBackup(
   // messages 跟着 chats 走：光有消息没有会话是一堆挂不上的孤儿（见 SyncScope 的说明）
   await bulk('chats', allow.chats ? (file.chats ?? []).map(stripMemIndex) : [])
   await bulk('messages', allow.chats ? (file.messages ?? []) : [])
-  await bulk('rpgworlds', allow.rpgworlds ? (file.rpgworlds ?? []) : [])
 
   /**
    * 导入是「同 id 覆盖」，被覆盖的会话元数据整包换成了对方那份，而**本机原有的

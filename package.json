@@ -18,15 +18,16 @@
     "dompurify": "^3.4.15",
     "idb": "^8.0.3",
     "jsqr": "^1.4.0",
+    "lucide-vue-next": "^0.577.0",
     "markdown-it": "^15.0.1",
     "pinia": "^4.0.2",
     "qrcode-generator": "^2.0.4",
-    "simplex-noise": "^4.0.3",
     "three": "^0.186.0",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tsconfig/node24": "^24.0.4",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",

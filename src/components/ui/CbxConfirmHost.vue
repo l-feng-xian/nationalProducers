@@ -4,7 +4,7 @@
  * 弹窗由 useConfirm() 的模块级状态驱动，任何组件都能 await confirmDialog()。
  *
  * 键盘：Enter 确认、Esc 取消。用**捕获阶段**拦截并 stopPropagation ——
- * RPG 世界这类挂在 window 上的全局按键（E 交谈等）不该在确认框打开时被触发。
+ * 避免确认框打开时同时触发页面上的快捷键。
  */
 import { onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useConfirm } from '@/composables/useConfirm'

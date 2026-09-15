@@ -19,7 +19,6 @@ export interface SyncCounts {
   chats: number
   messages: number
   blobs: number
-  rpgworlds: number
 }
 
 export interface Manifest {
@@ -66,7 +65,7 @@ export function decodeFrame(s: string): Frame | null {
 }
 
 export function emptyCounts(): SyncCounts {
-  return { characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0, rpgworlds: 0 }
+  return { characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0 }
 }
 
 /** 「角色 4 · 世界书 2 · 会话 1 · 消息 17」，确认页与结果提示共用 */
@@ -76,7 +75,6 @@ const SCOPE_LABEL: Record<keyof SyncScope, string> = {
   groups: '群聊',
   chats: '会话与消息',
   settings: '设置',
-  rpgworlds: '世界',
 }
 
 /** 把一份 scope 说成人话。拉取批准页要让用户看清对方到底要什么 */
@@ -95,7 +93,6 @@ export function describeCounts(c: SyncCounts & { skipped?: number }): string {
   if (c.chats) parts.push(`会话 ${c.chats}`)
   if (c.messages) parts.push(`消息 ${c.messages}`)
   if (c.blobs) parts.push(`图片 ${c.blobs}`)
-  if (c.rpgworlds) parts.push(`世界 ${c.rpgworlds}`)
   const s = parts.join(' · ') || '空'
   // ⚠️ 跳过数必须跟着一起显示。同步完只报「收到 N 条」而不提「另有 M 条没进来」，
   // 用户是在几天后翻不到某段对话时才发现的 —— 那时早已无从查起。

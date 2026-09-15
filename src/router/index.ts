@@ -36,24 +36,6 @@ const router = createRouter({
       name: 'worlds',
       component: () => import('@/views/WorldBooksView.vue'),
     },
-    // 同 /groups：列表路由必须排在 :id 之前
-    {
-      path: '/rpg',
-      name: 'rpg',
-      component: () => import('@/views/RpgView.vue'),
-    },
-    // ⚠️ 必须排在 '/rpg/:id' 之前，否则 /rpg/new 被 :id 吞掉 ——
-    // 进 RpgPlayView 后 rpg.open('new') 返回 undefined，表现是「世界不存在」再弹回列表
-    {
-      path: '/rpg/new',
-      name: 'rpg-create',
-      component: () => import('@/views/RpgCreateView.vue'),
-    },
-    {
-      path: '/rpg/:id',
-      name: 'rpg-play',
-      component: () => import('@/views/RpgPlayView.vue'),
-    },
     {
       path: '/models',
       name: 'models',

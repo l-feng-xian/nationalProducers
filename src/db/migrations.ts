@@ -8,7 +8,7 @@
 import type { IDBPDatabase } from 'idb'
 import { getDb, type NpDB } from './schema'
 
-export const DATA_SCHEMA_VERSION = 1
+export const DATA_SCHEMA_VERSION = 2
 
 interface Migration {
   to: number
@@ -16,7 +16,24 @@ interface Migration {
 }
 
 const MIGRATIONS: Migration[] = [
-  // { to: 2, run: async (db) => { ... } },
+  {
+    to: 2,
+    async run(db) {
+      // 只移除旧世界绑定，保留会话、消息和记忆。
+      const tx = db.transaction('chats', 'readwrite')
+      let cursor = await tx.store.openCursor()
+      while (cursor) {
+        const chat = cursor.value
+        const metadata = chat.chat_metadata
+        if (metadata && typeof metadata === 'object' && 'rpg' in metadata) {
+          delete metadata.rpg
+          await cursor.update(chat)
+        }
+        cursor = await cursor.continue()
+      }
+      await tx.done
+    },
+  },
 ]
 
 export async function runDataMigrations(): Promise<void> {

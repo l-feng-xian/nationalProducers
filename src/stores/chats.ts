@@ -57,23 +57,14 @@ export const useChatsStore = defineStore('chats', () => {
     invalidateIndex(chatId)
   }
 
-  /**
-   * 新建 1v1 会话，并按需求 2 随机播种一条开场白。
-   *
-   * @param persona 本会话生效的用户身份（RPG 的世界人设）。开场白里的 `{{user}}`
-   *   要按它展开。不传则按全局人设 —— 见 seedGreeting 的说明。
-   */
-  async function createSolo(
-    characterId: string | undefined,
-    title: string,
-    persona?: { name: string; description: string },
-  ): Promise<ChatMeta> {
+  /** 新建 1v1 会话，并随机播种一条开场白。 */
+  async function createSolo(characterId: string | undefined, title: string): Promise<ChatMeta> {
     const meta = await chatsRepo.create({ kind: 'solo', title, characterId })
     meta.chat_metadata.chat_id_hash = fnv1a(meta.id)
     await chatsRepo.save(meta)
     list.value = [meta, ...list.value]
 
-    await seedGreeting(meta, characterId, persona)
+    await seedGreeting(meta, characterId)
     return meta
   }
 
@@ -142,22 +133,8 @@ export const useChatsStore = defineStore('chats', () => {
     return meta
   }
 
-  /**
-   * 开场白播种：仅当无消息且未 tainted。
-   *
-   * ⚠️ `persona` 必须由调用方传进来，不能在这里读 `meta.chat_metadata.rpg`：
-   * RPG 那条路是先 createSolo（此刻开场白已经渲染并落库）、**之后**才
-   * patchMetadata 写绑定，读的话永远是 undefined。
-   *
-   * ⚠️ 这里展开的宏是**一次性固化**的：`pickGreeting` 把整个开场白池都展开后
-   * 存进 `swipes`，而左右切换（ChatView 的 onSwipe）只做数组取值、不重新求值。
-   * 所以此处用错身份，池里每一条都错，且永久错 —— 没有二次修正的机会。
-   */
-  async function seedGreeting(
-    meta: ChatMeta,
-    characterId: string | undefined,
-    persona?: { name: string; description: string },
-  ) {
+  /** 开场白播种：仅当无消息且未 tainted。 */
+  async function seedGreeting(meta: ChatMeta, characterId: string | undefined) {
     if (meta.messageCount > 0 || meta.chat_metadata.tainted) return
     const chars = useCharactersStore()
     const settings = useSettingsStore()
@@ -165,8 +142,6 @@ export const useChatsStore = defineStore('chats', () => {
 
     const env = buildMacroEnv(
       {
-        // 两项留空等于不覆盖：effectivePersona 用 `||` 逐项回落全局
-        ...(persona ? { personaOverride: persona } : {}),
         isGroup: false,
         speaker: { id: char.id, name: char.data.name, char },
         members: [{ id: char.id, name: char.data.name, char }],
@@ -205,22 +180,11 @@ export const useChatsStore = defineStore('chats', () => {
     list.value = [...list.value].sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  /**
-   * @param nameOverride 本轮说话人的显示名。RPG 里玩家用的是「世界人设」，
-   *   与全局人设不是一回事 —— 不传的话这条会被记成全局人设的名字，
-   *   提示词里写着「旅人阿柚」、历史里却显示「阿明」。留空按 `||` 回落全局，
-   *   与 effectivePersona 的分层一致。
-   */
-  async function appendUser(text: string, nameOverride?: string): Promise<ChatMessage | null> {
+  async function appendUser(text: string): Promise<ChatMessage | null> {
     const meta = current.value
     if (!meta) return null
     const settings = useSettingsStore()
-    // 没显式传就看会话自带的 RPG 身份 —— 从聊天页发言时调用方并不知道
-    // 这是一段游戏里的对话，不兜住的话又会记成全局人设的名字
-    const who =
-      nameOverride?.trim() ||
-      meta.chat_metadata.rpg?.persona.name?.trim() ||
-      settings.settings.persona.name
+    const who = settings.settings.persona.name
     const row = await messagesRepo.append(meta.id, newUserMessage(meta.id, who, text))
     messages.value = [...messages.value, row]
     await refreshMeta(meta.id)
@@ -251,15 +215,7 @@ export const useChatsStore = defineStore('chats', () => {
     if (row) await messagesRepo.update(row)
   }
 
-  /**
-   * 把生成结果写回**指定会话**的那一条消息。
-   *
-   * ⚠️ 收尾**不能**用 patchLocal + persist：两者都从 `messages.value` 里按 id 找行，
-   * 而生成期间用户完全可能已经切走 —— 游戏页刻意不保活，侧栏又一直挂着，
-   * 换会话就是一次点击。切走之后那两个调用是**静默空操作**：不报错、不重试，
-   * 回复直接丢，该 NPC 的历史里永久留下一条空白 assistant，
-   * 之后每轮提示词都会带上这条 `{role:'assistant', content:''}`。
-   */
+  /** 按指定会话写回生成结果，避免用户切换会话后丢失回复。 */
   async function writeRow(chatId: string, row: ChatMessage, patch: Partial<ChatMessage>) {
     await messagesRepo.update({ ...row, ...patch })
     if (current.value?.id === chatId) {

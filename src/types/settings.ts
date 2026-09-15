@@ -178,7 +178,7 @@ export const DEFAULT_MAIN_PROMPT =
 export function defaultSettings(): Settings {
   return {
     id: 'app',
-    schemaVersion: 1,
+    schemaVersion: 2,
     theme: 'system',
     provider: {
       baseUrl: '',

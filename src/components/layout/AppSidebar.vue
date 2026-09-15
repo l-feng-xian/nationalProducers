@@ -113,13 +113,6 @@ function newChat() {
         👥 群聊
       </RouterLink>
       <RouterLink
-        to="/rpg"
-        class="cbx-nav-item"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/rpg') }"
-      >
-        🗺️ 世界
-      </RouterLink>
-      <RouterLink
         to="/worlds"
         class="cbx-nav-item"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/worlds') }"

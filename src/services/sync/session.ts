@@ -83,7 +83,7 @@ export interface SessionHooks {
   onApplied?: (r: ImportResult) => void
 }
 
-const SCOPE_KEYS = ['characters', 'worldbooks', 'groups', 'chats', 'settings', 'rpgworlds'] as const
+const SCOPE_KEYS = ['characters', 'worldbooks', 'groups', 'chats', 'settings'] as const
 
 /** 两份范围取交集：只有双方都要的才留下 */
 function intersectScope(a: SyncScope, b: SyncScope): SyncScope {
@@ -406,7 +406,6 @@ export class SyncSession {
       groups: s.groups === true,
       chats: s.chats === true,
       settings: s.settings === true,
-      rpgworlds: s.rpgworlds === true,
     }
   }
 
@@ -550,7 +549,6 @@ export class SyncSession {
         chats: file.chats.length,
         messages: file.messages.length,
         blobs: file.blobs.length,
-        rpgworlds: file.rpgworlds.length,
       },
       chatIds: file.chats.map((c) => idOf(c)),
       charIds: file.characters.map((c) => idOf(c)),

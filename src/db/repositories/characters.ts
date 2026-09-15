@@ -79,10 +79,7 @@ export async function count(): Promise<number> {
  */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
-  const tx = db.transaction(
-    ['characters', 'blobs', 'chats', 'messages', 'groups', 'rpgworlds'],
-    'readwrite',
-  )
+  const tx = db.transaction(['characters', 'blobs', 'chats', 'messages', 'groups'], 'readwrite')
 
   const c = await tx.objectStore('characters').get(id)
   if (c?.avatarBlobId) await tx.objectStore('blobs').delete(c.avatarBlobId)
@@ -121,42 +118,6 @@ export async function remove(id: string): Promise<void> {
     if (g.layout && typeof g.layout === 'object') delete g.layout[id]
     g.updatedAt = Date.now()
     await gStore.put(toPlain(g))
-  }
-
-  /**
-   * RPG 世界里引用了这张卡的 NPC。
-   *
-   * 不能只是把 characterId 清掉就完事：`resolveNpc` 在查不到卡时会回落到
-   * `npc.name || '无名者'`，删掉一张卡，世界里那个 NPC 就**静默换了身份**，
-   * 站位还在、人没了，而且不报任何错。
-   *
-   * 所以解绑前先把卡上的名字与简介**落进 NPC 自己的字段**：NPC 留在原地、
-   * 还是那个人，只是从此不再跟着卡走。
-   *
-   * ⚠️ 必须**卡优先**，不能写成 `npc.name || c?.data.name`。关联型 NPC 的
-   * name 不是空的 —— addNpc 一律播种字面量「新 NPC」(stores/rpg.ts)，而
-   * NpcEditor 在关联期间把名字输入框整个藏了，这个占位符**永远没机会被清掉**。
-   * 写成 npc 优先的话，解绑后名字停在「新 NPC」、简介却是那张卡的正文，
-   * 提示词里会同时出现「姓名：陆雪琪」和「你正在扮演 新 NPC」两个矛盾身份。
-   * 关联期间生效的本来就是卡上的值，玩家认识的也是那个人，所以以卡为准。
-   */
-  const wStore = tx.objectStore('rpgworlds')
-  for (const w of await wStore.getAll()) {
-    // 同上：rpgworlds 的 normalize 正好能修好这个字段，但它在读路径上，这里够不着。
-    // 导入的世界完全可能没有 npcs（rpgworlds 仓储开头就是这么写的）
-    if (!Array.isArray(w.npcs)) continue
-    let touched = false
-    for (const npc of w.npcs) {
-      if (!npc || typeof npc !== 'object') continue
-      if (npc.characterId !== id) continue
-      npc.name = c?.data.name || npc.name || '无名者'
-      npc.description = c?.data.description || npc.description || ''
-      delete npc.characterId
-      touched = true
-    }
-    if (!touched) continue
-    w.updatedAt = Date.now()
-    await wStore.put(toPlain(w))
   }
 
   await tx.objectStore('characters').delete(id)

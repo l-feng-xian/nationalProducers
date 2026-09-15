@@ -11,10 +11,9 @@ import type { WorldBook } from '@/types/worldinfo'
 import type { Group } from '@/types/group'
 import type { ChatMeta, ChatMessage } from '@/types/chat'
 import type { Settings } from '@/types/settings'
-import type { RpgWorld } from '@/types/rpg'
 
 export const DB_NAME = 'np-chat'
-export const DB_VERSION = 4
+export const DB_VERSION = 5
 
 export interface BlobRecord {
   id: string
@@ -70,18 +69,6 @@ export interface NpDB extends DBSchema {
    * 常比主记录写入还慢，而这里的查询模式（按会话整取）主键已经全覆盖。
    */
   memchunks: { key: [string, number, number]; value: MemChunk }
-  /**
-   * RPG 世界存档。
-   *
-   * 刻意**不存地形**：地形完全由 seed 算出来，存了反而是双真相源
-   * （改了生成算法就与存档对不上）。这里只存种子、玩家位置、人设与 NPC，
-   * 所以一份存档就几 KB，跟着整库备份走毫无压力。
-   */
-  rpgworlds: {
-    key: string
-    value: RpgWorld
-    indexes: { by_updatedAt: number }
-  }
 }
 
 /** 一块可检索的记忆。向量写入前已 L2 归一化，检索时余弦退化成纯点积 */
@@ -109,7 +96,7 @@ export function getDb(): Promise<IDBPDatabase<NpDB>> {
   if (dbPromise) return dbPromise
   dbPromise = openDB<NpDB>(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion) {
-      // 迁移阶梯：加版本只追加 if 块，永不改动已发布的块。
+      // 保留现有仓库的迁移阶梯；已移除的仓库不再为新库创建。
       // 这里只做结构变更，数据重写走 migrations.ts（upgrade 事务里遍历几万条消息会卡死首屏）。
       if (oldVersion < 1) {
         db.createObjectStore('settings', { keyPath: 'id' })
@@ -153,22 +140,17 @@ export function getDb(): Promise<IDBPDatabase<NpDB>> {
       if (!db.objectStoreNames.contains('memchunks')) {
         db.createObjectStore('memchunks', { keyPath: ['chatId', 'kindRank', 'ord'] })
       }
-      // v4：RPG 世界存档。
-      // ⚠️ bump 版本号与建 store 必须**同一次提交**——见上面 v3 那段记着的事故。
-      if (oldVersion < 4) {
-        const worlds = db.createObjectStore('rpgworlds', { keyPath: 'id' })
-        worlds.createIndex('by_updatedAt', 'updatedAt')
-      }
-      // 同 memchunks 的补救台阶：万一有库走到 v4 却没建上，这里捞回来
-      if (!db.objectStoreNames.contains('rpgworlds')) {
-        const worlds = db.createObjectStore('rpgworlds', { keyPath: 'id' })
-        worlds.createIndex('by_updatedAt', 'updatedAt')
+      // v5：移除旧世界存档。旧名称只用于升级清理，不属于当前 schema。
+      const legacyDb = db as IDBPDatabase
+      if (oldVersion < 5 && legacyDb.objectStoreNames.contains('rpgworlds')) {
+        legacyDb.deleteObjectStore('rpgworlds')
       }
     },
     blocked() {
       console.warn('[db] 另一个标签页正占用旧版本数据库')
     },
     blocking() {
+      void dbPromise?.then((db) => db.close())
       dbPromise = null
     },
   })
