@@ -10,6 +10,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useSyncStore } from '@/stores/sync'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
+import { useInfiniteWorldStore } from '@/stores/infiniteWorld'
 import { useToast } from '@/composables/useToast'
 import { formatBytes } from '@/services/io/backup'
 import { describeCounts, describeScope } from '@/services/sync/protocol'
@@ -22,6 +23,8 @@ const emit = defineEmits<{ close: [] }>()
 const sync = useSyncStore()
 const chats = useChatsStore()
 const chars = useCharactersStore()
+const gameworlds = useInfiniteWorldStore()
+onMounted(() => { void gameworlds.load().catch((e) => toast.error(String(e))) })
 const toast = useToast()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -35,6 +38,7 @@ let scanner: ScanHandle | null = null
 const secure = typeof isSecureContext === 'boolean' ? isSecureContext : true
 
 const SCOPE_ITEMS = [
+  { key: 'gameworlds', label: '无限世界', hint: '含世界设定、居民、存档和区块改动' },
   { key: 'characters', label: '角色', hint: '含头像与视差深度图' },
   { key: 'worldbooks', label: '世界书', hint: '' },
   { key: 'groups', label: '群聊', hint: '含成员关系与用户身份' },
@@ -47,10 +51,11 @@ const nothingPicked = computed(() => !SCOPE_ITEMS.some((i) => sync.scope[i.key])
 /** 对方清单里有多少条会覆盖本机已有记录 —— 单向推送下唯一的冲突提示 */
 const overlap = computed(() => {
   const m = sync.incoming
-  if (!m) return { chats: 0, characters: 0 }
+  if (!m) return { chats: 0, characters: 0, gameworlds: 0 }
   const localChats = new Set(chats.list.map((c) => c.id))
   const localChars = new Set(chars.items.map((c) => c.id))
   return {
+    gameworlds: (m.worldIds ?? []).filter((id) => gameworlds.items.some((w) => w.id === id)).length,
     chats: m.chatIds.filter((id) => localChats.has(id)).length,
     characters: m.charIds.filter((id) => localChars.has(id)).length,
   }
@@ -65,6 +70,7 @@ const overlap = computed(() => {
 const overlapWarning = computed(() => {
   const parts: string[] = []
   if (overlap.value.characters) parts.push(`${overlap.value.characters} 个角色`)
+  if (overlap.value.gameworlds) parts.push(`${overlap.value.gameworlds} 个无限世界（含全部存档）`)
   if (overlap.value.chats) parts.push(`${overlap.value.chats} 个会话`)
   if (!parts.length) return ''
   return `其中 ${parts.join('、')}已存在于本机，将被对方的版本覆盖，此操作不可撤销。`

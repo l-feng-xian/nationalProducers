@@ -28,6 +28,7 @@ export async function remove(id: string): Promise<void> {
 export interface BlobRefSource {
   characters?: { avatarBlobId?: string | undefined; depthBlobId?: string | undefined }[]
   groups?: { avatarBlobId?: string | undefined }[]
+  gameworlds?: { npcs: { avatarBlobId?: string | undefined }[] }[]
   persona?: { avatarBlobId?: string | undefined } | undefined
 }
 
@@ -50,6 +51,7 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
     if (g.avatarBlobId) out.add(g.avatarBlobId)
   }
   if (src.persona?.avatarBlobId) out.add(src.persona.avatarBlobId)
+  for (const world of src.gameworlds ?? []) for (const npc of world.npcs) if (npc.avatarBlobId) out.add(npc.avatarBlobId)
   return out
 }
 
@@ -59,6 +61,7 @@ export async function gc(): Promise<number> {
   const referenced = collectBlobRefs({
     characters: await db.getAll('characters'),
     groups: await db.getAll('groups'),
+    gameworlds: await db.getAll('gameworlds'),
     persona: (await db.get('settings', 'app'))?.persona,
   })
 

@@ -120,6 +120,13 @@ function newChat() {
         📚 世界书
       </RouterLink>
       <RouterLink
+        to="/game-worlds"
+        class="cbx-nav-item"
+        :class="{ 'cbx-nav-item--active': route.path.startsWith('/game-worlds') }"
+      >
+        🌿 无限世界
+      </RouterLink>
+      <RouterLink
         to="/models"
         class="cbx-nav-item"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/models') }"

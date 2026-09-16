@@ -10,9 +10,10 @@
 import type { ImportResult, SyncScope } from '@/services/io/backup'
 
 /** 协议版本。两端不一致时握手就要拒绝，别等传到一半才炸 */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 export interface SyncCounts {
+  gameworlds: number
   characters: number
   worldbooks: number
   groups: number
@@ -36,6 +37,7 @@ export interface Manifest {
    */
   chatIds: string[]
   charIds: string[]
+  worldIds: string[]
 }
 
 export type Frame =
@@ -65,11 +67,12 @@ export function decodeFrame(s: string): Frame | null {
 }
 
 export function emptyCounts(): SyncCounts {
-  return { characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0 }
+  return { gameworlds: 0, characters: 0, worldbooks: 0, groups: 0, chats: 0, messages: 0, blobs: 0 }
 }
 
 /** 「角色 4 · 世界书 2 · 会话 1 · 消息 17」，确认页与结果提示共用 */
 const SCOPE_LABEL: Record<keyof SyncScope, string> = {
+  gameworlds: '无限世界',
   characters: '角色',
   worldbooks: '世界书',
   groups: '群聊',
@@ -87,6 +90,7 @@ export function describeScope(s: SyncScope): string {
 
 export function describeCounts(c: SyncCounts & { skipped?: number }): string {
   const parts: string[] = []
+  if (c.gameworlds) parts.push(`无限世界 ${c.gameworlds}`)
   if (c.characters) parts.push(`角色 ${c.characters}`)
   if (c.worldbooks) parts.push(`世界书 ${c.worldbooks}`)
   if (c.groups) parts.push(`群聊 ${c.groups}`)
