@@ -25,12 +25,7 @@ import {
   maskAlphaAt,
   maxSeamMismatch,
 } from '@/services/infinite-world/grid/masks'
-import {
-  LAYERS,
-  frameOf,
-  maskAt,
-  maskHistogram,
-} from '@/services/infinite-world/grid/dualGrid'
+import { LAYERS, frameOf, maskAt, maskHistogram } from '@/services/infinite-world/grid/dualGrid'
 import { buildWorld } from '@/services/infinite-world/generation/pipeline'
 import { WORLD_SIZE } from '@/services/infinite-world/core/constants'
 import { Flag, Surface, createEmptyGrid } from '@/services/infinite-world/generation/grid'
@@ -88,7 +83,9 @@ const SETS = ['organic', 'stepped', 'hard'] as const
     worst > 0.05,
     `只有 ${worst.toExponential(2)} —— 说明这条负向断言没在测东西`,
   )
-  console.log(`    [负向] 加逐格噪声后接边偏差 ${worst.toFixed(3)}  ← 所以噪声只能在着色器里按世界坐标加`)
+  console.log(
+    `    [负向] 加逐格噪声后接边偏差 ${worst.toFixed(3)}  ← 所以噪声只能在着色器里按世界坐标加`,
+  )
 }
 
 // ── 2. 边界情形 ──────────────────────────────────────────────────────────
@@ -140,19 +137,31 @@ const SETS = ['organic', 'stepped', 'hard'] as const
   const g = createEmptyGrid('handmade', 'test', 0)
   // 只把 L(10,10) 设成路
   const at = (x: number, y: number) => y * WORLD_SIZE + x
-  g.flags[at(10, 10)] = Flag.Road
+  g.flags[at(10, 10)] = Flag.Road | Flag.Bridge
   const road = LAYERS.find((l) => l.id === 'road')!
 
   // D(i,j) 的四角是 L(i-1,j-1) L(i,j-1) L(i-1,j) L(i,j)
   // 所以 L(10,10) 只会出现在这四个显示格里，且每次占不同的位
-  check('位权 SE：D(10,10) 的 SE 是 L(10,10) → mask=4', maskAt(g, road, 10, 10) === 4,
-    `实得 ${maskAt(g, road, 10, 10)}`)
-  check('位权 NE：D(10,11) 的 NE 是 L(10,10) → mask=2', maskAt(g, road, 10, 11) === 2,
-    `实得 ${maskAt(g, road, 10, 11)}`)
-  check('位权 SW：D(11,10) 的 SW 是 L(10,10) → mask=8', maskAt(g, road, 11, 10) === 8,
-    `实得 ${maskAt(g, road, 11, 10)}`)
-  check('位权 NW：D(11,11) 的 NW 是 L(10,10) → mask=1', maskAt(g, road, 11, 11) === 1,
-    `实得 ${maskAt(g, road, 11, 11)}`)
+  check(
+    '位权 SE：D(10,10) 的 SE 是 L(10,10) → mask=4',
+    maskAt(g, road, 10, 10) === 4,
+    `实得 ${maskAt(g, road, 10, 10)}`,
+  )
+  check(
+    '位权 NE：D(10,11) 的 NE 是 L(10,10) → mask=2',
+    maskAt(g, road, 10, 11) === 2,
+    `实得 ${maskAt(g, road, 10, 11)}`,
+  )
+  check(
+    '位权 SW：D(11,10) 的 SW 是 L(10,10) → mask=8',
+    maskAt(g, road, 11, 10) === 8,
+    `实得 ${maskAt(g, road, 11, 10)}`,
+  )
+  check(
+    '位权 NW：D(11,11) 的 NW 是 L(10,10) → mask=1',
+    maskAt(g, road, 11, 11) === 1,
+    `实得 ${maskAt(g, road, 11, 11)}`,
+  )
   check('不相邻的显示格为 0', maskAt(g, road, 13, 13) === 0)
 }
 
@@ -189,7 +198,8 @@ const SETS = ['organic', 'stepped', 'hard'] as const
       `    ${layer.id.padEnd(7)} 出现 ${String(seen).padStart(2)}/16 种形态，非空显示格 ${total}` +
         `  鞍点 5/10: ${hist[5]}/${hist[10]}`,
     )
-    if (layer.id === 'dirt' || layer.id === 'road') {
+    // Ordinary roads now share the continuous dirt layer; the raised road pass is bridges only.
+    if (layer.id === 'dirt') {
       check(`⭐ ${layer.id} 层覆盖到 14 种以上形态`, seen >= 14, `只有 ${seen} 种`)
     }
   }

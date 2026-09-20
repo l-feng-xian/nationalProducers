@@ -27,11 +27,28 @@
  */
 
 import * as THREE from 'three/webgpu'
-import { add, attribute, float, mix, mul, positionGeometry, sin, sub, texture, uv, vec2, vec3, vec4 } from 'three/tsl'
+import {
+  add,
+  attribute,
+  float,
+  mix,
+  mul,
+  positionGeometry,
+  sin,
+  smoothstep,
+  sub,
+  texture,
+  uv,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl'
 import { PITCH, WORLD_SIZE } from '../core/constants'
-import { cloudShadow } from './ground.tsl'
+import { worldLighting } from './ground.tsl'
 import { SPRITE_FOOT_V } from './spriteAtlas'
 import type { FrameUniforms } from './frame.tsl'
+import { spriteSurfaceLighting } from './spriteLighting.tsl'
+import type { Node } from 'three/webgpu'
 
 /**
  * 风的行波。⚠️ 波数取成世界周长的整数倍 `2π·m/512`，
@@ -56,8 +73,10 @@ function attrF(name: string): FloatNode {
 
 export interface SpriteMaterialOptions {
   atlas: THREE.DataArrayTexture
+  normals?: THREE.DataArrayTexture
   /** ⚠️ 必填。精灵也要随昼夜变暗 */
   frame: FrameUniforms
+  submersion?: FloatNode
 }
 
 export function createSpriteMaterial(o: SpriteMaterialOptions): THREE.MeshBasicNodeMaterial {
@@ -75,7 +94,7 @@ export function createSpriteMaterial(o: SpriteMaterialOptions): THREE.MeshBasicN
   // 脚底钉在 iFoot，向 up 方向长出去。内容底边在层内 v=SPRITE_FOOT_V，
   // 对应四边形 Y = 1 - SPRITE_FOOT_V，把它对齐到地面
   const footY = float(1 - SPRITE_FOOT_V)
-  const t = mul(sub(py, footY), iSize)
+  const t = mul(sub(py, footY), iSize).sub(o.submersion ?? float(0))
   const cos = float(Math.cos(PITCH))
   const negSin = float(-Math.sin(PITCH))
 
@@ -85,7 +104,10 @@ export function createSpriteMaterial(o: SpriteMaterialOptions): THREE.MeshBasicN
   // 摆幅按 (py-footY) 缩放 → 越靠顶摆得越大，脚底恒为 0。
   // windTime 暂停时冻结（见 frame.tsl），过缝天然连续（波数是周长整数倍）。
   const wt = o.frame.windTime
-  const phase = add(add(mul(iFoot.x, float(WIND_KX)), mul(iFoot.y, float(WIND_KZ))), mul(wt, float(WIND_FREQ)))
+  const phase = add(
+    add(mul(iFoot.x, float(WIND_KX)), mul(iFoot.y, float(WIND_KZ))),
+    mul(wt, float(WIND_FREQ)),
+  )
   const heightAbove = mul(sub(py, footY), iSize) // 顶端 ≈ 整株高度，脚底为 0
   const swayX = mul(mul(sin(phase), iSway), mul(heightAbove, float(WIND_AMP)))
 
@@ -100,8 +122,37 @@ export function createSpriteMaterial(o: SpriteMaterialOptions): THREE.MeshBasicN
   const sample = texture(o.atlas, vec2(u, base.y)).depth(iLayer)
 
   // 云影按**脚底**世界坐标采样：整株精灵随脚下这片地一起进出云影
-  const cloud = cloudShadow(iFoot.x, iFoot.y, o.frame)
-  mat.colorNode = vec4((sample.rgb as unknown as Vec3Node).mul(o.frame.dayTint).mul(cloud), sample.a)
+  let lighting = worldLighting(iFoot.x, iFoot.y, o.frame)
+  if (o.normals) {
+    const imageHeight = float(SPRITE_FOOT_V).sub(base.y).mul(iSize)
+    const height = imageHeight.sub(o.submersion ?? float(0)).max(0)
+    // Match the wind displacement of the visible surface and its shadow caster.
+    const wind = sin(phase).mul(iSway).mul(imageHeight).mul(WIND_AMP)
+    const x = iFoot.x.add(base.x.sub(0.5).mul(iSize)).add(wind)
+    const surface = spriteSurfaceLighting(
+      o.normals,
+      vec2(u, base.y),
+      iLayer,
+      iFlip,
+      iFoot as unknown as Node<'vec2'>,
+      x,
+      height,
+      o.frame,
+    )
+    lighting = mix(lighting, surface, o.frame.surfaceLightAmount)
+  }
+  let alpha = sample.a
+  let color = (sample.rgb as unknown as Vec3Node).mul(1)
+  if (o.submersion) {
+    const height = float(SPRITE_FOOT_V).sub(base.y).mul(iSize)
+    const wet = smoothstep(float(0), float(0.07), o.submersion)
+    alpha = alpha.mul(
+      mix(float(1), smoothstep(o.submersion.sub(0.008), o.submersion.add(0.012), height), wet),
+    )
+    const wetHem = smoothstep(o.submersion, o.submersion.add(0.16), height).oneMinus().mul(wet)
+    color = color.mul(mix(vec3(1, 1, 1), vec3(0.56, 0.76, 0.75), wetHem))
+  }
+  mat.colorNode = vec4(color.mul(lighting), alpha)
   // 不透明队列 + 深度写入：脚底深度进 z-buffer，跨 mesh 由深度测试解遮挡（见文件头）
   mat.transparent = false
   mat.depthWrite = true
@@ -120,12 +171,7 @@ export function createSpriteMaterial(o: SpriteMaterialOptions): THREE.MeshBasicN
 /** 精灵公告牌四边形：X∈[-0.5,0.5] Y∈[0,1] Z=0，uv=(X+0.5, 1-Y) */
 export function createSpriteQuad(): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry()
-  const positions = new Float32Array([
-    -0.5, 0, 0,
-    0.5, 0, 0,
-    0.5, 1, 0,
-    -0.5, 1, 0,
-  ])
+  const positions = new Float32Array([-0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0])
   // v = 1 - Y：底边 Y=0 → v=1（层底），顶边 Y=1 → v=0（层顶）
   const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0])
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3))

@@ -14,9 +14,13 @@
 
 import { CHUNK, WORLD_SIZE } from '../core/constants'
 import { wrapTile } from '../core/torus'
-import { Decor, type WorldGrid } from '../generation/grid'
+import { Decor, Flag, Surface, gridIndex, type WorldGrid } from '../generation/grid'
 import { hashTile01 } from '../generation/rng'
 import type { BuildingKind, TownBuilding } from '../generation/settlement'
+import { cropPlants, farmBeds } from './farmCrops'
+import { bridgeDecks } from './bridgeGeometry'
+import { BUILDING_DOOR_X } from '../generation/buildingArt'
+import { shoreRoot } from './shorePlacement'
 
 /** 精灵图集里每帧的最小元数据（避开对 three 的依赖） */
 export interface SpriteMetaLite {
@@ -79,6 +83,7 @@ interface Item {
  * 单层房两个变体（木屋 / 石基木屋）按格 hash 挑；两层及以上用专属的两层房。
  */
 function buildingFrame(b: TownBuilding): string {
+  if (b.art) return b.art
   switch (b.kind) {
     case 'well':
       return 'well'
@@ -98,8 +103,8 @@ function buildingFrame(b: TownBuilding): string {
 
 /** 建筑目标世界宽度（格）：井小、谷仓略宽，其余 = 占地宽 + 一点屋檐外挑。 */
 function buildingWidth(b: TownBuilding): number {
-  if (b.kind === 'well') return 1.3
-  if (b.kind === 'barn') return b.w + 0.6
+  if (b.kind === 'well') return b.art ? 1.85 : 1.3
+  if (b.kind === 'barn') return b.w + 0.15
   return b.w + 0.5
 }
 
@@ -111,7 +116,7 @@ function buildingWidth(b: TownBuilding): number {
  *
  * ## 尺寸按占地宽度
  * `size = 目标宽度 / wFrac`，让建筑正面宽度贴合占地；高度随美术长宽比自然长出来
- * （两/三层的美术天生更高 → 天际线错落）。地基由 cobble 覆盖层单独画。
+ * （两/三层的美术天生更高 → 天际线错落）。薄石基包含在建筑精灵内。
  *
  * ## 脚底钉在占地**前排中心**
  * 前排 = 南边（离相机近）。公告牌从这里向上/两侧长出建筑主体，压住北侧的占地格。
@@ -128,8 +133,14 @@ function pushBuildings(
   const j1 = j0 + CHUNK
   for (const town of grid.towns) {
     for (const b of town.buildings) {
-      const cxWorld = b.x + b.w / 2 // 占地中心 x（可能越过 512）
-      const cyWorld = b.y + b.h - 0.5 // 前排中心 z
+      const doorX = b.door
+        ? b.x + ((b.door[0] - b.x + WORLD_SIZE) % WORLD_SIZE) + 0.5
+        : b.x + b.w / 2
+      const cxWorld =
+        b.art && b.door
+          ? doorX - ((BUILDING_DOOR_X[b.art] ?? 0.5) - 0.5) * buildingWidth(b)
+          : b.x + b.w / 2
+      const cyWorld = b.y + b.h - (b.art === 'barn' || b.art === 'cottage' ? 0.1 : 0.5)
       const ftx = wrapTile(Math.floor(cxWorld))
       const fty = wrapTile(Math.floor(cyWorld))
       if (ftx < i0 || ftx >= i1 || fty < j0 || fty >= j1) continue
@@ -147,7 +158,12 @@ function pushBuildings(
   }
 }
 
-export function buildDecor(grid: WorldGrid, cx: number, cy: number, meta: SpriteMetaLite): SpriteInstances {
+export function buildDecor(
+  grid: WorldGrid,
+  cx: number,
+  cy: number,
+  meta: SpriteMetaLite,
+): SpriteInstances {
   const i0 = cx * CHUNK
   const j0 = cy * CHUNK
   const items: Item[] = []
@@ -163,7 +179,11 @@ export function buildDecor(grid: WorldGrid, cx: number, cy: number, meta: Sprite
 
       // 变体 + 翻转 + 抖动都用同一格的独立 hash 流，互不串味
       const rv = hashTile01(0x51a0, x, y)
-      const name = spec.names[Math.min(spec.names.length - 1, Math.floor(rv * spec.names.length))]!
+      const names =
+        grid.generatorVersion === 'torus-4' && d === Decor.TreeBirch
+          ? DECOR_SPRITE[Decor.TreeBroad]!.names
+          : spec.names
+      const name = names[Math.min(names.length - 1, Math.floor(rv * names.length))]!
       const fm = meta.get(name)
       if (!fm) continue // 该精灵还没生成，跳过
 
@@ -174,7 +194,11 @@ export function buildDecor(grid: WorldGrid, cx: number, cy: number, meta: Sprite
       items.push({
         x: x + 0.5 + jx,
         z: y + 0.5 + jy,
-        size: spec.h / Math.max(0.2, fm.hFrac),
+        size:
+          (grid.generatorVersion === 'torus-4' &&
+          (d === Decor.Flower || d === Decor.TallGrass || d === Decor.Bush)
+            ? spec.h * 0.62
+            : spec.h) / Math.max(0.2, fm.hFrac),
         layer: fm.layer,
         flip: hashTile01(0x9d13, x, y) < 0.5 ? 0 : 1,
         sway: spec.sway * swayJitter,
@@ -184,6 +208,112 @@ export function buildDecor(grid: WorldGrid, cx: number, cy: number, meta: Sprite
 
   // 城镇建筑：落在本 chunk 的各出一个大公告牌，并入同一套精灵实例
   pushBuildings(grid, i0, j0, meta, items)
+  const plant = (
+    x: number,
+    y: number,
+    name: string,
+    extent: number,
+    byWidth: boolean,
+    sway = 0,
+  ) => {
+    x = ((x % WORLD_SIZE) + WORLD_SIZE) % WORLD_SIZE
+    y = ((y % WORLD_SIZE) + WORLD_SIZE) % WORLD_SIZE
+    if (x < i0 || x >= i0 + CHUNK || y < j0 || y >= j0 + CHUNK) return
+    const fm = meta.get(name)
+    if (!fm) return
+    items.push({
+      x,
+      z: y,
+      size: extent / Math.max(0.2, byWidth ? fm.wFrac : fm.hFrac),
+      layer: fm.layer,
+      flip: 0,
+      sway,
+    })
+  }
+  for (const town of grid.towns) {
+    for (const prop of town.props ?? []) plant(prop.x, prop.y, prop.frame, prop.width, true)
+    for (const bed of farmBeds(grid, town))
+      for (const crop of cropPlants(bed)) plant(crop.x, crop.y, crop.name, crop.height, false, 0.12)
+    for (const edge of town.boundaries ?? []) {
+      const segments = Math.ceil(edge.w / (grid.generatorVersion === 'torus-4' ? 1 : 2))
+      for (let k = 0; k < segments; k++) {
+        const width = edge.w / segments
+        plant(
+          edge.x + (edge.axis === 'y' ? 0.5 : (k + 0.5) * width),
+          edge.y + (edge.axis === 'y' ? (k + 1) * width + 0.65 : 0.7),
+          edge.kind === 'fence'
+            ? edge.axis === 'y'
+              ? 'side-fence'
+              : 'farm-fence'
+            : edge.w === 1
+              ? 'leafy-bush'
+              : 'garden-hedge',
+          edge.axis === 'y'
+            ? width * 0.883 + 0.48
+            : edge.kind === 'fence'
+              ? width + 0.05
+              : edge.w === 1
+                ? 0.95
+                : width + 0.12,
+          edge.axis !== 'y',
+        )
+      }
+    }
+  }
+
+  if (grid.generatorVersion === 'torus-4') {
+    for (const deck of bridgeDecks(grid)) {
+      if (deck.horizontal) {
+        const n = Math.ceil(deck.w / 2.5),
+          width = deck.w / n
+        for (let k = 0; k < n; k++) {
+          const x = deck.x - deck.w / 2 + (k + 0.5) * width
+          plant(x, deck.y - deck.h / 2 + 0.12, 'bridge-rail', width + 0.05, true)
+          plant(x, deck.y + deck.h / 2 - 0.05, 'bridge-rail', width + 0.05, true)
+        }
+      } else
+        for (let k = 0; k < deck.h; k += 1.5) {
+          plant(deck.x - deck.w / 2 + 0.05, deck.y - deck.h / 2 + k + 1.3, 'side-fence', 1.8, false)
+          plant(deck.x + deck.w / 2 - 0.05, deck.y - deck.h / 2 + k + 1.3, 'side-fence', 1.8, false)
+        }
+    }
+    const wet = (x: number, y: number) => {
+      const s = grid.surface[gridIndex(x, y)]
+      return s === Surface.ShallowWater || s === Surface.DeepWater
+    }
+    for (let y = j0 - 1; y < j0 + CHUNK + 1; y++)
+      for (let x = i0 - 1; x < i0 + CHUNK + 1; x++) {
+        const i = gridIndex(x, y),
+          f = grid.flags[i]!
+        if (!(f & Flag.RiverBank) || f & (Flag.Road | Flag.Parcel | Flag.Building)) continue
+        const neighbours = [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const
+        const edge = neighbours.find(([dx, dy]) => wet(x + dx, y + dy))
+        if (!edge) continue
+        const j = hashTile01(0x7751, x, y)
+        const root = shoreRoot(grid, x, y)
+        if (!root) continue
+        const sx = root.x,
+          sy = root.y
+        plant(sx, sy + 0.12, j > 0.86 ? 'water-rocks' : 'bank-rocks', 0.55 + j * 0.62, true)
+        if (j > 0.5)
+          plant(sx + root.ny * 0.42, sy - root.nx * 0.42 + 0.1, 'bank-rocks', 0.37 + j * 0.25, true)
+        if (j < 0.83)
+          plant(
+            sx - root.nx * 0.35,
+            sy - root.ny * 0.35 + 0.1,
+            'shore-flowers',
+            0.35 + j * 0.45,
+            true,
+            0.25,
+          )
+        if (j > 0.91) plant(x + 0.2, y + 0.6, 'shore-reeds', 0.7, false, 0.25)
+      }
+  }
 
   if (items.length === 0) return EMPTY
 

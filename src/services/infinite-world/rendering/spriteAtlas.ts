@@ -15,6 +15,8 @@
  */
 
 import * as THREE from 'three/webgpu'
+import { heroGroupScales } from './heroScale'
+import { spriteNormalPixels } from './spriteNormals'
 
 /** 每层的边长（像素）。树最高，256 足够，再大只是浪费显存 */
 export const SPRITE_PX = 256
@@ -34,6 +36,9 @@ export interface SpriteFrameMeta {
 
 export interface SpriteAtlas {
   texture: THREE.DataArrayTexture
+  largeTexture?: THREE.DataArrayTexture
+  normalTexture?: THREE.DataArrayTexture
+  largeNormalTexture?: THREE.DataArrayTexture
   /** 帧名 → 元数据。查不到的帧名表示这张精灵还没生成 */
   meta: Map<string, SpriteFrameMeta>
   has(name: string): boolean
@@ -45,6 +50,10 @@ interface ManifestFrame {
   kind: string
   w: number
   h: number
+  /** Animation frames keep a common canvas, pivot and reference height. */
+  pivot?: [number, number]
+  frameHeight?: number
+  tier?: number
 }
 
 export interface LoadSpriteOptions {
@@ -61,7 +70,7 @@ function emptyAtlas(): SpriteAtlas {
 }
 
 export async function loadSpriteAtlas(o: LoadSpriteOptions = {}): Promise<SpriteAtlas> {
-  const base = o.baseUrl ?? '/world/v1'
+  const base = o.baseUrl ?? '/world/v5'
   try {
     const res = await fetch(`${base}/manifest.json`)
     if (!res.ok) throw new Error(`manifest ${res.status}`)
@@ -72,37 +81,75 @@ export async function loadSpriteAtlas(o: LoadSpriteOptions = {}): Promise<Sprite
       .map(([name]) => name)
     if (names.length === 0) return emptyAtlas()
 
-    const layerBytes = SPRITE_PX * SPRITE_PX * 4
-    const data = new Uint8Array(layerBytes * names.length)
     const meta = new Map<string, SpriteFrameMeta>()
-
-    for (let i = 0; i < names.length; i++) {
-      const name = names[i]!
-      const img = await decode(`${base}/${manifest.frames[name]!.file}`)
-      const { layer, hFrac, wFrac } = normalize(img)
-      data.set(layer, layerBytes * i)
-      meta.set(name, { layer: i, hFrac, wFrac })
+    const heroImages = new Map<string, Decoded>()
+    const heroHeights = new Map<string, number>()
+    for (const name of names) {
+      const spec = manifest.frames[name]!
+      if (
+        !/^(walk|idle|hero)-(down|up|left|right)(-|$)/.test(name) ||
+        !spec.frameHeight ||
+        !spec.pivot
+      )
+        continue
+      const img = await decode(`${base}/${spec.file}`)
+      heroImages.set(name, img)
+      const solid = alphaBBox(img, 160)
+      if (solid) heroHeights.set(name, solid.h)
     }
-
-    const tex = new THREE.DataArrayTexture(data, SPRITE_PX, SPRITE_PX, names.length)
-    tex.format = THREE.RGBAFormat
-    tex.type = THREE.UnsignedByteType
-    tex.colorSpace = THREE.SRGBColorSpace
-    // ⚠️ 层内独立，用 ClampToEdge —— 精灵不平铺，绝不能 Repeat
-    tex.wrapS = THREE.ClampToEdgeWrapping
-    tex.wrapT = THREE.ClampToEdgeWrapping
-    tex.magFilter = THREE.LinearFilter
-    tex.minFilter = THREE.LinearMipmapLinearFilter
-    tex.generateMipmaps = true
-    if (o.maxAnisotropy && o.maxAnisotropy > 1) tex.anisotropy = Math.min(8, o.maxAnisotropy)
-    tex.needsUpdate = true
-
-    o.onMessage?.(`精灵图集 ${names.length} 层 ${SPRITE_PX}²`)
+    const heroScales = heroGroupScales(heroHeights)
+    const normals: THREE.DataArrayTexture[] = []
+    const makeTier = async (large: boolean) => {
+      const selected = names.filter((n) => (manifest.frames[n]!.tier === 512) === large)
+      if (!selected.length) return undefined
+      const px = large ? 512 : SPRITE_PX
+      const layerBytes = px * px * 4
+      const data = new Uint8Array(layerBytes * selected.length)
+      const normalData = new Uint8Array(128 * 128 * 4 * selected.length)
+      for (let i = 0; i < selected.length; i++) {
+        const name = selected[i]!,
+          spec = manifest.frames[name]!
+        const img = heroImages.get(name) ?? (await decode(`${base}/${spec.file}`))
+        const { layer, hFrac, wFrac } = normalize(img, spec, px, heroScales.get(name) ?? 1)
+        heroImages.delete(name)
+        data.set(layer, layerBytes * i)
+        normalData.set(spriteNormalPixels(layer, px, name), 128 * 128 * 4 * i)
+        meta.set(name, { layer: i + (large ? 1024 : 0), hFrac, wFrac })
+      }
+      const tex = new THREE.DataArrayTexture(data, px, px, selected.length)
+      tex.format = THREE.RGBAFormat
+      tex.type = THREE.UnsignedByteType
+      tex.colorSpace = THREE.SRGBColorSpace
+      // ⚠️ 层内独立，用 ClampToEdge —— 精灵不平铺，绝不能 Repeat
+      tex.wrapS = THREE.ClampToEdgeWrapping
+      tex.wrapT = THREE.ClampToEdgeWrapping
+      tex.magFilter = THREE.LinearFilter
+      tex.minFilter = THREE.LinearMipmapLinearFilter
+      tex.generateMipmaps = true
+      if (o.maxAnisotropy && o.maxAnisotropy > 1) tex.anisotropy = Math.min(8, o.maxAnisotropy)
+      tex.needsUpdate = true
+      const normal = new THREE.DataArrayTexture(normalData, 128, 128, selected.length)
+      normal.format = THREE.RGBAFormat
+      normal.magFilter = normal.minFilter = THREE.LinearFilter
+      normal.needsUpdate = true
+      normals[large ? 1 : 0] = normal
+      o.onMessage?.(`精灵图集 ${selected.length} 层 ${px}²`)
+      return tex
+    }
+    const tex = (await makeTier(false)) ?? emptyAtlas().texture
+    const largeTexture = await makeTier(true)
     return {
       texture: tex,
+      largeTexture,
+      normalTexture: normals[0],
+      largeNormalTexture: normals[1],
       meta,
       has: (n) => meta.has(n),
-      dispose: () => tex.dispose(),
+      dispose: () => {
+        tex.dispose()
+        largeTexture?.dispose()
+        normals.forEach((n) => n.dispose())
+      },
     }
   } catch (e) {
     o.onMessage?.(`精灵图集未载入（${(e as Error)?.message ?? e}）`)
@@ -111,7 +158,12 @@ export async function loadSpriteAtlas(o: LoadSpriteOptions = {}): Promise<Sprite
 }
 
 /** 把一帧按内容包围盒等比缩放、底边对齐塞进 SPRITE_PX 方层 */
-function normalize(img: Decoded): { layer: Uint8Array; hFrac: number; wFrac: number } {
+function normalize(
+  img: Decoded,
+  meta: ManifestFrame,
+  SPRITE_PX = 256,
+  animationScale = 1,
+): { layer: Uint8Array; hFrac: number; wFrac: number } {
   const box = alphaBBox(img)
   const canvas = document.createElement('canvas')
   canvas.width = SPRITE_PX
@@ -120,22 +172,60 @@ function normalize(img: Decoded): { layer: Uint8Array; hFrac: number; wFrac: num
   ctx.clearRect(0, 0, SPRITE_PX, SPRITE_PX)
 
   if (box) {
-    const scale = (FILL * SPRITE_PX) / Math.max(box.w, box.h)
-    const dw = box.w * scale
-    const dh = box.h * scale
-    const dx = (SPRITE_PX - dw) / 2
-    const dy = SPRITE_FOOT_V * SPRITE_PX - dh // 内容底边落在 SPRITE_FOOT_V
+    const fixed = meta.frameHeight && meta.pivot
+    const source = fixed ? { x: 0, y: 0, w: img.width, h: img.height } : box
+    const scale =
+      (animationScale * (FILL * SPRITE_PX)) / (fixed ? meta.frameHeight! : Math.max(box.w, box.h))
+    const dw = source.w * scale
+    const dh = source.h * scale
+    const dx = fixed ? SPRITE_PX / 2 - meta.pivot![0] * dw : (SPRITE_PX - dw) / 2
+    const dy = SPRITE_FOOT_V * SPRITE_PX - (fixed ? meta.pivot![1] * dh : dh)
     // 把源图搬进一个临时 canvas 再缩放绘制（drawImage 需要可绘制源）
     const src = document.createElement('canvas')
     src.width = img.width
     src.height = img.height
     src.getContext('2d', { colorSpace: 'srgb' })!.putImageData(toImageData(img), 0, 0)
-    ctx.drawImage(src, box.x, box.y, box.w, box.h, dx, dy, dw, dh)
+    ctx.drawImage(src, source.x, source.y, source.w, source.h, dx, dy, dw, dh)
     const out = ctx.getImageData(0, 0, SPRITE_PX, SPRITE_PX, { colorSpace: 'srgb' })
-    return { layer: new Uint8Array(out.data.buffer.slice(0)), hFrac: dh / SPRITE_PX, wFrac: dw / SPRITE_PX }
+    const layer = new Uint8Array(out.data.buffer.slice(0))
+    bleedTransparentEdges(layer, SPRITE_PX, SPRITE_PX)
+    return { layer, hFrac: fixed ? FILL : dh / SPRITE_PX, wFrac: (box.w * scale) / SPRITE_PX }
   }
   const out = ctx.getImageData(0, 0, SPRITE_PX, SPRITE_PX, { colorSpace: 'srgb' })
   return { layer: new Uint8Array(out.data.buffer.slice(0)), hFrac: 1, wFrac: 1 }
+}
+
+/** Canvas clears RGB at alpha=0. Extend edge colors before GPU filtering to avoid dark halos. */
+export function bleedTransparentEdges(data: Uint8Array, width: number, height: number): void {
+  const count = width * height
+  const seen = new Uint8Array(count)
+  const queue = new Int32Array(count)
+  let head = 0
+  let tail = 0
+  for (let i = 0; i < count; i++) {
+    // Near-zero alpha from chroma extraction can contain saturated matte RGB.
+    // Do not use those almost invisible pixels as color sources for the mip fringe.
+    if (data[i * 4 + 3]! <= 8) data[i * 4 + 3] = 0
+    else {
+      seen[i] = 1
+      queue[tail++] = i
+    }
+  }
+  // Eight texels cover the relevant mip footprint without filling the whole canvas.
+  for (let ring = 0; ring < 8; ring++) {
+    const end = tail
+    while (head < end) {
+      const i = queue[head++]!
+      const x = i % width
+      const neighbours = [x > 0 ? i - 1 : -1, x + 1 < width ? i + 1 : -1, i - width, i + width]
+      for (const j of neighbours) {
+        if (j < 0 || j >= count || seen[j]) continue
+        seen[j] = 1
+        for (let c = 0; c < 3; c++) data[j * 4 + c] = data[i * 4 + c]!
+        queue[tail++] = j
+      }
+    }
+  }
 }
 
 interface Decoded {
@@ -150,7 +240,10 @@ function toImageData(img: Decoded): ImageData {
   return new ImageData(new Uint8ClampedArray(img.data), img.width, img.height)
 }
 
-function alphaBBox(img: Decoded): { x: number; y: number; w: number; h: number } | null {
+function alphaBBox(
+  img: Decoded,
+  threshold = 12,
+): { x: number; y: number; w: number; h: number } | null {
   const { data, width, height } = img
   let minX = width
   let minY = height
@@ -158,7 +251,7 @@ function alphaBBox(img: Decoded): { x: number; y: number; w: number; h: number }
   let maxY = -1
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3]! < 12) continue
+      if (data[(y * width + x) * 4 + 3]! < threshold) continue
       if (x < minX) minX = x
       if (x > maxX) maxX = x
       if (y < minY) minY = y

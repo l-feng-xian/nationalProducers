@@ -69,24 +69,27 @@ export type MaskSetId = 'organic' | 'stepped' | 'hard'
  * 自然面（草地 / 林地 / 湿地）**不在这张表里** —— 它们在底色层走
  * 世界空间软混合（见 `groundField.ts`、`createBaseMaterial`）。原因是逐格遮罩
  * 柔化上限就一格，做不出参考图那种跨十几格的自然斑块。
- * 人造面则相反：它们本就是人划的、边界该沿格线走，双网格的阶梯边正是其签名。
+ * 土路、沙岸和水面使用跨格的连续轮廓；桥面与耕地保留双网格遮罩。
  */
 export const LAYERS: readonly LayerDef[] = [
   {
-    // 城镇地基（建筑 + 广场）。⚠️ 以前 cobble 不属于任何层，建筑是底色层的
-    // 硬切矩形 —— 那正是「过暗的网格区域」里最扎眼的一种。给它 stepped 石块边。
+    // 石铺公共地面。建筑自己的薄石基由精灵提供，不再铺矩形台座。
     id: 'cobble',
     order: 1,
     fillVariants: 0,
-    maskSet: 'stepped',
-    test: (g, i) => g.surface[i] === Surface.Cobble,
+    maskSet: 'organic',
+    test: (g, i) => g.surface[i] === Surface.Cobble && !(g.flags[i]! & Flag.Building),
   },
   {
     id: 'dirt',
     order: 2,
     fillVariants: 3,
     maskSet: 'organic',
-    test: (g, i) => g.surface[i] === Surface.Dirt,
+    // One continuous dirt contour includes ordinary paths; no second overlapping road fringe.
+    test: (g, i) =>
+      !(g.flags[i]! & (Flag.Bridge | Flag.Building)) &&
+      (g.surface[i] === Surface.Dirt ||
+        ((g.flags[i]! & Flag.Road) !== 0 && g.surface[i] !== Surface.Cobble)),
   },
   {
     // 河岸沙滩：水与草之间的自然过渡圈。organic 软边，画在水之下 ——
@@ -95,24 +98,27 @@ export const LAYERS: readonly LayerDef[] = [
     order: 3,
     fillVariants: 0,
     maskSet: 'organic',
-    test: (g, i) => g.surface[i] === Surface.Sand,
+    // Continue the river bed below the translucent water, so its edge reveals sand, not grass.
+    test: (g, i) =>
+      g.surface[i] === Surface.Sand ||
+      g.surface[i] === Surface.ShallowWater ||
+      g.surface[i] === Surface.DeepWater,
   },
   {
     id: 'water',
     order: 4,
     fillVariants: 0,
     maskSet: 'organic',
-    test: (g, i) => g.surface[i] === Surface.ShallowWater || g.surface[i] === Surface.DeepWater,
+    test: (g, i) => g.surface[i] === Surface.ShallowWater || g.surface[i] === Surface.DeepWater || (g.generatorVersion==='torus-4' && !!(g.flags[i]!&Flag.Bridge)),
   },
   {
-    // ⚠️ road 用 stepped —— 参考图里土路的边缘就是阶梯状的方块感，
-    // 那正是双网格瓦片系统的视觉签名。用 organic 会把它抹成有机曲线，
-    // 反而失去「这是一张瓦片地图」的质感。
+    // 桥面位于水层之上。
     id: 'road',
     order: 5,
     fillVariants: 2,
-    maskSet: 'stepped',
-    test: (g, i) => (g.flags[i]! & (Flag.Road | Flag.Plaza | Flag.Bridge)) !== 0,
+    maskSet: 'organic',
+    // The elevated pass is only needed for bridges over water.
+    test: (g, i) => (g.flags[i]! & Flag.Bridge) !== 0,
   },
   {
     // 耕地是人划出来的，边界应当是直的

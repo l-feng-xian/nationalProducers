@@ -16,6 +16,7 @@ import { transferablesOf } from './grid'
 import type { BuildWorldInput } from './pipeline'
 
 export interface WorkerRequest {
+  generatorVersion?: string
   jobId: number
   seed: string
   settings: BuildWorldInput['settings']
@@ -47,6 +48,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest | { type: 'cancel' }>) => {
   try {
     const grid = buildWorld({
       seed: req.seed,
+      generatorVersion: req.generatorVersion,
       settings: req.settings,
       signal,
       onProgress: (step, ratio) => {

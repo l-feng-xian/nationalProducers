@@ -26,7 +26,7 @@ import { CHUNK, PITCH, TILE_PX, WORLD_SIZE } from '../core/constants'
 const CAM_DISTANCE = 200
 
 /** 精灵外扩余量（格）。最高的树约 3.5 世界单位，换算到地面 Z 约 4，取 8 兜住 */
-const SPRITE_MARGIN = 8
+const SPRITE_MARGIN = 16 // Includes the longest low-sun building/tree projections.
 
 export interface WorldCamera {
   camera: THREE.OrthographicCamera

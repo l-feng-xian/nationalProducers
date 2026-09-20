@@ -18,6 +18,7 @@ import { createSpriteMaterial, createSpriteQuad } from './sprite.tsl'
 import type { SpriteAtlas } from './spriteAtlas'
 import type { FrameUniforms } from './frame.tsl'
 import type { NpcRuntime } from '../simulation/npcSim'
+import { createProjectedShadowMaterial, projectedShadowMesh } from './projectedShadow.tsl'
 
 /** 村民世界高度（格）。Q 版小人比树矮得多 */
 const NPC_HEIGHT = 1.6
@@ -31,6 +32,7 @@ const VARIANT_FRAMES = [
 
 export interface NpcLayer {
   mesh: THREE.Mesh
+  shadow: THREE.Mesh
   /** 每帧调用：把 NPC 的插值位置写进实例缓冲 */
   update(npcs: readonly NpcRuntime[], px: number, py: number): void
   dispose(): void
@@ -52,7 +54,11 @@ export function createNpcLayer(
   const resolved = layerOf.map((m) => m ?? fallback)
 
   const quad = createSpriteQuad()
-  const material = createSpriteMaterial({ atlas: atlas.texture, frame })
+  const material = createSpriteMaterial({
+    atlas: atlas.texture,
+    normals: atlas.normalTexture,
+    frame,
+  })
 
   const geo = new THREE.InstancedBufferGeometry()
   geo.index = quad.index
@@ -84,6 +90,8 @@ export function createNpcLayer(
   mesh.matrixAutoUpdate = false
   mesh.renderOrder = 0 // 深度写入解遮挡，不再靠画家序分层（见 sprite.tsl 文件头）
   mesh.updateMatrix()
+  const shadowMaterial = createProjectedShadowMaterial(atlas.texture, frame)
+  const shadow = projectedShadowMesh(geo, shadowMaterial)
 
   // 排序用的临时数组
   const order: { k: number; z: number }[] = []
@@ -118,11 +126,13 @@ export function createNpcLayer(
 
   return {
     mesh,
+    shadow,
     update,
     dispose() {
       quad.dispose()
       geo.dispose()
       material.dispose()
+      shadowMaterial.dispose()
     },
   }
 }

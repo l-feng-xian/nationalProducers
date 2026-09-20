@@ -14,13 +14,16 @@
  */
 
 import * as THREE from 'three/webgpu'
-import { CHUNK, MINUTES_PER_DAY, WORLD_SIZE } from '../core/constants'
+import { CHUNK, WORLD_SIZE } from '../core/constants'
 import { delta, wrap } from '../core/torus'
 import { Flag, type WorldGrid } from '../generation/grid'
 import type { NpcBlueprint, WorldSave } from '@/types/infiniteWorld'
 import { createNpcSim, type NpcSim } from '../simulation/npcSim'
 import { createNpcLayer, type NpcLayer } from './npcLayer'
 import { createPlayerSprite, type Facing, type PlayerSprite } from './playerSprite'
+import { wadingDepth, movementSpeed } from './wading'
+import { createWadingRipples } from './wadingRipples'
+import { createPlayerMotion } from './playerMotion'
 import { createMaskTextures } from './atlas'
 import { createWorldCamera } from './camera'
 import { createChunkManager } from './chunkManager'
@@ -30,6 +33,10 @@ import { buildGroundField } from './groundField'
 import { loadGroundTextures } from './groundTextures'
 import { loadSpriteAtlas } from './spriteAtlas'
 import { createRenderer } from './renderer'
+import { createWorldClock, sampleDayNight } from '../simulation/dayNight'
+import { createNightLightField } from './nightLightField'
+import { createNightLamps } from './nightLamps'
+import { createSpriteShadowTarget, createSpriteShadowMap } from './spriteShadowMap'
 
 export interface WorldSceneSummary {
   day: number
@@ -76,6 +83,10 @@ export interface MountOptions {
   npcs?: NpcBlueprint[]
   /** 起始位置。不传则用 grid.spawn */
   start?: [number, number]
+  /** Optional fixed camera for reproducible reference captures; movement remains active. */
+  cameraFocus?: [number, number]
+  /** Reproducible capture scenes can begin at a frozen animation time. */
+  startPaused?: boolean
   /** 一天多少现实分钟 */
   dayMinutes?: number
   forceWebGL?: boolean
@@ -84,9 +95,6 @@ export interface MountOptions {
   onDeviceLost?: (reason: string) => void
 }
 
-/** 行走速度（格/秒）。湿地减速 */
-const WALK_SPEED = 3.2
-const WETLAND_SPEED = 1.7
 /** 低频摘要的推送间隔。100ms 是为了让「按 E 交谈」的提示不会明显滞后 */
 const SUMMARY_MS = 100
 
@@ -108,17 +116,21 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
   scene.background = new THREE.Color('#b8cbd8')
 
   const cam = createWorldCamera()
-  const frame = createFrameUniforms()
+  const shadowTarget = createSpriteShadowTarget()
+  const frame = createFrameUniforms(createNightLightField(o.grid), shadowTarget.texture)
+  const objectShadows = createSpriteShadowMap(boot.renderer, shadowTarget, frame)
   const masks = createMaskTextures()
   // ⚠️ 必须在建任何 chunk 之前载完贴图：chunkBuild 要用 palette 算层号与色调补偿，
   // 而已经建好的 chunk 不会因为贴图后到就重建。本地 fetch，约几十毫秒
   const ground = await loadGroundTextures({
+    baseUrl: o.grid.generatorVersion === 'torus-4' ? '/world/v6' : '/world/v5',
     maxAnisotropy: maxAnisotropyOf(boot.renderer),
     onMessage: o.onMessage,
   })
   // 自然面软混合场：从常驻网格模糊出来，挂载时算一次
   const groundField = buildGroundField(o.grid)
   const spriteAtlas = await loadSpriteAtlas({
+    baseUrl: o.grid.generatorVersion === 'torus-4' ? '/world/v6' : '/world/v5',
     maxAnisotropy: maxAnisotropyOf(boot.renderer),
     onMessage: o.onMessage,
   })
@@ -132,14 +144,21 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
   if (o.npcs && o.npcs.length > 0) {
     npcSim = createNpcSim(o.grid, o.npcs)
     npcLayer = createNpcLayer(spriteAtlas, frame)
-    if (npcLayer) scene.add(npcLayer.mesh)
+    if (npcLayer) scene.add(npcLayer.mesh, npcLayer.shadow)
   }
 
   // ── 玩家角色 ──
   const player: PlayerSprite | null = createPlayerSprite(spriteAtlas, frame)
-  if (player) scene.add(player.mesh)
+  if (player) scene.add(player.mesh, player.shadow)
+  const lamps = createNightLamps(o.grid, spriteAtlas, frame)
+  scene.add(lamps.mesh)
+  const ripples = createWadingRipples(frame, groundField.contours)
+  scene.add(ripples.mesh)
+  const contourImage = groundField.contours.image
+  const depthAt = (x: number, y: number) =>
+    wadingDepth(o.grid, contourImage.data as Uint8Array, contourImage.width, x, y)
   let facing: Facing = 'down'
-  let walkPhase = 0
+  const playerMotion = createPlayerMotion()
 
   /** 交谈范围（格）。俯角下约两格内视为「站到跟前」 */
   const INTERACT_RANGE2 = 2.4 * 2.4
@@ -164,19 +183,31 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
   let py = o.save.playerPosition?.[1] ?? o.start?.[1] ?? o.grid.spawn[1]
   let dirX = 0
   let dirY = 0
-  let paused = false
+  let paused = o.startPaused ?? false
   let minute = o.save.minute ?? 7 * 60
   let day = o.save.day ?? 1
   let revision = o.save.revision
   const dayMinutes = o.dayMinutes ?? 20
+  const clock = createWorldClock(day, minute, dayMinutes)
+  function updateLighting() {
+    const light = sampleDayNight(minute, o.save.weather)
+    frame.dayTint.value.setRGB(...light.tint)
+    frame.sunAmount.value = light.sun
+    frame.shadowVector.value.set(...light.shadow)
+    frame.shadowOpacity.value = light.shadowOpacity
+    frame.lampAmount.value = light.lamps
+    ;(scene.background as THREE.Color).setRGB(
+      light.tint[0] * 0.52,
+      light.tint[1] * 0.68,
+      light.tint[2] * 0.8,
+    )
+  }
+  // A paused or night-time save must have the correct lighting on its very first frame.
+  updateLighting()
 
   const walkableAt = (x: number, y: number): boolean => {
     const i = idx(x, y)
     return (o.grid.flags[i]! & Flag.Walkable) !== 0
-  }
-  const isWet = (x: number, y: number): boolean => {
-    const i = idx(x, y)
-    return (o.grid.flags[i]! & Flag.Walkable) !== 0 && o.grid.surface[i] === 3
   }
 
   // ── 视口 ──
@@ -200,6 +231,12 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
   }
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
+  const clearInput = () => {
+    keys.clear()
+    dirX = 0
+    dirY = 0
+  }
+  window.addEventListener('blur', clearInput)
 
   function readKeys(): [number, number] {
     let x = 0
@@ -213,7 +250,7 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
 
   // 首帧：同步建完最内圈，避免揭幕时一片空白
   chunks.warmup(px, py, 2)
-  cam.focus(px, py)
+  cam.focus(...(o.cameraFocus ?? ([px, py] as [number, number])))
 
   // ── 帧循环 ──
   let raf = 0
@@ -239,19 +276,18 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
     const dt = Math.min(0.1, (now - last) / 1000)
     last = now
 
-    let moving = false
+    let travel = 0
     if (!paused) {
       // ── 移动：分轴，防止对角贴着障碍物卡住 ──
       const [kx, ky] = readKeys()
       const mx = kx || dirX
       const my = ky || dirY
       if (mx !== 0 || my !== 0) {
-        moving = true
         // 朝向：主轴决定。my>0=下(正面) my<0=上(背面)；mx 决定左右
         if (Math.abs(my) >= Math.abs(mx)) facing = my > 0 ? 'down' : 'up'
         else facing = mx > 0 ? 'right' : 'left'
         const len = Math.hypot(mx, my) || 1
-        const speed = isWet(px, py) ? WETLAND_SPEED : WALK_SPEED
+        const speed = movementSpeed(o.grid, px, py, depthAt(px, py))
         const step = speed * dt
         const nx = wrap(px + (mx / len) * step)
         const ny = wrap(py + (my / len) * step)
@@ -260,6 +296,7 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
         const prevY = py
         if (walkableAt(nx, py)) px = nx
         if (walkableAt(px, ny)) py = ny
+        travel = Math.hypot(delta(prevX, px), delta(prevY, py))
 
         // ── 跨接缝补偿 ──
         // 走过 x=511.99 → x=0.004 时渲染坐标整体挪了 512，
@@ -268,26 +305,31 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
       }
 
       // ── 时钟 ──
-      minute += (dt * MINUTES_PER_DAY) / (dayMinutes * 60)
-      while (minute >= MINUTES_PER_DAY) {
-        minute -= MINUTES_PER_DAY
-        day++
-      }
+      clock.step(dt)
+      minute = clock.minute
+      day = clock.day
       frame.windTime.value += dt
-      // 角色动画相位：走循环与待机循环共用，暂停时冻结（与 windTime 同步）。
-      // 站定不动也要推进，待机呼吸才会播；只有 paused 才停。
-      walkPhase += dt
-      applyDayTint(frame, minute, scene)
+      updateLighting()
       // NPC 按日程活动（暂停时冻结）
       npcSim?.step(dt, minute, px, py)
     }
 
-    cam.focus(px, py)
+    cam.focus(...(o.cameraFocus ?? ([px, py] as [number, number])))
     chunks.focus(px, py)
     // NPC 位置每帧写进实例缓冲（就近镜像）
     npcLayer?.update(npcSim?.npcs ?? [], px, py)
     // 玩家角色：朝向 + 行走颠簸
-    player?.update(px, py, facing, walkPhase, moving)
+    const motion = playerMotion.step(dt, travel, paused)
+    const depth = depthAt(px, py)
+    player?.update(px, py, facing, motion.phase, motion.moving, depth)
+    ripples.update(px, py, depth)
+    lamps.update(px, py)
+    objectShadows.update(
+      scene,
+      px,
+      py,
+      Math.max(80, (cam.camera.right - cam.camera.left) * 1.5 + 32),
+    )
     boot.renderer.render(scene, cam.camera)
 
     // 渲染用掉多少，剩下的交给建块队列
@@ -323,10 +365,33 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
   // 生产构建里 import.meta.env.DEV 为 false，整块会被摇树掉。
   if (import.meta.env.DEV) {
     ;(globalThis as unknown as Record<string, unknown>).__world = {
+      debugSurfaceLighting(enabled: boolean) {
+        frame.surfaceLightAmount.value = Number(enabled)
+      },
+      debugReceivedShadows(enabled: boolean) {
+        frame.receivedShadowAmount.value = Number(enabled)
+      },
+      debugShadows(enabled: boolean) {
+        frame.shadowOpacity.value = enabled
+          ? sampleDayNight(minute, o.save.weather).shadowOpacity
+          : 0
+      },
       get info() {
         const c = cam.camera
         return {
           player: [px, py],
+          spriteShadowBatches: objectShadows.count,
+          clock: { day, minute, paused },
+          lighting: {
+            ...sampleDayNight(minute, o.save.weather),
+            lampsVisible: lamps.mesh.visible,
+            lampCount: (lamps.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount,
+          },
+          surface: o.grid.surface[idx(px, py)],
+          submersion: depthAt(px, py),
+          walkSpeed: movementSpeed(o.grid, px, py, depthAt(px, py)),
+          playerSize: player?.mesh.geometry.getAttribute('iSize').getX(0),
+          playerLayer: player?.mesh.geometry.getAttribute('iLayer').getX(0),
           camPos: c.position.toArray(),
           frustum: [c.left, c.right, c.top, c.bottom],
           viewR2: cam.viewR2,
@@ -334,7 +399,9 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
           sceneChildren: scene.children.length,
           firstChunk: (() => {
             const g = scene.children.find((o) => o.type === 'Group')
-            return g ? { pos: g.position.toArray(), visible: g.visible, kids: g.children.length } : null
+            return g
+              ? { pos: g.position.toArray(), visible: g.visible, kids: g.children.length }
+              : null
           })(),
         }
       },
@@ -349,6 +416,7 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
     },
     pause(v) {
       paused = v
+      if (v) clearInput()
     },
     position: () => [px, py],
     nearestNpc,
@@ -373,14 +441,21 @@ export async function mountWorldScene(o: MountOptions): Promise<WorldSceneHandle
       ro.disconnect()
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', clearInput)
       if (npcLayer) {
-        scene.remove(npcLayer.mesh)
+        scene.remove(npcLayer.mesh, npcLayer.shadow)
         npcLayer.dispose()
       }
       if (player) {
-        scene.remove(player.mesh)
+        scene.remove(player.mesh, player.shadow)
         player.dispose()
       }
+      scene.remove(ripples.mesh)
+      ripples.dispose()
+      scene.remove(lamps.mesh)
+      lamps.dispose()
+      frame.lampField.dispose()
+      objectShadows.dispose()
       chunks.dispose()
       disposeChunkMeshDeps(deps)
       masks.dispose()
@@ -412,42 +487,6 @@ function idx(x: number, y: number): number {
   const wx = ((Math.floor(x) % WORLD_SIZE) + WORLD_SIZE) % WORLD_SIZE
   const wy = ((Math.floor(y) % WORLD_SIZE) + WORLD_SIZE) % WORLD_SIZE
   return wy * WORLD_SIZE + wx
-}
-
-/** 昼夜关键帧。作息表与天色必须读同一张表，否则会出现「提示词说黄昏、画面已全黑」 */
-const SKY_KEYS: readonly { at: number; tint: [number, number, number]; bg: string }[] = [
-  { at: 0, tint: [0.34, 0.4, 0.62], bg: '#1e2740' },
-  { at: 5 * 60, tint: [0.55, 0.52, 0.66], bg: '#5b6480' },
-  { at: 7 * 60, tint: [1.0, 0.94, 0.86], bg: '#b8cbd8' },
-  { at: 12 * 60, tint: [1.0, 1.0, 1.0], bg: '#c6dae6' },
-  { at: 17 * 60, tint: [1.0, 0.9, 0.76], bg: '#dcc9a8' },
-  { at: 19 * 60, tint: [0.78, 0.63, 0.6], bg: '#8b7590' },
-  { at: 21 * 60, tint: [0.44, 0.47, 0.66], bg: '#2f3a58' },
-  { at: MINUTES_PER_DAY, tint: [0.34, 0.4, 0.62], bg: '#1e2740' },
-]
-
-const tmpColorA = new THREE.Color()
-const tmpColorB = new THREE.Color()
-
-function applyDayTint(
-  frame: ReturnType<typeof createFrameUniforms>,
-  minute: number,
-  scene: THREE.Scene,
-): void {
-  let i = 0
-  while (i < SKY_KEYS.length - 2 && SKY_KEYS[i + 1]!.at <= minute) i++
-  const a = SKY_KEYS[i]!
-  const b = SKY_KEYS[i + 1]!
-  const t = (minute - a.at) / Math.max(1, b.at - a.at)
-  frame.dayTint.value.setRGB(
-    a.tint[0] + (b.tint[0] - a.tint[0]) * t,
-    a.tint[1] + (b.tint[1] - a.tint[1]) * t,
-    a.tint[2] + (b.tint[2] - a.tint[2]) * t,
-  )
-  frame.sunAmount.value = Math.max(0, Math.min(1, (frame.dayTint.value.r - 0.34) / 0.66))
-  tmpColorA.set(a.bg)
-  tmpColorB.set(b.bg)
-  ;(scene.background as THREE.Color).copy(tmpColorA).lerp(tmpColorB, t)
 }
 
 export { CHUNK }

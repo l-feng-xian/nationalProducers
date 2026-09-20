@@ -50,7 +50,7 @@ export interface MaskSetOptions {
 
 export const MASK_SETS: Record<MaskSetId, MaskSetOptions> = {
   // 有机：柔和羽化，用于泥土/湿地/水岸
-  organic: { feather: 0.16, stepped: false },
+  organic: { feather: 0.46, stepped: false },
   // 阶梯：参考图里土路边缘那种方块感，是双网格瓦片系统的视觉签名
   stepped: { feather: 0.05, stepped: true },
   // 硬边：耕地是人划出来的，边界应当是直的

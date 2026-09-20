@@ -27,12 +27,21 @@ import { buildHydrology, WATER } from './hydrology'
 import { buildRoads, type Bridge } from './roads'
 import { seedOf } from './rng'
 import { planTowns, stampTowns, type Town } from './settlement'
+import { planTowns as planLegacyTowns } from './settlementLegacy'
+import { dressReferenceTowns } from './townLandscape'
 
 const N = WORLD_SIZE * WORLD_SIZE
 
-export const GENERATOR_VERSION = 'torus-1'
+export const GENERATOR_VERSION = 'torus-4'
+export const SUPPORTED_GENERATOR_VERSIONS = [
+  'torus-1',
+  'torus-2',
+  'torus-3',
+  GENERATOR_VERSION,
+] as const
 
 export interface BuildWorldInput {
+  generatorVersion?: string
   seed: string
   settings: Pick<
     WorldSettings,
@@ -69,6 +78,10 @@ export function isCancelled(e: unknown): boolean {
 }
 
 export function buildWorld(input: BuildWorldInput): WorldGrid {
+  const version = input.generatorVersion ?? GENERATOR_VERSION
+  if (!SUPPORTED_GENERATOR_VERSIONS.some((v) => v === version))
+    throw new Error(`Unsupported generator: ${version}`)
+  const legacy = version === 'torus-1'
   const { seed, settings } = input
   const base = seedOf(seed)
   let step = 0
@@ -99,7 +112,9 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
 
   // ── 3. 城镇 ──
   tick()
-  const towns = planTowns({
+  const towns = (legacy ? planLegacyTowns : planTowns)({
+    layoutVersion:
+      version === 'torus-2' ? 'torus-2' : version === 'torus-4' ? 'torus-4' : 'torus-3',
     seed,
     fields,
     elevation: baked.elevation,
@@ -117,18 +132,22 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
     water: hydro.water,
     elevation: baked.elevation,
     townMask: masks.town,
+    buildingMask: legacy ? undefined : masks.building,
+    parcelMask: version === 'torus-3' || version === 'torus-4' ? masks.parcel : undefined,
   })
 
   // ── 5. 装配地表与标志位 ──
   tick()
-  const grid = createEmptyGrid(seed, GENERATOR_VERSION, baked.seaLevel)
+  const grid = createEmptyGrid(seed, version, baked.seaLevel)
   grid.elevation.set(baked.elevation)
   grid.towns = towns
   grid.bridges = roads.bridges
+  if (version === 'torus-4') grid.flow = hydro.flow
 
   const plazaMask = new Uint8Array(N)
   for (const t of towns) {
-    for (let i = 0; i < t.plaza.length; i += 2) plazaMask[t.plaza[i + 1]! * WORLD_SIZE + t.plaza[i]!] = 1
+    for (let i = 0; i < t.plaza.length; i += 2)
+      plazaMask[t.plaza[i + 1]! * WORLD_SIZE + t.plaza[i]!] = 1
   }
 
   for (let i = 0; i < N; i++) {
@@ -157,11 +176,11 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
       // 浅水可缓行 —— 视觉的透明与否不决定能不能走过去
       flags = Flag.Walkable
     } else if (isBuilding) {
-      surface = Surface.Cobble
+      surface = legacy ? Surface.Cobble : Surface.Grass
       biome = 'town'
       flags = Flag.Town | Flag.Building
     } else if (isPlaza) {
-      surface = Surface.Cobble
+      surface = version === 'torus-2' ? Surface.Dirt : Surface.Cobble
       biome = 'town'
       flags = Flag.Walkable | Flag.Town | Flag.Plaza | Flag.Road
     } else if (isRoad) {
@@ -191,6 +210,12 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
       flags = Flag.Walkable
     }
 
+    if (masks.parcel[i]) {
+      flags |= Flag.Town | Flag.Parcel
+      // A parcel is a maintained lawn, with worn earth painted separately at its entrance.
+      if (!isBuilding && !isFarm && !isRoad) surface = Surface.Grass
+    }
+    if (masks.boundary[i]) flags = (flags | Flag.Boundary) & ~Flag.Walkable
     grid.surface[i] = surface
     grid.biome[i] = BIOMES.indexOf(biome)
     grid.flags[i] = flags
@@ -200,7 +225,7 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
   // 于是水与草之间有一圈沙岸过渡，而不是硬切。两格宽：先标一圈，再标紧挨这圈的一格。
   // ⚠️ 只动 Grass/ForestFloor —— 城镇、路、耕地、湿地各有自己的边界，不能被沙岸吃掉。
   const isNaturalLand = (s: number) => s === Surface.Grass || s === Surface.ForestFloor
-  for (let ring = 0; ring < 2; ring++) {
+  for (let ring = 0; ring < (version === 'torus-4' ? 1 : 2); ring++) {
     const touch: number[] = []
     for (let y = 0; y < WORLD_SIZE; y++) {
       for (let x = 0; x < WORLD_SIZE; x++) {
@@ -240,7 +265,9 @@ export function buildWorld(input: BuildWorldInput): WorldGrid {
     marsh: hydro.marsh,
     flags: grid.flags,
     forestDensity: settings.forestDensity,
+    villages: legacy ? undefined : towns,
   })
+  if (version === 'torus-4') dressReferenceTowns(grid)
 
   // ── 7. 连通标号 ──
   //
@@ -315,6 +342,7 @@ function townAnchor(grid: WorldGrid, t: Town): number {
  * 由向导提示用户换种子，而不是在这里无限重试。
  */
 function repairConnectivity(grid: WorldGrid, water: Uint8Array, bridges: Bridge[]): number {
+  if (grid.generatorVersion === 'torus-4') return repairReferenceConnections(grid, water, bridges)
   if (grid.towns.length < 2) return 0
   const main = grid.mainRegion
   const stranded = grid.towns.filter((t) => grid.region[townAnchor(grid, t)] !== main)
@@ -330,7 +358,9 @@ function repairConnectivity(grid: WorldGrid, water: Uint8Array, bridges: Bridge[
   const sample: Sampler = () => STUB
   const costOf = (_t: unknown, x: number, y: number): number => {
     const i = wrapTile(y) * WORLD_SIZE + wrapTile(x)
+    if (grid.generatorVersion !== 'torus-1' && grid.flags[i]! & Flag.Building) return Infinity
     if (grid.flags[i]! & Flag.Road) return 0.35
+    if (grid.flags[i]! & Flag.Parcel) return Infinity
     if (water[i]! !== WATER.none) return water[i] === WATER.deep ? 40 : 26
     if (!(grid.flags[i]! & Flag.Walkable)) return 6 // 树石可以清掉，但有代价
     return 1
@@ -374,6 +404,71 @@ function repairConnectivity(grid: WorldGrid, water: Uint8Array, bridges: Bridge[
     }
   }
   return used
+}
+
+/** Repair each entrance component to the nearest mainland cell, including single-town islands.
+ * A distant town anchor wastes the search budget exploring expensive water. The nearest
+ * mainland target gives the same playable connection with short, local crossings.
+ */
+function repairReferenceConnections(grid: WorldGrid, water: Uint8Array, bridges: Bridge[]): number {
+  let changes = 0
+  const sample: Sampler = () => ({ biome: 'wild', height: 0, walkable: true, bridge: false })
+  for (const town of grid.towns)
+    for (const b of town.buildings) {
+      if (!b.door) continue
+      const [x, y] = b.door
+      if (grid.region[y * WORLD_SIZE + x] === grid.mainRegion) continue
+      let target = -1,
+        nearest = Infinity
+      for (let i = 0; i < N; i++) {
+        if (grid.region[i] !== grid.mainRegion) continue
+        const d = torusDist2(x, y, i % WORLD_SIZE, Math.floor(i / WORLD_SIZE))
+        if (d < nearest) {
+          nearest = d
+          target = i
+        }
+      }
+      if (target < 0) continue
+      const path = findPath(
+        sample,
+        [x, y],
+        [target % WORLD_SIZE, Math.floor(target / WORLD_SIZE)],
+        {
+          budget: N,
+          ignoreWalkable: true,
+          costOf: (_t, xx, yy) => {
+            const i = wrapTile(yy) * WORLD_SIZE + wrapTile(xx),
+              f = grid.flags[i]!
+            if (f & (Flag.Building | Flag.Boundary)) return Infinity
+            if (f & Flag.Road) return 0.35
+            if (f & Flag.Parcel) return Infinity
+            return water[i] !== WATER.none ? 26 : f & Flag.Walkable ? 1 : 6
+          },
+        },
+      )
+      if (!path.length) continue
+      let run: number[] = []
+      const flush = () => {
+        if (run.length) bridges.push({ cells: Int32Array.from(run), span: run.length / 2 })
+        run = []
+      }
+      for (const [xx, yy] of path) {
+        const wx = wrapTile(xx),
+          wy = wrapTile(yy),
+          i = wy * WORLD_SIZE + wx
+        grid.flags[i] = grid.flags[i]! | Flag.Road | Flag.Walkable
+        if (water[i] !== WATER.none) {
+          grid.flags[i] = grid.flags[i]! | Flag.Bridge
+          run.push(wx, wy)
+        } else flush()
+        grid.surface[i] = Surface.Dirt
+        grid.decor[i] = 0
+      }
+      flush()
+      changes++
+      labelInto(grid)
+    }
+  return changes
 }
 
 /**
@@ -427,7 +522,9 @@ export function auditConnectivity(grid: WorldGrid): {
     seen.add(r)
     if (r === main) mainCells++
   }
-  const stranded = grid.towns.filter((t) => grid.region[townAnchor(grid, t)] !== main).map((t) => t.name)
+  const stranded = grid.towns
+    .filter((t) => grid.region[townAnchor(grid, t)] !== main)
+    .map((t) => t.name)
   return {
     strandedTowns: stranded,
     mainShare: walkable > 0 ? mainCells / walkable : 0,

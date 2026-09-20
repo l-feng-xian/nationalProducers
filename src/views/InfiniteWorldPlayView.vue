@@ -13,6 +13,7 @@ import type { NpcBlueprint, WorldSave } from '@/types/infiniteWorld'
 import type { WorldMoment } from '@/services/infinite-world/dialogue/worldDialogue'
 import { applyReward } from '@/services/infinite-world/dialogue/relationRules'
 import type { WorldSceneHandle } from '@/services/infinite-world/rendering/worldScene'
+import { dayPhase, DAY_PHASE_LABEL } from '@/services/infinite-world/simulation/dayNight'
 
 const route = useRoute(), router = useRouter(), worlds = useInfiniteWorldStore(), toast = useToast()
 const host = ref<HTMLElement | null>(null)
@@ -33,6 +34,7 @@ const dayText = computed(() => {
   return s ? '第 ' + s.day + ' 天 · ' + String(Math.floor(s.minute / 60)).padStart(2, '0') + ':' + String(Math.floor(s.minute % 60)).padStart(2, '0') : ''
 })
 const pauseText = computed(() => paused.value ? '继续探索' : '暂停')
+const phase = computed(() => dayPhase(summary.value?.minute ?? 420))
 const message = ref('')
 let runtime: WorldSceneHandle | null = null, interval: ReturnType<typeof setInterval> | null = null
 let mounted = true, generation = 0, pendingSave: Promise<boolean> | null = null, discard = false
@@ -68,12 +70,12 @@ async function start(id: string) {
     summary.value = progress
     await nextTick()
 
-    const { GENERATOR_VERSION } = await import('@/services/infinite-world/generation/pipeline')
+    const { SUPPORTED_GENERATOR_VERSIONS } = await import('@/services/infinite-world/generation/pipeline')
     // ⚠️ 老世界（terrain-1 / dual-grid-0.1）是 WORLD_LIMIT=100000 的无限平面，
     // 而新渲染器是为 512×512 环面建的。把无限平面塞进环面必然挪动房屋与树木 ——
     // 那正是「不能用新噪声默默重建旧存档」要避免的失败方式。
     // 所以这里**拦截**而不是硬着头皮渲染，并给出导出这条退路。
-    if (opened.generatorVersion !== GENERATOR_VERSION) {
+    if (!SUPPORTED_GENERATOR_VERSIONS.some(v => v === opened.generatorVersion)) {
       throw new Error(
         '这个世界由旧版地图生成器（' + opened.generatorVersion + '）创建。\n' +
         '新版地图是固定 512×512 的环面，无法原样迁移 —— 强行载入会让房屋和树木整体移位。\n' +
@@ -201,7 +203,11 @@ onUnmounted(() => {
       <div class="actions"><button v-if="runtime" class="cbx-btn cbx-btn--soft" :disabled="saving" @click="manualSave">重试保存</button><button class="cbx-btn cbx-btn--ghost" @click="reloadSave">重新读取存档</button><button v-if="ready" class="cbx-btn cbx-btn--ghost" :disabled="saving" @click="leaveWithoutSaving">放弃未保存进度并离开</button><button v-else class="cbx-btn cbx-btn--ghost" @click="router.push('/game-worlds')">返回列表</button></div>
     </div>
     <template v-if="ready && world && summary">
-      <div class="hud time"><strong>{{ dayText }}</strong><span>{{ ['春', '夏', '秋', '冬'][world.settings.season] }} · {{ summary.weather === 'clear' ? '晴' : '雨' }}</span></div>
+      <div class="hud time" :data-phase="phase">
+        <div class="time-heading"><strong>{{ dayText }}</strong><span class="time-phase"><span aria-hidden="true">{{ phase === 'night' ? '☾' : '☀' }}</span> {{ DAY_PHASE_LABEL[phase] }}</span></div>
+        <span>{{ ['春', '夏', '秋', '冬'][world.settings.season] }} · {{ summary.weather === 'clear' ? '晴' : summary.weather === 'storm' ? '雷雨' : '雨' }}</span>
+        <div class="time-track" role="progressbar" aria-label="一天的进度" :aria-valuemin="0" :aria-valuemax="1440" :aria-valuenow="summary.minute" :aria-valuetext="dayText"><i :style="{ left: `${summary.minute / 1440 * 100}%` }" /></div>
+      </div>
       <div class="hud player-info"><strong>{{ world.player.name }}</strong><span>{{ world.player.identity || '旅行者' }}</span><span>体力 {{ summary.stamina }} / 100 · 金币 {{ summary.money }}</span></div>
       <div class="hud toolbar"><button @click="paused = !paused">{{ pauseText }}</button><button @click="panel = panel === 'bag' ? null : 'bag'">背包</button><button @click="panel = panel === 'residents' ? null : 'residents'">居民</button><button :disabled="saving" @click="manualSave">{{ saving ? '保存中…' : '保存进度' }}</button></div>
       <p class="hud guide">WASD / 方向键移动 · 走近居民按 E 交谈 · B 背包 · Esc 暂停<br />每 30 秒自动保存 · {{ message || '沿着主路走过河桥，看看更远处的森林。' }}</p>
@@ -259,6 +265,12 @@ onUnmounted(() => {
 }
 @keyframes interact-pop { 50% { transform: translateX(-50%) translateY(-3px); } }
 .time { top: 20px; left: 20px; display: grid; gap: 4px; }
+.time-heading { display: flex; align-items: center; gap: 16px; }
+.time-phase { font-size: 11px; opacity: .85; }
+.time[data-phase="night"] { color: #e1e8f0; background: #25364ae8; border-color: #a3bed26b; }
+.time[data-phase="dawn"], .time[data-phase="dusk"] { background: #f4dfc6ed; border-color: #dfb27eaa; }
+.time-track { position: relative; height: 4px; margin-top: 6px; border-radius: 4px; background: linear-gradient(90deg, #354b76 0% 18%, #e9a976 27%, #f7df99 38% 65%, #cd855f 77%, #354b76 87%); }
+.time-track i { position: absolute; top: -2px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px #fff8; transform: translateX(-50%); }
 .player-info { top: 20px; right: 20px; display: grid; gap: 4px; }
 .toolbar { bottom: 92px; left: 20px; display: flex; gap: 12px; }
 .toolbar button { border: 0; color: inherit; background: transparent; cursor: pointer; font: inherit; }

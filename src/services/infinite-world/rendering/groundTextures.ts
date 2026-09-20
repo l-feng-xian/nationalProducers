@@ -98,7 +98,7 @@ export interface LoadGroundOptions {
 }
 
 export async function loadGroundTextures(o: LoadGroundOptions = {}): Promise<GroundTextures> {
-  const base = o.baseUrl ?? '/world/v1'
+  const base = o.baseUrl ?? '/world/v5'
   try {
     const res = await fetch(`${base}/manifest.json`)
     if (!res.ok) throw new Error(`manifest ${res.status}`)

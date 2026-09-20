@@ -36,6 +36,7 @@ import {
   sub,
   texture,
   uv,
+  vec2,
   vec3,
   vec4,
 } from 'three/tsl'
@@ -44,6 +45,7 @@ import { MASK_ATLAS_COLS, MASK_ATLAS_PX } from '../grid/masks'
 import { TILE_WORLD } from './groundTextures'
 import type { NaturalDescriptor } from './chunkBuild'
 import type { FrameUniforms } from './frame.tsl'
+import { CONTOUR_RANGE } from './contourField'
 
 /** 层与层之间的高度间隔，避免 z-fighting。62° 俯角下 2mm 足够 */
 export const LAYER_STEP = 0.004
@@ -80,6 +82,12 @@ export function cloudShadow(wx: Scalar, wy: Scalar, frame: FrameUniforms): Scala
   return sub(float(1), amt)
 }
 
+/** Shared ambient daylight / moonlight and local warm lamps for every visible surface. */
+export function worldLighting(wx: Scalar, wy: Scalar, frame: FrameUniforms) {
+  const glow = texture(frame.lampField, vec2(wx, wy).div(WORLD_SIZE)).r.mul(frame.lampAmount)
+  return frame.dayTint.mul(cloudShadow(wx, wy, frame)).add(vec3(.82, .48, .17).mul(glow))
+}
+
 export interface GroundMaterialOptions {
   /** 遮罩图集（单通道存在 R 里） */
   maskAtlas: THREE.Texture
@@ -91,6 +99,10 @@ export interface GroundMaterialOptions {
   order: number
   /** 透明层（覆盖层）还是不透明层（底色） */
   transparent: boolean
+  bank?: boolean
+  cobble?: boolean
+  contours: THREE.Texture
+  contourChannel?: 'r' | 'g' | 'b'
 }
 
 /**
@@ -110,20 +122,24 @@ export function attr(name: string, type: string): ShaderNode {
 }
 
 /**
- * 遮罩图集 UV（含半纹素内缩）。所有走双网格遮罩的层共用 —— 包括水面。
+ * 遮罩图集 UV（含半纹素内缩）。供桥面、耕地等保留网格结构的层使用。
  * iAtlas 是 CPU 算好的归一化格偏移。
  */
 export function maskUvNode(iAtlas: ShaderNode): ShaderNode {
   const CELL = 1 / MASK_ATLAS_COLS
   const INSET = 0.5 / MASK_ATLAS_PX
-  return uv().mul(float(CELL - INSET * 2)).add(float(INSET)).add(iAtlas) as unknown as ShaderNode
+  return uv()
+    .mul(float(CELL - INSET * 2))
+    .add(float(INSET))
+    .add(iAtlas) as unknown as ShaderNode
 }
 
 export interface BaseMaterialOptions {
   /** 可平铺地表材质的数组纹理 */
   ground: THREE.DataArrayTexture
-  /** 自然面混合场（R=林地度 G=湿地度 B=水域度），见 groundField.ts */
+  /** 自然面混合场（R=林地 G=湿地 B=到岸距离），见 groundField.ts */
   groundField: THREE.Texture
+  contours: THREE.Texture
   /** ⚠️ 必填。见文件头 */
   frame: FrameUniforms
   /** 三种自然面：草地是底，林地/湿地按场值叠上去 */
@@ -136,7 +152,9 @@ function sampleNatural(
   tileUv: ShaderNode,
   d: NaturalDescriptor,
 ): ShaderNode {
-  return texture(ground, tileUv).depth(float(d.layer)).rgb.mul(float(d.tint)) as unknown as ShaderNode
+  return texture(ground, tileUv)
+    .depth(float(d.layer))
+    .rgb.mul(float(d.tint)) as unknown as ShaderNode
 }
 
 /**
@@ -155,11 +173,15 @@ export function createBaseMaterial(o: BaseMaterialOptions): THREE.MeshBasicNodeM
   const mat = new THREE.MeshBasicNodeMaterial()
   const iOffset = attr('iOffset', 'vec2')
 
-  mat.positionNode = vec3(positionGeometry.x.add(iOffset.x), float(0), positionGeometry.z.add(iOffset.y))
+  mat.positionNode = vec3(
+    positionGeometry.x.add(iOffset.x),
+    float(0),
+    positionGeometry.z.add(iOffset.y),
+  )
 
   // 本片元的世界坐标（未镜像，环面唯一）
   const worldXY = uv().sub(float(0.5)).add(iOffset)
-  const tileUv = worldXY.mul(float(1 / TILE_WORLD))
+  const tileUv = worldXY.mul(float(2 / TILE_WORLD))
   const fieldUv = worldXY.mul(float(1 / WORLD_SIZE))
 
   const g = sampleNatural(o.ground, tileUv as unknown as ShaderNode, o.naturals.grass)
@@ -185,23 +207,23 @@ export function createBaseMaterial(o: BaseMaterialOptions): THREE.MeshBasicNodeM
   let col = mix(g, f, forestW)
   col = mix(col, m, marshW)
 
-  // 接触阴影：贴着人造面（土路/城镇/耕地）的草地柔和压深，把硬边过渡揉软 ——
-  // field.a 是模糊后的人造面覆盖度，路心最高、向外渐隐。参考图里路边草就是这样一圈暗。
-  const contact = sub(float(1), mul(smoothstep(float(0.1), float(0.8), field.a), float(0.24)))
+  // 只留很轻的接触色差，避免人为给所有道路描上一圈黑边。
+  const contact = sub(float(1), mul(smoothstep(float(0.1), float(0.8), field.a), float(0.045)))
 
-  // 湿岸带：贴近水的陆地压深 + 轻微偏冷，做出参考图水边那圈湿润软过渡。
-  // field.b 是模糊后的水域度 —— 水线处最强、向内约 2–4 格渐隐；红通道压得比蓝绿多 → 偏冷湿。
-  const wet = smoothstep(float(0.03), float(0.5), field.b)
-  const wetMul = mix(vec3(1, 1, 1), vec3(0.72, 0.82, 0.86), wet)
+  // 到岸距离给出窄而稳定的湿岸带，避免宽河和窄河使用不同的湿润范围。
+  const shore = texture(o.contours, fieldUv)
+    .a.sub(0.5)
+    .mul(2 * CONTOUR_RANGE)
+  const wet = smoothstep(float(-2.2), float(0.5), shore)
+  const wetMul = mix(vec3(1, 1, 1), vec3(0.87, 0.92, 0.91), wet)
 
-  const cloud = cloudShadow(w.x, w.y, o.frame)
+  const lighting = worldLighting(w.x, w.y, o.frame)
   mat.colorNode = vec4(
     (col as unknown as ShaderNode)
       .mul(wetMul as unknown as ShaderNode)
       .mul(contact)
-      .mul(o.frame.dayTint)
-      .mul(o.frame.seasonTint)
-      .mul(cloud),
+      .mul(lighting)
+      .mul(o.frame.seasonTint),
     float(1),
   )
   mat.transparent = false
@@ -241,14 +263,16 @@ export function createGroundMaterial(o: GroundMaterialOptions): THREE.MeshBasicN
   // ⚠️ 用的是 iOffset（**未镜像**的世界坐标），不是 positionWorld。
   // chunk 的镜像位移在 group.position 上，取 positionWorld 会让接缝
   // 两侧的同一块地贴图对不上；而 iOffset 在环面上本来就是唯一的。
-  const worldUv = uv().sub(float(0.5)).add(iOffset).mul(float(1 / TILE_WORLD))
+  const worldUv = uv()
+    .sub(float(0.5))
+    .add(iOffset)
+    .mul(float(1 / (o.cobble ? TILE_WORLD / 2.5 : TILE_WORLD)))
   const groundSample = texture(o.ground, worldUv).depth(iMat)
 
-  // ── 碎边 + 内描边：把「过于生硬的转折」做成手绘感 ──
+  // ── 世界空间碎边：两级噪声只扰动羽化带，不叠内描边 ──
   //
   // 人造面的双网格边缘本来是干净的数学阶梯。这里按**世界坐标**取一层噪声
-  // 扰动 alpha 的过渡带，把边缘打成有机碎边；再沿边缘内侧压一道暗线（ink rim），
-  // 就是参考图里土路/石板那种手绘描边。
+  // 扰动 alpha 的过渡带，让细草与裸土交错露出。
   //
   // ⚠️ 噪声按世界坐标 + noiseOrigin —— 接缝两侧取到同一个值，边缘不裂
   // （见 masks.ts 头注释：碎边只能在着色器里按世界坐标加，不能进遮罩）。
@@ -259,18 +283,37 @@ export function createGroundMaterial(o: GroundMaterialOptions): THREE.MeshBasicN
   const enx = mul(add(wn.x, non.x), float(0.55))
   const eny = mul(add(wn.y, non.y), float(0.55))
   // 加大碎边幅度 + 加宽过渡带：把双网格数学阶梯打成手绘碎边、并让边缘羽化更软消锯齿。
-  const ebreak = mul(mx_noise_float(vec3(enx, eny, float(0))), float(0.2))
-  const alpha = smoothstep(float(0.28), float(0.72), add(maskSample.r, ebreak))
-
-  // 内描边：alpha 处于过渡带（~0.5）时最强，压暗颜色画出手绘墨线
-  const rim = mul(mul(alpha, sub(float(1), alpha)), float(0.7))
-  const shade = sub(float(1), mul(rim, float(0.55)))
-
-  const cloud = cloudShadow(wn.x, wn.y, o.frame)
-  mat.colorNode = vec4(
-    groundSample.rgb.mul(iColor).mul(shade).mul(o.frame.dayTint).mul(o.frame.seasonTint).mul(cloud),
-    alpha,
+  const coarse = mx_noise_float(vec3(enx, eny, float(0)))
+  const fine = mx_noise_float(
+    vec3(mul(add(wn.x, non.x), float(9)), mul(add(wn.y, non.y), float(12)), float(0)),
   )
+  // Disturb only the transition: fully filled/empty corners stay exact and adjacent tiles agree.
+  const edgeWeight = maskSample.r.mul(maskSample.r.oneMinus()).mul(4)
+  const ebreak = add(mul(coarse, float(0.16)), mul(fine, float(0.1))).mul(edgeWeight)
+  let alpha = smoothstep(float(0.08), float(0.92), add(maskSample.r, ebreak))
+  if (o.contourChannel) {
+    const field = texture(o.contours, wxy.mul(1 / WORLD_SIZE))
+    const distance = field[o.contourChannel].sub(0.5).mul(2 * CONTOUR_RANGE)
+    const organic = coarse.mul(0.17).add(fine.mul(0.05))
+    alpha = smoothstep(
+      float(o.cobble ? -0.08 : -0.32),
+      float(o.cobble ? 0.04 : -0.05),
+      distance.add(organic.mul(o.cobble ? 0.15 : 1)),
+    )
+  }
+  let surfaceColor = groundSample.rgb.mul(iColor)
+  if (o.bank) {
+    const shore = texture(o.contours, wxy.mul(1 / WORLD_SIZE))
+      .a.sub(0.5)
+      .mul(2 * CONTOUR_RANGE)
+    const damp = smoothstep(float(-1.3), float(0.8), shore)
+    // Wet earth stays close to the water, not a full tile-wide sand ribbon.
+    alpha = alpha.mul(smoothstep(float(-0.8), float(-0.22), shore))
+    surfaceColor = surfaceColor.mul(mix(vec3(1, 1, 1), vec3(0.67, 0.76, 0.77), damp))
+  }
+
+  const lighting = worldLighting(wn.x, wn.y, o.frame)
+  mat.colorNode = vec4(surfaceColor.mul(lighting).mul(o.frame.seasonTint), alpha)
   mat.transparent = o.transparent
   mat.depthWrite = !o.transparent
   mat.side = THREE.FrontSide
@@ -299,12 +342,7 @@ export function createGroundMaterial(o: GroundMaterialOptions): THREE.MeshBasicN
  */
 export function createGroundQuad(): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry()
-  const positions = new Float32Array([
-    -0.5, 0, -0.5,
-    0.5, 0, -0.5,
-    0.5, 0, 0.5,
-    -0.5, 0, 0.5,
-  ])
+  const positions = new Float32Array([-0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 0, 0.5, -0.5, 0, 0.5])
   const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   g.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))

@@ -151,7 +151,7 @@ export function emptyWorld(id = crypto.randomUUID()): GameWorld {
     // ⚠️ 必须与 pipeline.ts 的 GENERATOR_VERSION 一致。
     // 这里写死字面量而不是 import —— types/ 不该依赖 services/。
     // 改了那边记得改这里，否则新建的世界会被「旧版生成器」拦截逻辑挡住。
-    generatorVersion: 'torus-1',
+    generatorVersion: 'torus-4',
     lore: { premise: '沿着河流来到一座安静的小镇，从一间小屋开始新的田园生活。', tone: '温柔、日常、充满发现', rules: '', geography: '', worldBookIds: [] },
     player: { name: '我', identity: '', description: '', goal: '', spawn: [16, 16] },
     npcs: [],

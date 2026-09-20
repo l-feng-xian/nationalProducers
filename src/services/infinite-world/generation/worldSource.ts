@@ -95,8 +95,15 @@ export async function buildWorldAsync(req: BuildRequest): Promise<WorldGrid> {
     // ── 同步回退 ──
     const grid = buildWorld({
       seed: req.seed,
+      generatorVersion: req.generatorVersion,
       settings: toPlain(req.settings),
-      signal: req.signal ? { get aborted() { return req.signal!.aborted } } : undefined,
+      signal: req.signal
+        ? {
+            get aborted() {
+              return req.signal!.aborted
+            },
+          }
+        : undefined,
       onProgress: req.onProgress,
     })
     return remember(key, grid)
@@ -145,7 +152,12 @@ export async function buildWorldAsync(req: BuildRequest): Promise<WorldGrid> {
     // 项目里这条铁律原本记在 db.put 那条路径上（见 utils/plain.ts）。
     // Worker 是它的**第二个入口**，同样要守。修在这里而不是各调用处，
     // 是因为这是数据跨进 Worker 的唯一关口。
-    const request: WorkerRequest = { jobId, seed: req.seed, settings: toPlain(req.settings) }
+    const request: WorkerRequest = {
+      jobId,
+      seed: req.seed,
+      settings: toPlain(req.settings),
+      generatorVersion: req.generatorVersion,
+    }
     w.postMessage(request)
   })
 }
@@ -159,6 +171,11 @@ export function buildWorldSync(req: Omit<BuildRequest, 'signal'>): WorldGrid {
   const key = buildKey(req)
   const hit = cache.get(key)
   if (hit) return remember(key, hit)
-  const grid = buildWorld({ seed: req.seed, settings: req.settings, onProgress: req.onProgress })
+  const grid = buildWorld({
+    seed: req.seed,
+    settings: req.settings,
+    onProgress: req.onProgress,
+    generatorVersion: req.generatorVersion,
+  })
   return remember(key, grid)
 }

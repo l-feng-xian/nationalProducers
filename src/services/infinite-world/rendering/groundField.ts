@@ -7,7 +7,7 @@
  * 「转折边缘过于生硬」的根因。
  *
  * 解法：自然面不走逐格遮罩，改走**世界空间软混合**。挂载时把
- * 「这格是不是林地/湿地/水」的 0/1 覆盖用**环面模糊**摊成 0..1 的平滑场，
+ * 「这格是不是林地/湿地」的 0/1 覆盖用**环面模糊**摊成 0..1 的平滑场，
  * 着色器按世界坐标采样这张场、用 `smoothstep` 在草地/林地/湿地贴图之间过渡。
  * 过渡宽度 = 模糊半径，天然跨多格；边界形状由底层的连续噪声场决定，天然有机。
  *
@@ -19,7 +19,7 @@
  * ## 通道布局（RGBA8）
  *   R = 林地度（ForestFloor 覆盖，模糊）
  *   G = 湿地度（Marsh 覆盖，模糊）
- *   B = 水域度（Shallow+Deep 覆盖，模糊）—— 给水面 pass 做岸线泡沫用
+ *   B = 到岸的有符号距离，0.5 为水线，正侧是水，范围 ±SHORE_RANGE 格；不参与模糊
  *   A = 人造面度（Dirt/Cobble/Tilled 覆盖，模糊）—— 给草地做「贴着路的接触阴影」，
  *       让土路/城镇/耕地与草的过渡从硬边变成参考图那种柔和压深
  *
@@ -29,6 +29,9 @@
 import * as THREE from 'three/webgpu'
 import { WORLD_SIZE } from '../core/constants'
 import { Surface, type WorldGrid } from '../generation/grid'
+import { SHORE_RANGE, shoreDistance } from './shoreDistance'
+import { buildContourPixels } from './contourField'
+import { DIR8 } from '../core/torus'
 
 /** 模糊半径（格）。~4 格半径 × 2 遍 ≈ 高斯 sigma 4，过渡宽约 8–10 格 */
 const BLUR_RADIUS = 4
@@ -36,6 +39,8 @@ const BLUR_PASSES = 2
 
 export interface GroundField {
   texture: THREE.DataTexture
+  contours: THREE.DataTexture
+  flow: THREE.DataTexture
   dispose(): void
 }
 
@@ -47,14 +52,13 @@ export function buildGroundField(grid: WorldGrid): GroundField {
   // ── 离散覆盖 0/1 ──
   const forest = new Float32Array(N)
   const marsh = new Float32Array(N)
-  const water = new Float32Array(N)
+  const water = shoreDistance(grid.surface)
   const artificial = new Float32Array(N)
   const s = grid.surface
   for (let i = 0; i < N; i++) {
     const su = s[i]!
     if (su === Surface.ForestFloor) forest[i] = 1
     else if (su === Surface.Marsh) marsh[i] = 1
-    if (su === Surface.ShallowWater || su === Surface.DeepWater) water[i] = 1
     if (su === Surface.Dirt || su === Surface.Cobble || su === Surface.Tilled) artificial[i] = 1
   }
 
@@ -63,7 +67,6 @@ export function buildGroundField(grid: WorldGrid): GroundField {
   for (const [ch, radius] of [
     [forest, BLUR_RADIUS],
     [marsh, BLUR_RADIUS],
-    [water, BLUR_RADIUS],
     [artificial, 2],
   ] as const) {
     for (let p = 0; p < BLUR_PASSES; p++) {
@@ -77,7 +80,9 @@ export function buildGroundField(grid: WorldGrid): GroundField {
   for (let i = 0; i < N; i++) {
     rgba[i * 4] = clamp8(forest[i]! * 255)
     rgba[i * 4 + 1] = clamp8(marsh[i]! * 255)
-    rgba[i * 4 + 2] = clamp8(water[i]! * 255)
+    // B encodes signed shore distance; do not blur it with the biome weights.
+    // Even a one-tile stream retains a water interior and an accurate shoreline.
+    rgba[i * 4 + 2] = clamp8((0.5 + water[i]! / (2 * SHORE_RANGE)) * 255)
     rgba[i * 4 + 3] = clamp8(artificial[i]! * 255)
   }
 
@@ -91,7 +96,52 @@ export function buildGroundField(grid: WorldGrid): GroundField {
   tex.colorSpace = THREE.NoColorSpace
   tex.needsUpdate = true
 
-  return { texture: tex, dispose: () => tex.dispose() }
+  const contour = buildContourPixels(grid)
+  const contours = new THREE.DataTexture(contour.data, contour.size, contour.size, THREE.RGBAFormat)
+  contours.wrapS = contours.wrapT = THREE.RepeatWrapping
+  contours.magFilter = contours.minFilter = THREE.LinearFilter
+  contours.generateMipmaps = false
+  contours.colorSpace = THREE.NoColorSpace
+  contours.needsUpdate = true
+  const flowPixels = new Uint8Array(N * 4)
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      let dx = 0,
+        dy = 0,
+        weight = 0
+      for (let oy = -2; oy <= 2; oy++)
+        for (let ox = -2; ox <= 2; ox++) {
+          const ni = ((y + oy + H) % H) * W + ((x + ox + W) % W)
+          const direction = grid.flow?.[ni] ?? -1
+          const vector = direction >= 0 ? DIR8[direction] : undefined
+          if (!vector) continue
+          const k = 1 / (1 + ox * ox + oy * oy)
+          dx += vector[0] * k
+          dy += vector[1] * k
+          weight += k
+        }
+      const len = Math.hypot(dx, dy)
+      const i = (y * W + x) * 4
+      flowPixels[i] = clamp8((len > 0.01 ? dx / len : 0.12) * 127 + 128)
+      flowPixels[i + 1] = clamp8((len > 0.01 ? dy / len : 0.99) * 127 + 128)
+      flowPixels[i + 2] = weight > 0 ? 255 : 0
+      flowPixels[i + 3] = 255
+    }
+  const flow = new THREE.DataTexture(flowPixels, W, H, THREE.RGBAFormat)
+  flow.wrapS = flow.wrapT = THREE.RepeatWrapping
+  flow.magFilter = flow.minFilter = THREE.LinearFilter
+  flow.colorSpace = THREE.NoColorSpace
+  flow.needsUpdate = true
+  return {
+    texture: tex,
+    contours,
+    flow,
+    dispose: () => {
+      tex.dispose()
+      contours.dispose()
+      flow.dispose()
+    },
+  }
 }
 
 /** 水平环面盒模糊。src → dst */

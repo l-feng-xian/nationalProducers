@@ -20,8 +20,10 @@ import { LAYERS, frameOf, maskAt, type LayerDef, type LayerId } from '../grid/du
 import type { WorldGrid } from '../generation/grid'
 import { hashTile } from '../generation/rng'
 import { MASK_ATLAS_COLS } from '../grid/masks'
+import { CONTOUR_LAYERS } from './contourField'
 import { buildDecor, type SpriteInstances, type SpriteMetaLite } from './decorBuild'
 import type { GroundPalette } from './groundTextures'
+import { buildPlots, type PlotInstances } from './plotBuild'
 
 /**
  * sRGB → 线性。
@@ -102,7 +104,11 @@ export interface NaturalDescriptor {
 }
 
 export function naturalDescriptor(name: string, palette: GroundPalette): NaturalDescriptor {
-  const [k] = borrowedTint(toLinear(MATERIAL_COLOR[name] ?? WHITE), palette.sourceOf(name), palette.ready)
+  const [k] = borrowedTint(
+    toLinear(MATERIAL_COLOR[name] ?? WHITE),
+    palette.sourceOf(name),
+    palette.ready,
+  )
   return { layer: palette.indexOf(name), tint: k }
 }
 
@@ -185,6 +191,7 @@ export interface ChunkBuild {
   layers: LayerInstances[]
   /** 本块的装饰精灵实例（脚底 z 已排序） */
   sprites: SpriteInstances
+  plots: PlotInstances[]
   /** 实例总数，用于预算统计 */
   totalInstances: number
 }
@@ -240,12 +247,23 @@ export function buildChunk(
   ]
 
   // ── 覆盖层：只收非空的显示格 ──
+  const planted = new Set<number>()
+  for (const town of grid.towns)
+    for (let k = 0; k < town.fields.length; k += 2)
+      planted.add(town.fields[k + 1]! * WORLD_SIZE + town.fields[k]!)
   for (const def of LAYERS) {
-    const inst = buildOverlay(grid, def, i0, j0, palette)
+    // Only suppress cells replaced by raised beds. Unrelated/player-authored farmland
+    // must keep its normal ground layer even when this world contains a town farm.
+    const visibleDef =
+      def.id === 'tilled' && planted.size
+        ? { ...def, test: (g: WorldGrid, i: number) => def.test(g, i) && !planted.has(i) }
+        : def
+    const inst = buildOverlay(grid, visibleDef, i0, j0, palette)
     if (inst.count > 0) layers.push(inst)
   }
 
   const sprites = buildDecor(grid, cx, cy, spriteMeta)
+  const plots = buildPlots(grid, cx, cy)
 
   return {
     cx,
@@ -254,7 +272,11 @@ export function buildChunk(
     centerY: j0 + CHUNK / 2,
     layers,
     sprites,
-    totalInstances: layers.reduce((s, l) => s + l.count, 0) + sprites.count,
+    plots,
+    totalInstances:
+      layers.reduce((s, l) => s + l.count, 0) +
+      sprites.count +
+      plots.reduce((s, p) => s + p.count, 0),
   }
 }
 
@@ -270,7 +292,20 @@ function buildOverlay(
   let count = 0
   for (let dj = 0; dj < CHUNK; dj++) {
     for (let di = 0; di < CHUNK; di++) {
-      const m = maskAt(grid, def, i0 + di, j0 + dj)
+      let m = maskAt(grid, def, i0 + di, j0 + dj)
+      // Continuous contours can cross an empty display cell. Include a two-tile halo so
+      // per-chunk geometry never clips the reconstructed curve into a square.
+      if (m === 0 && CONTOUR_LAYERS.includes(def.id)) {
+        search: for (let dy = -2; dy <= 2; dy++)
+          for (let dx = -2; dx <= 2; dx++) {
+            const x = (i0 + di + dx + WORLD_SIZE) % WORLD_SIZE
+            const y = (j0 + dj + dy + WORLD_SIZE) % WORLD_SIZE
+            if (def.test(grid, y * WORLD_SIZE + x)) {
+              m = 1
+              break search
+            }
+          }
+      }
       masks[dj * CHUNK + di] = m
       if (m !== 0) count++
     }
@@ -312,7 +347,7 @@ function buildOverlay(
 /** chunk 坐标 → 键 */
 export function chunkKey(cx: number, cy: number): number {
   const n = WORLD_SIZE / CHUNK
-  return ((cy % n) + n) % n * n + (((cx % n) + n) % n)
+  return (((cy % n) + n) % n) * n + (((cx % n) + n) % n)
 }
 
 export const CHUNKS_PER_SIDE = WORLD_SIZE / CHUNK

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="UTF-8">
+<title>无限世界渲染验收</title>
+<style>
+html,body,#world{margin:0;width:100%;height:100%;overflow:hidden;background:#829d91}
+/* Keep the development toolbar's animated DOM overlay out of canvas screenshot comparisons. */
+#__vue-devtools-container__,#vue-inspector-container{display:none!important}
+</style>
+<div id="world"></div>
+<script type="module">
+import { mountWorldScene } from '/src/services/infinite-world/rendering/worldScene.ts'
+import { createEmptyGrid, Surface, Flag, Decor } from '/src/services/infinite-world/generation/grid.ts'
+import { buildWorldAsync } from '/src/services/infinite-world/generation/worldSource.ts'
+import { createReferenceFixture } from '/src/services/infinite-world/generation/referenceFixture.ts'
+import { hashTile01 } from '/src/services/infinite-world/generation/rng.ts'
+const params = new URLSearchParams(location.search)
+const messages = []
+const grid = params.has('reference') ? createReferenceFixture() : params.has('natural') ? await buildWorldAsync({seed:params.get('seed')??'world-v3-review',generatorVersion:params.get('version')??undefined,settings:{waterRatio:0.15,forestDensity:0.5,fieldDensity:0.5,season:0,dayMinutes:20,townDensity:0.5,riverDensity:0.5}}) : createEmptyGrid('render-review','review',0)
+let start = [68, 64]
+if (params.has('reference')) { start=[65,66] } else if (!params.has('natural')) {
+  grid.flags.fill(Flag.Walkable)
+  for (let y=0;y<512;y++) for(let x=0;x<512;x++) {
+    const i=y*512+x, dx=x-64, dy=y-64
+    const river = Math.abs(dx+5-Math.sin(dy/5)*1.6)
+    if(dx>7+Math.sin(dy/6)*3) grid.surface[i]=Surface.ForestFloor
+    if(river<3.3) grid.surface[i]=Surface.Sand
+    if(river<2.4) {grid.surface[i]=Surface.ShallowWater;grid.flags[i]=0}
+    if(river>3.3 && Math.abs(dy-2-Math.sin(dx/5)*1.7)<1.4) {grid.surface[i]=Surface.Dirt;grid.flags[i]|=Flag.Road}
+    if(dx>4&&dx<10&&dy<-3&&dy>-8) {grid.surface[i]=Surface.Tilled;grid.flags[i]|=Flag.Farmland}
+    if(river>3.5 && (x*31+y*17)%113===0) grid.decor[i]=Decor.TallGrass
+    if(river>3.5 && (x*19+y*41)%277===0) grid.decor[i]=Decor.Flower
+  }
+  for(const [x,y,d] of [[64,59,Decor.TreeBirch],[76,61,Decor.TreeBroad],[74,72,Decor.TreeBirch],[58,67,Decor.Reed],[61,57,Decor.Bush],[65,70,Decor.Rock]]) grid.decor[y*512+x]=d
+} else {
+  start=grid.spawn
+  if(params.has('overview')) {
+    const town=grid.towns.find(t=>t.beds?.length)
+    if(town) start=[(town.cx+2)%512,town.cy]
+  }
+  if(params.has('farm')) {
+    const town=grid.towns.find(t=>t.beds?.length)
+    if(!town) throw new Error('No farm compound in preview seed')
+    const bed=town.beds[0]
+    start=[(bed.x+bed.w+0.5)%512,(bed.y+bed.h-2)%512]
+  }
+  if(params.has('shore')) {
+    outer: for(let y=20;y<492;y++) for(let x=20;x<492;x++) {
+      const i=y*512+x
+      if(grid.surface[i]===Surface.Grass && grid.surface[i-4]===Surface.ShallowWater && grid.surface[i-8]===Surface.DeepWater) {start=[x,y];break outer}
+    }
+  }
+  if(params.has('wading')) {
+    let found=false
+    outer: for(let y=20;y<492;y++) for(let x=20;x<488;x++) {
+      const i=y*512+x
+      if(grid.surface[i]===Surface.Grass || grid.surface[i]===Surface.Sand) {
+        if(Array.from({length:5},(_,k)=>!!(grid.flags[i+k]&Flag.Walkable)).every(Boolean) &&
+          [1,2,3,4].every(k=>grid.surface[i+k]===Surface.ShallowWater)) {
+          start=[x+.5,y+.5];found=true;break outer
+        }
+      }
+    }
+    if(!found) throw new Error('No suitable natural wading bank in preview seed')
+  }
+  if(params.has('drywalk')) {
+    let found=false
+    outer: for(let y=20;y<492;y++) for(let x=26;x<486;x++) {
+      // A naturally generated marsh meadow reproduces the original slowdown.
+      if(grid.surface[y*512+x]!==Surface.Marsh) continue
+      let clear=true
+      for(let dy=-2;dy<=2;dy++) for(let dx=-7;dx<=7;dx++) {
+        const i=(y+dy)*512+x+dx
+        if(!(grid.flags[i]&Flag.Walkable) ||
+          ![Surface.Marsh,Surface.Grass,Surface.ForestFloor].includes(grid.surface[i])) clear=false
+      }
+      if(!clear) continue
+      start=[x+.5,y+.5];found=true;break outer
+    }
+    if(!found) throw new Error('No suitable dry meadow in preview seed')
+  }
+}
+if(params.has('lighting')) {
+  grid.generatorVersion='torus-4'
+  grid.surface.fill(Surface.Grass)
+  grid.flags.fill(Flag.Walkable)
+  grid.decor.fill(0)
+  grid.towns.length=0
+  grid.decor[64*512+66]=Decor.TreeBroad
+  const root=[66.5+(hashTile01(0x2b1f,66,64)-.5)*.44,64.5+(hashTile01(0x77c3,66,64)-.5)*.44]
+  // Place the upper body under the canopy projection, with the trunk still visible beside it.
+  start=[root[0]-2.1,root[1]-.3]
+  if(params.get('lighting')==='building') {
+    grid.decor.fill(0)
+    grid.towns.push({id:'lighting-building',name:'Lighting fixture',cx:67,cy:64,radius:6,
+      plaza:new Int32Array(),paths:new Int32Array(),fields:new Int32Array(),gates:new Int32Array(),
+      buildings:[{x:65,y:62,w:4,h:3,kind:'house',art:'cottage',facing:1,storeys:1}]})
+    start=[63.5,64.3]
+  }
+}
+if(params.has('start')) start=params.get('start').split(',').map(Number)
+const save={id:'preview',worldId:'preview',revision:0,day:1,minute:Number(params.get('minute')??720),weather:params.get('weather')??'clear',playerPosition:start,inventory:{},stamina:100,money:0,updatedAt:0}
+window.preview = await mountWorldScene({host:document.querySelector('#world'),grid,save,dayMinutes:Number(params.get('dayMinutes')??20),startPaused:params.has('freeze'),cameraFocus:params.has('reference')?[64.7,64.2]:undefined,forceWebGL:params.get('backend')==='webgl',onMessage:m=>messages.push(m),onSummary:s=>window.summary=s})
+window.previewGrid=grid
+window.previewMessages=messages
+window.ready=true
+</script>
+</html>

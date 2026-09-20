@@ -264,7 +264,7 @@ function signature(g: WorldGrid): string {
 {
   const g = make('transfer-test')
   const list = transferablesOf(g)
-  check('transfer 清单有 6 个 buffer', list.length === 6, `实得 ${list.length}`)
+  check('transfer 清单包含地表和新增水文流向', list.length === 7 && list.includes(g.flow!.buffer as ArrayBuffer), `实得 ${list.length}`)
   check('清单里没有重复 buffer', new Set(list).size === list.length)
   const totalBytes = list.reduce((s, b) => s + b.byteLength, 0)
   check('清单覆盖了全部大数组', totalBytes === gridByteLength(g),

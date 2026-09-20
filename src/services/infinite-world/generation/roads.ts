@@ -46,6 +46,8 @@ export interface RoadParams {
   elevation: Float32Array
   /** 城镇掩码：镇内走村道，代价低 */
   townMask: Uint8Array
+  buildingMask?: Uint8Array
+  parcelMask?: Uint8Array
 }
 
 /** 坡度惩罚系数。越大路越贴着等高线绕 */
@@ -67,13 +69,15 @@ export function buildRoads(p: RoadParams): RoadNetwork {
   const bridges: Bridge[] = []
   const links: { a: number; b: number; ok: boolean }[] = []
   const towns = p.towns
-  if (towns.length < 2) return { road, bridge, bridges, links }
+  if (!p.buildingMask && towns.length < 2) return { road, bridge, bridges, links }
 
   // 镇内路面预先铺好，A* 才知道「进了镇就便宜」
   for (const t of towns) {
     for (let i = 0; i < t.paths.length; i += 2) road[t.paths[i + 1]! * WORLD_SIZE + t.paths[i]!] = 1
     for (let i = 0; i < t.plaza.length; i += 2) road[t.plaza[i + 1]! * WORLD_SIZE + t.plaza[i]!] = 1
   }
+  // A lone village still needs its own paths.
+  if (towns.length < 2) return { road, bridge, bridges, links }
 
   // 坡度预计算：四邻最大高差
   const slope = new Float32Array(N)
@@ -97,7 +101,9 @@ export function buildRoads(p: RoadParams): RoadNetwork {
 
   const costOf = (_t: unknown, x: number, y: number): number => {
     const i = y * WORLD_SIZE + x
+    if (p.buildingMask?.[i]) return Infinity
     if (road[i]) return EXISTING_ROAD_COST
+    if (p.parcelMask?.[i]) return Infinity
     if (p.townMask[i]) return TOWN_COST
     const w = p.water[i]!
     if (w !== WATER.none) return WATER_COST + (w === WATER.deep ? DEEP_EXTRA : 0)

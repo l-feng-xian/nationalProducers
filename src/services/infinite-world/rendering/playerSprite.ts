@@ -4,9 +4,8 @@
  * 每个方向有两套帧：站定播 `idle-<dir>-0..`（缓慢呼吸循环），走动播 `walk-<dir>-0..`。
  * 缺哪套就退回单张站姿（`hero-<dir>`），于是素材分批到位也能跑、到位后自动接上。
  *
- * ## 相位由 worldScene 的 walkPhase 驱动，暂停时冻结
- * walkPhase 每个「未暂停」帧递增（走 / 站都推进），所以站定也能播待机呼吸；
- * 走循环用 WALK_CYCLE_SEC 定节奏、待机用更慢的 IDLE_CYCLE_SEC，都与帧数无关。
+ * playerMotion 按实际路程推进走路相位，待机单独计时；暂停保留序列和帧。
+ * 同一角色所有帧共用画布、脚底锚点和参考高度，不能逐帧重裁再拉成同样高度。
  *
  * ## 不叠程序化颠簸
  * 走 / 待机都由真帧驱动，mesh 恒在原点、位置全靠 shader 从 iFoot 重建。
@@ -15,16 +14,14 @@
  */
 
 import * as THREE from 'three/webgpu'
+import { uniform, type float } from 'three/tsl'
 import { createSpriteMaterial, createSpriteQuad } from './sprite.tsl'
 import type { SpriteAtlas } from './spriteAtlas'
 import type { FrameUniforms } from './frame.tsl'
+import { createProjectedShadowMaterial, projectedShadowMesh } from './projectedShadow.tsl'
 
 /** 主角世界高度（格） */
 const PLAYER_HEIGHT = 1.7
-/** 一整个走循环放完要多少秒 —— 与帧数无关，4 帧和 16 帧节奏一致 */
-const WALK_CYCLE_SEC = 0.75
-/** 一整个待机呼吸循环放完要多少秒（慢，站定时播） */
-const IDLE_CYCLE_SEC = 3.0
 
 export type Facing = 'down' | 'up' | 'left' | 'right'
 const DIRS: Facing[] = ['down', 'up', 'left', 'right']
@@ -42,8 +39,16 @@ interface DirFrames {
 
 export interface PlayerSprite {
   mesh: THREE.Mesh
-  /** 每帧：位置、朝向、动画相位（未暂停时递增秒数）、是否在移动 */
-  update(px: number, py: number, facing: Facing, phase: number, moving: boolean): void
+  shadow: THREE.Mesh
+  /** 每帧：位置、朝向、归一化周期相位 [0,1)、实际是否移动。 */
+  update(
+    px: number,
+    py: number,
+    facing: Facing,
+    phase: number,
+    moving: boolean,
+    depth?: number,
+  ): void
   dispose(): void
 }
 
@@ -93,7 +98,13 @@ export function createPlayerSprite(atlas: SpriteAtlas, frame: FrameUniforms): Pl
   }
 
   const quad = createSpriteQuad()
-  const material = createSpriteMaterial({ atlas: atlas.texture, frame })
+  const submersion = uniform(0)
+  const material = createSpriteMaterial({
+    atlas: atlas.texture,
+    normals: atlas.normalTexture,
+    frame,
+    submersion: submersion as unknown as ReturnType<typeof float>,
+  })
   const geo = new THREE.InstancedBufferGeometry()
   geo.index = quad.index
   geo.setAttribute('position', quad.getAttribute('position'))
@@ -120,31 +131,47 @@ export function createPlayerSprite(atlas: SpriteAtlas, frame: FrameUniforms): Pl
   mesh.matrixAutoUpdate = false
   mesh.renderOrder = 0 // 深度写入解遮挡，不再靠画家序（见 sprite.tsl 文件头）
   mesh.updateMatrix()
+  const shadowMaterial = createProjectedShadowMaterial(atlas.texture, frame)
+  const shadow = projectedShadowMesh(geo, shadowMaterial)
 
-  function update(px: number, py: number, facing: Facing, phase: number, moving: boolean): void {
+  function update(
+    px: number,
+    py: number,
+    facing: Facing,
+    phase: number,
+    moving: boolean,
+    depth = 0,
+  ): void {
+    submersion.value = depth
     const df = frames[facing] ?? frames.down
-    // 走动播 walk（0.75s/循环）、站定播 idle（3s/循环）；phase 只在未暂停时推进
+    // 相位由实际移动距离驱动；暂停时保留当前序列及当前帧。
     const seq = moving ? df.walk : df.idle
-    const cycle = moving ? WALK_CYCLE_SEC : IDLE_CYCLE_SEC
-    const idx = seq.length > 1 ? Math.floor((phase / cycle) * seq.length) % seq.length : 0
+    const idx = seq.length > 1 ? Math.floor(phase * seq.length) % seq.length : 0
     const fr = seq[idx] ?? seq[0]
     if (!fr) return
     foot[0] = px
     foot[1] = py
-    size[0] = PLAYER_HEIGHT / Math.max(0.2, fr.hFrac)
-    layer[0] = fr.layer
     footAttr.needsUpdate = true
-    sizeAttr.needsUpdate = true
-    layerAttr.needsUpdate = true
+    const nextSize = PLAYER_HEIGHT / Math.max(0.2, fr.hFrac)
+    if (size[0] !== Math.fround(nextSize)) {
+      size[0] = nextSize
+      sizeAttr.needsUpdate = true
+    }
+    if (layer[0] !== fr.layer) {
+      layer[0] = fr.layer
+      layerAttr.needsUpdate = true
+    }
   }
 
   return {
     mesh,
+    shadow,
     update,
     dispose() {
       quad.dispose()
       geo.dispose()
       material.dispose()
+      shadowMaterial.dispose()
     },
   }
 }

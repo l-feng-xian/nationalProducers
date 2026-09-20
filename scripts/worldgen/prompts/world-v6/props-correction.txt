@@ -1,0 +1,12 @@
+Use case: precise-object-edit
+Asset type: six independent game sprites for the existing orthographic 2D town.
+Input image 1 is the visual style reference, not a background to reproduce.
+Create exactly a 3-column by 2-row sprite sheet on transparent background, equal 512x512 cells on a 1536x1024 canvas. Each object isolated with generous transparent padding. No text, grid, backdrop, floor patch, outline halo or cast ground shadow.
+Row 1 column 1: a rustic two-post wooden fence module viewed squarely from the front. Both posts exactly vertical and equally tall, their foot points on the exact same horizontal baseline. Two straight horizontal rails. Absolutely no diagonal slope, yaw, isometric angle or perspective convergence.
+Row 1 column 2: matching SIDE fence module seen along north-south in this zero-yaw overhead camera. The two post centers lie on the exact same vertical screen line, one above the other; the long axis is vertical on the image, not diagonal. Narrow visible top rail recedes exactly straight up. Only the small width of the timber is seen from the side. Do not draw a front-facing fence here.
+Row 1 column 3: a low wooden rectangular flower box with small white/yellow daisies and sage green leaves. Front lip and bottom edge exactly horizontal, left and right feet on the same baseline, box sides vertical. Symmetric frontal view with its interior visible from above. No diagonal orientation, no raised right end.
+Row 2 column 1: a low dry cluster of three mossy gray riverbank stones with a few tiny grass roots.
+Row 2 column 2: two separate rounded gray stones, one taller than the other, no plants.
+Row 2 column 3: a low flat mossy gray rock with an irregular edge.
+All three stone cells must contain ONLY solid rock, moss and any specified tiny roots. They must have absolutely NO water, NO turquoise/blue pixels, NO wave rings, NO ripple lines, NO foam, NO surrounding oval, NO ground patch. Water effects are animated separately in the game.
+Preserve the reference's muted gouache palette, fine painterly contour and natural wood/rock texture. Light from upper left. Match the existing town buildings' overhead 2D RPG camera with zero yaw; no isometric projection. This sheet corrects unwanted tilt and baked-in water effects, so axis alignment and clean silhouettes are the highest priority.

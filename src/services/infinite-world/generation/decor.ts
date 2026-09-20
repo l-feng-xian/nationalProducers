@@ -16,11 +16,12 @@
  */
 
 import { WORLD_SIZE } from '../core/constants'
-import { wrapTile } from '../core/torus'
+import { torusDist2, wrapTile } from '../core/torus'
 import type { Fields } from './fields'
 import { Decor, Flag, type DecorId } from './grid'
 import { WATER } from './hydrology'
 import { hashTile01 } from './rng'
+import type { Town } from './settlement'
 
 const N = WORLD_SIZE * WORLD_SIZE
 
@@ -40,6 +41,8 @@ export interface DecorParams {
   flags: Uint16Array
   /** 森林覆盖 0..1 */
   forestDensity: number
+  /** Only torus-2 clears gardens; torus-1 must reproduce its original decorations. */
+  villages?: readonly Town[]
 }
 
 /**
@@ -49,6 +52,30 @@ export interface DecorParams {
  */
 export function deriveDecor(decor: Uint8Array, p: DecorParams): void {
   const { base, fields, water, marsh, flags } = p
+  const garden = new Uint8Array(N)
+  const houseMargin = new Uint8Array(N)
+  for (const town of p.villages ?? []) {
+    const outer = town.radius + 4
+    for (let dy = -outer; dy <= outer; dy++)
+      for (let dx = -outer; dx <= outer; dx++) {
+        const x = wrapTile(town.cx + dx),
+          y = wrapTile(town.cy + dy)
+        const distance = Math.sqrt(torusDist2(x, y, town.cx, town.cy))
+        const t = Math.max(
+          0,
+          Math.min(1, (distance - town.radius * 0.55) / (outer - town.radius * 0.55)),
+        )
+        const i = y * WORLD_SIZE + x
+        garden[i] = Math.max(garden[i]!, Math.round((1 - t * t * (3 - 2 * t)) * 255))
+      }
+    for (const b of town.buildings) {
+      for (let yy = -2; yy < b.h + 3; yy++)
+        for (let xx = -2; xx < b.w + 2; xx++) {
+          const i = wrapTile(b.y + yy) * WORLD_SIZE + wrapTile(b.x + xx)
+          houseMargin[i] = 1
+        }
+    }
+  }
 
   for (let y = 0; y < WORLD_SIZE; y++) {
     const row = y * WORLD_SIZE
@@ -57,7 +84,7 @@ export function deriveDecor(decor: Uint8Array, p: DecorParams): void {
       const f = flags[i]!
 
       // ⚠️ 路面 / 桥 / 广场 / 建筑 / 农田 上一律不落装饰
-      if (f & (Flag.Road | Flag.Bridge | Flag.Plaza | Flag.Building | Flag.Farmland)) continue
+      if (f & (Flag.Road | Flag.Bridge | Flag.Plaza | Flag.Building | Flag.Farmland | Flag.Parcel | Flag.Boundary)) continue
 
       const w = water[i]!
       if (w === WATER.deep) {
@@ -79,6 +106,16 @@ export function deriveDecor(decor: Uint8Array, p: DecorParams): void {
         continue
       }
 
+      // Village lawns keep entrances and roofs legible, fading into the surrounding forest.
+      if (houseMargin[i] || hashTile01(base ^ 0x771d, x, y) < garden[i]! / 255) {
+        const r = hashTile01(base ^ 0x33cc, x, y)
+        if (r < 0.045) decor[i] = Decor.Flower
+        else if (r < 0.06) decor[i] = Decor.Bush
+        else if (r < 0.09) decor[i] = Decor.TallGrass
+        else if (!houseMargin[i] && r > 0.985) decor[i] = Decor.TreeBroad
+        continue
+      }
+
       // 陆地：用域扭曲后的湿度决定森林与否，与 pipeline 的生态判定同源
       const [wx, wy] = fields.warp(x, y)
       const moist = fields.moisture(x + wx, y + wy)
@@ -95,7 +132,12 @@ export function deriveDecor(decor: Uint8Array, p: DecorParams): void {
         const density = 0.3 + Math.min(0.32, (score - 0.2) * 0.9)
         if (r < density) {
           const high = p.elevation[i]! > 0.15
-          decor[i] = high || moist < 0.25 ? Decor.TreeConifer : r < density * 0.45 ? Decor.TreeBirch : Decor.TreeBroad
+          decor[i] =
+            high || moist < 0.25
+              ? Decor.TreeConifer
+              : r < density * 0.45
+                ? Decor.TreeBirch
+                : Decor.TreeBroad
         } else if (r < density + 0.06) decor[i] = Decor.Bush
         else if (r < density + 0.1) decor[i] = Decor.TallGrass
         else if (r < density + 0.12) decor[i] = Decor.Mushroom

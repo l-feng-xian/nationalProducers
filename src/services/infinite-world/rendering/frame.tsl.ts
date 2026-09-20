@@ -26,7 +26,12 @@ import { uniform } from 'three/tsl'
  * 与其为了过类型去 `as any`，不如让 TS 自己从实现里推 —— 类型和运行时都诚实，
  * 将来 @types 补齐了也不用改。
  */
-export function createFrameUniforms() {
+export function createFrameUniforms(
+  lampField = new THREE.DataTexture(new Uint8Array(4), 1, 1),
+  objectShadowMap: THREE.Texture = new THREE.DataTexture(new Uint8Array(4), 1, 1),
+) {
+  lampField.needsUpdate = true
+  objectShadowMap.needsUpdate = true
   return {
     /**
      * 昼夜整体染色。
@@ -38,6 +43,16 @@ export function createFrameUniforms() {
     dayTint: uniform(new THREE.Color(1, 1, 1)),
     /** 阳光强度 0..1。云影与贴地投影按它淡出 */
     sunAmount: uniform(1),
+    /** Ground displacement per unit caster height; opposite to the sun direction. */
+    shadowVector: uniform(new THREE.Vector2(0, -0.42)),
+    shadowOpacity: uniform(0.3),
+    lampAmount: uniform(0),
+    lampField,
+    objectShadowMap,
+    shadowCenter: uniform(new THREE.Vector2()),
+    shadowSpan: uniform(new THREE.Vector2(96, 96)),
+    surfaceLightAmount: uniform(1),
+    receivedShadowAmount: uniform(1),
     /**
      * 噪声原点补偿。
      *

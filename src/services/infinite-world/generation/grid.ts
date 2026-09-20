@@ -58,6 +58,10 @@ export const Flag = {
   Tilled: 1 << 7,
   /** 河道中心线附近，钓鱼点判定用 */
   RiverBank: 1 << 8,
+  /** Planned residential/farm lot; inter-town roads must stay outside it. */
+  Parcel: 1 << 9,
+  /** Low fence or hedge with a matching rendered boundary. */
+  Boundary: 1 << 10,
 } as const
 
 /**
@@ -100,6 +104,8 @@ export interface WorldGrid {
   region: Int32Array
   /** 装饰物 */
   decor: Uint8Array
+  /** D8 hydrology directions, retained for flow-aligned water animation in torus-4. */
+  flow?: Int8Array
 
   /** 城镇（含建筑、街巷、广场、田块） */
   towns: Town[]
@@ -169,6 +175,7 @@ export function transferablesOf(g: WorldGrid): ArrayBuffer[] {
     g.elevation.buffer as ArrayBuffer,
     g.region.buffer as ArrayBuffer,
     g.decor.buffer as ArrayBuffer,
+    ...(g.flow ? [g.flow.buffer as ArrayBuffer] : []),
   ]
 }
 
@@ -191,6 +198,7 @@ export function gridByteLength(g: WorldGrid): number {
     g.biome.byteLength +
     g.elevation.byteLength +
     g.region.byteLength +
-    g.decor.byteLength
+    g.decor.byteLength +
+    (g.flow?.byteLength ?? 0)
   )
 }

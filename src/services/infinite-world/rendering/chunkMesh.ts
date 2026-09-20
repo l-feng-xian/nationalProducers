@@ -25,6 +25,8 @@ import type { MaskTextures } from './atlas'
 import type { GroundTextures } from './groundTextures'
 import type { GroundField } from './groundField'
 import type { SpriteAtlas } from './spriteAtlas'
+import { createPlotMaterial } from './plot.tsl'
+import { createProjectedShadowMaterial, projectedShadowMesh } from './projectedShadow.tsl'
 
 export interface ChunkObject {
   cx: number
@@ -51,6 +53,9 @@ export interface ChunkMeshDeps {
   spriteAtlas: SpriteAtlas
   spriteQuad: THREE.BufferGeometry
   spriteMaterial: THREE.MeshBasicNodeMaterial
+  largeSpriteMaterial?: THREE.MeshBasicNodeMaterial
+  shadowMaterial: THREE.MeshBasicNodeMaterial
+  largeShadowMaterial?: THREE.MeshBasicNodeMaterial
   frame: FrameUniforms
 }
 
@@ -63,8 +68,35 @@ export function createChunkMeshDeps(
 ): ChunkMeshDeps {
   const quad = createGroundQuad()
   const spriteQuad = createSpriteQuad()
-  const spriteMaterial = createSpriteMaterial({ atlas: spriteAtlas.texture, frame })
+  const spriteMaterial = createSpriteMaterial({
+    atlas: spriteAtlas.texture,
+    normals: spriteAtlas.normalTexture,
+    frame,
+  })
+  const largeSpriteMaterial = spriteAtlas.largeTexture
+    ? createSpriteMaterial({
+        atlas: spriteAtlas.largeTexture,
+        normals: spriteAtlas.largeNormalTexture,
+        frame,
+      })
+    : undefined
+  const shadowMaterial = createProjectedShadowMaterial(spriteAtlas.texture, frame)
+  const largeShadowMaterial = spriteAtlas.largeTexture
+    ? createProjectedShadowMaterial(spriteAtlas.largeTexture, frame)
+    : undefined
   const materials = new Map<string, THREE.MeshBasicNodeMaterial>()
+  for (const kind of [
+    'yard',
+    'bed',
+    'shadow',
+    'shadow-canopy',
+    'shadow-building',
+    'stone',
+    'step',
+    'bridge-x',
+    'bridge-y',
+  ] as const)
+    materials.set(kind, createPlotMaterial(kind, ground, frame))
 
   // 底色层：世界空间软混合草地/林地/湿地（不透明，见 createBaseMaterial）
   materials.set(
@@ -72,6 +104,7 @@ export function createChunkMeshDeps(
     createBaseMaterial({
       ground: ground.array,
       groundField: groundField.texture,
+      contours: groundField.contours,
       frame,
       naturals: {
         grass: naturalDescriptor('grass-meadow', ground.palette),
@@ -86,8 +119,9 @@ export function createChunkMeshDeps(
       materials.set(
         def.id,
         createWaterMaterial({
-          maskAtlas: masks.get(def.maskSet),
-          groundField: groundField.texture,
+          contours: groundField.contours,
+          flow: groundField.flow,
+          ground,
           frame,
           order: def.order,
         }),
@@ -99,6 +133,11 @@ export function createChunkMeshDeps(
       createGroundMaterial({
         maskAtlas: masks.get(def.maskSet),
         ground: ground.array,
+        contours: groundField.contours,
+        contourChannel:
+          def.id === 'cobble' ? 'r' : def.id === 'dirt' ? 'g' : def.id === 'bank' ? 'b' : undefined,
+        bank: def.id === 'bank',
+        cobble: def.id === 'cobble',
         frame,
         order: def.order,
         transparent: true,
@@ -106,13 +145,29 @@ export function createChunkMeshDeps(
     )
   }
 
-  return { quad, materials, masks, ground, groundField, spriteAtlas, spriteQuad, spriteMaterial, frame }
+  return {
+    quad,
+    materials,
+    masks,
+    ground,
+    groundField,
+    spriteAtlas,
+    spriteQuad,
+    spriteMaterial,
+    largeSpriteMaterial,
+    shadowMaterial,
+    largeShadowMaterial,
+    frame,
+  }
 }
 
 export function disposeChunkMeshDeps(deps: ChunkMeshDeps): void {
   deps.quad.dispose()
   deps.spriteQuad.dispose()
   deps.spriteMaterial.dispose()
+  deps.largeSpriteMaterial?.dispose()
+  deps.shadowMaterial.dispose()
+  deps.largeShadowMaterial?.dispose()
   for (const m of deps.materials.values()) m.dispose()
   deps.materials.clear()
 }
@@ -138,11 +193,55 @@ export function createChunkObject(build: ChunkBuild, deps: ChunkMeshDeps): Chunk
     meshes.push(mesh)
   }
 
-  // ── 装饰精灵：一块一个实例化公告牌批 ──
-  if (build.sprites.count > 0) {
-    const geo = makeSpriteGeometry(deps.spriteQuad, build.sprites)
+  for (const plot of build.plots) {
+    const geo = new THREE.InstancedBufferGeometry()
+    geo.index = deps.quad.index
+    for (const name of ['position', 'uv', 'normal'])
+      geo.setAttribute(name, deps.quad.getAttribute(name))
+    geo.setAttribute('iCenter', new THREE.InstancedBufferAttribute(plot.center, 2))
+    geo.setAttribute('iExtent', new THREE.InstancedBufferAttribute(plot.size, 2))
+    geo.setAttribute('iAngle', new THREE.InstancedBufferAttribute(plot.angle, 1))
+    geo.instanceCount = plot.count
     owned.push(geo)
-    const mesh = new THREE.Mesh(geo, deps.spriteMaterial)
+    const mesh = new THREE.Mesh(geo, deps.materials.get(plot.kind))
+    mesh.frustumCulled = false
+    mesh.matrixAutoUpdate = false
+    mesh.renderOrder = plot.kind.startsWith('bridge')
+      ? 11
+      : plot.kind.startsWith('shadow')
+        ? 10
+        : plot.kind === 'stone' || plot.kind === 'step'
+          ? 9
+          : 8
+    mesh.updateMatrix()
+    group.add(mesh)
+    meshes.push(mesh)
+  }
+
+  // ── 装饰精灵：一块一个实例化公告牌批 ──
+  for (const large of [false, true]) {
+    const selected = []
+    for (let k = 0; k < build.sprites.count; k++)
+      if (build.sprites.layer[k]! >= 1024 === large) selected.push(k)
+    if (!selected.length) continue
+    const s = build.sprites
+    const sprites = {
+      count: selected.length,
+      foot: Float32Array.from(selected.flatMap((k) => [s.foot[k * 2]!, s.foot[k * 2 + 1]!])),
+      size: Float32Array.from(selected.map((k) => s.size[k]!)),
+      layer: Float32Array.from(selected.map((k) => s.layer[k]! - (large ? 1024 : 0))),
+      flip: Float32Array.from(selected.map((k) => s.flip[k]!)),
+      sway: Float32Array.from(selected.map((k) => s.sway[k]!)),
+    }
+    const geo = makeSpriteGeometry(deps.spriteQuad, sprites)
+    owned.push(geo)
+    const shadow = projectedShadowMesh(
+      geo,
+      (large ? deps.largeShadowMaterial : deps.shadowMaterial)!,
+    )
+    group.add(shadow)
+    meshes.push(shadow)
+    const mesh = new THREE.Mesh(geo, large ? deps.largeSpriteMaterial : deps.spriteMaterial)
     mesh.frustumCulled = false
     mesh.matrixAutoUpdate = false
     // 精灵现在是不透明+深度写入，遮挡由 z-buffer 解（见 sprite.tsl 文件头）。
