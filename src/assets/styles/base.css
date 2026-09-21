@@ -390,7 +390,7 @@ a:hover {
   max-width: 100%;
   padding: var(--cbx-space-3) var(--cbx-space-4);
   border-radius: var(--cbx-radius-lg);
-  font-size: var(--cbx-fs-md);
+  font-size: var(--cbx-message-fs); /* 设置页「消息字体大小」滑块控制 */
   line-height: var(--cbx-lh);
   overflow-wrap: anywhere;
 }

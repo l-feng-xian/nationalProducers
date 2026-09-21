@@ -3,6 +3,7 @@
  */
 
 import type { GroupRelation, GroupNodeLayout } from './group'
+import type { MessageImage } from './image'
 
 export interface MessageExtra {
   /** 一次多发言人批次的批号 → 支持「重掷整批」 */
@@ -49,6 +50,8 @@ export interface ChatMessage {
   original_avatar?: string
   /** blobs store id */
   force_avatar?: string
+  /** 独立图片附件，保留消息正文与 swipe；图片不作为文本提示词发送。 */
+  images?: MessageImage[]
 }
 
 /** 定时效果的一条记录。key = `${bookId}.${uid}` */

@@ -6,14 +6,27 @@ import CbxToastHost from '@/components/ui/CbxToastHost.vue'
 import CbxConfirmHost from '@/components/ui/CbxConfirmHost.vue'
 import NewChatSheet from '@/components/chat/NewChatSheet.vue'
 import { useUiStore } from '@/stores/ui'
+import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
 const route = useRoute()
+const settings = useSettingsStore()
 
 // 移动端：路由变化自动收起抽屉
 watch(
   () => route.fullPath,
   () => ui.closeDrawer(),
+)
+
+// 对话消息字号：写入 :root 变量（.cbx-bubble 使用），设置页拖动滑块即时生效。
+// 手改备份可能带越界值，这里统一钳回 10–30px。
+watch(
+  () => settings.settings.chat.messageFontSize,
+  (size) => {
+    const clamped = Math.min(30, Math.max(10, Math.round(Number(size) || 16)))
+    document.documentElement.style.setProperty('--cbx-message-fs', `${clamped}px`)
+  },
+  { immediate: true },
 )
 
 /**

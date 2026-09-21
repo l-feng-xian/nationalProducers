@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  GitBranch,
+  ImagePlus,
+  Pencil,
+  RotateCcw,
+  Trash2,
+} from 'lucide-vue-next'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useLongPress } from '@/composables/useLongPress'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
+import MessageImage from './MessageImage.vue'
 import type { ChatMessage } from '@/types/chat'
 
 const props = defineProps<{
@@ -14,6 +25,7 @@ const props = defineProps<{
   avatarBlobId?: string | undefined
   /** 1vN 角色区分色索引 1..8 */
   accent?: number | undefined
+  canGenerateImage?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -24,10 +36,15 @@ const emit = defineEmits<{
   remove: []
   removeFrom: []
   branch: []
+  generateImage: []
+  imageLoaded: []
 }>()
 
 const html = computed(() => renderMarkdown(props.msg.mes))
 const isUser = computed(() => props.msg.is_user)
+const timeLabel = computed(() =>
+  new Date(props.msg.send_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+)
 const hasSwipes = computed(() => (props.msg.swipes?.length ?? 0) > 1)
 const swipeLabel = computed(() => {
   const n = props.msg.swipes?.length ?? 0
@@ -74,7 +91,11 @@ function act(fn: () => void) {
     <CbxAvatar v-if="!isUser" :blob-id="avatarBlobId" :name="msg.name" size="sm" />
 
     <div class="col">
-      <div v-if="showName && !isUser" class="who">{{ msg.name }}</div>
+      <div class="message-meta">
+        <span v-if="showName && !isUser" class="who">{{ msg.name }}</span>
+        <span v-else-if="isUser" class="who">你</span>
+        <span class="message-time">{{ timeLabel }}</span>
+      </div>
 
       <div
         class="cbx-bubble"
@@ -97,24 +118,76 @@ function act(fn: () => void) {
             <span class="cbx-typing__dot" />
           </div>
           <span v-if="streaming && msg.mes" class="caret" />
+          <MessageImage
+            v-for="image in msg.images ?? []"
+            :key="image.blobId"
+            :image="image"
+            @loaded="emit('imageLoaded')"
+          />
         </template>
       </div>
 
       <div v-if="!editing" class="tools">
-        <button class="cbx-icon-btn tool" title="复制" @click="copy">⧉</button>
-        <button class="cbx-icon-btn tool" title="编辑" @click="startEdit">✎</button>
+        <button
+          v-if="canGenerateImage"
+          class="cbx-icon-btn tool"
+          title="根据此处对话生成配图"
+          aria-label="根据此处对话生成配图"
+          @click="emit('generateImage')"
+        >
+          <ImagePlus :size="14" aria-hidden="true" />
+        </button>
+        <button class="cbx-icon-btn tool" title="复制" aria-label="复制" @click="copy">
+          <Copy :size="14" aria-hidden="true" />
+        </button>
+        <button class="cbx-icon-btn tool" title="编辑" aria-label="编辑" @click="startEdit">
+          <Pencil :size="14" aria-hidden="true" />
+        </button>
         <template v-if="!isUser">
-          <button class="cbx-icon-btn tool" title="重新生成" @click="emit('regenerate')">↻</button>
+          <button
+            class="cbx-icon-btn tool"
+            title="重新生成"
+            aria-label="重新生成"
+            @click="emit('regenerate')"
+          >
+            <RotateCcw :size="14" aria-hidden="true" />
+          </button>
           <template v-if="hasSwipes">
-            <button class="cbx-icon-btn tool" title="上一条" @click="emit('swipe', -1)">‹</button>
+            <button
+              class="cbx-icon-btn tool"
+              title="上一条"
+              aria-label="上一条"
+              @click="emit('swipe', -1)"
+            >
+              <ChevronLeft :size="16" aria-hidden="true" />
+            </button>
             <span class="swipe-n">{{ swipeLabel }}</span>
-            <button class="cbx-icon-btn tool" title="下一条" @click="emit('swipe', 1)">›</button>
+            <button
+              class="cbx-icon-btn tool"
+              title="下一条"
+              aria-label="下一条"
+              @click="emit('swipe', 1)"
+            >
+              <ChevronRight :size="16" aria-hidden="true" />
+            </button>
           </template>
         </template>
-        <button class="cbx-icon-btn tool" title="从这里分支出新对话" @click="emit('branch')">
-          ⑂
+        <button
+          class="cbx-icon-btn tool"
+          title="从这里分支出新对话"
+          aria-label="从这里分支出新对话"
+          @click="emit('branch')"
+        >
+          <GitBranch :size="14" aria-hidden="true" />
         </button>
-        <button class="cbx-icon-btn tool" title="删除本条" @click="emit('remove')">✕</button>
+        <button
+          class="cbx-icon-btn tool tool--danger"
+          title="删除本条"
+          aria-label="删除本条"
+          @click="emit('remove')"
+        >
+          <Trash2 :size="14" aria-hidden="true" />
+        </button>
         <span v-if="msg.extra?.stopped" class="cbx-badge cbx-badge--warning">已中断</span>
       </div>
     </div>
@@ -125,6 +198,13 @@ function act(fn: () => void) {
         <div class="sheet cbx-safe-b">
           <button class="sheet__item" @click="copy">复制</button>
           <button class="sheet__item" @click="startEdit">编辑</button>
+          <button
+            v-if="canGenerateImage"
+            class="sheet__item"
+            @click="act(() => emit('generateImage'))"
+          >
+            根据此处对话生成配图
+          </button>
           <button v-if="!isUser" class="sheet__item" @click="act(() => emit('regenerate'))">
             重新生成
           </button>
@@ -147,7 +227,7 @@ function act(fn: () => void) {
   display: flex;
   gap: var(--cbx-space-3);
   align-items: flex-start;
-  margin-bottom: var(--cbx-space-5);
+  margin-bottom: var(--cbx-space-6);
 }
 .row--user {
   flex-direction: row-reverse;
@@ -156,16 +236,62 @@ function act(fn: () => void) {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-width: min(100%, 680px);
+  max-width: min(calc(100% - 44px), 680px);
 }
 .row--user .col {
   align-items: flex-end;
+  max-width: min(88%, 680px);
+}
+.message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cbx-space-2);
+  margin-bottom: 6px;
+  padding: 0 var(--cbx-space-1);
+  font-size: var(--cbx-fs-xs);
 }
 .who {
-  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-secondary);
+  font-weight: var(--cbx-fw-medium);
+}
+.message-time {
   color: var(--cbx-text-tertiary);
-  margin-bottom: var(--cbx-space-1);
-  padding-left: var(--cbx-space-1);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.cbx-bubble {
+  padding: 14px 18px;
+  line-height: 1.8;
+}
+.cbx-bubble--ai {
+  background: var(--cbx-bg);
+  border-color: color-mix(in srgb, var(--cbx-border) 70%, transparent);
+  border-top-left-radius: var(--cbx-radius-sm);
+  box-shadow: 0 2px 8px var(--cbx-brand-subtle);
+}
+.cbx-bubble--user {
+  border-top-right-radius: var(--cbx-radius-sm);
+  box-shadow: 0 3px 10px var(--cbx-brand-light);
+}
+.cbx-bubble--user :deep(a),
+.cbx-bubble--user :deep(blockquote),
+.cbx-bubble--user :deep(h1),
+.cbx-bubble--user :deep(h2),
+.cbx-bubble--user :deep(h3),
+.cbx-bubble--user :deep(h4),
+.cbx-bubble--user :deep(h5),
+.cbx-bubble--user :deep(h6) {
+  color: inherit;
+}
+.cbx-bubble--user :deep(a) {
+  text-decoration: underline;
+}
+.cbx-bubble--user :deep(blockquote) {
+  border-color: currentColor;
+}
+.row > :deep(.cbx-avatar) {
+  margin-top: 2px;
+  box-shadow: 0 0 0 3px var(--cbx-bg);
 }
 .caret {
   display: inline-block;
@@ -183,7 +309,8 @@ function act(fn: () => void) {
 }
 
 .edit {
-  min-width: 260px;
+  width: min(420px, 100%);
+  min-width: min(260px, 100%);
   background: var(--cbx-bg);
 }
 .edit__ops {
@@ -206,13 +333,72 @@ function act(fn: () => void) {
   opacity: 0;
   transition: opacity var(--cbx-transition);
 }
-.row:hover .tools {
+.row:hover .tools,
+.row:focus-within .tools {
   opacity: 1;
 }
 .tool {
   width: 28px;
   height: 28px;
   font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-tertiary);
+}
+.tool:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
+}
+.tool--danger:hover {
+  color: var(--cbx-error);
+}
+@media (max-width: 767px) {
+  .row {
+    gap: var(--cbx-space-2);
+  }
+  /* 头像与姓名在第一行，气泡横跨两列，释放原先留给头像的侧边宽度。 */
+  .row:not(.row--user) {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+  .row:not(.row--user) .col {
+    display: contents;
+  }
+  .row > :deep(.cbx-avatar) {
+    grid-column: 1;
+    grid-row: 1;
+    margin-top: 0;
+  }
+  .row:not(.row--user) .message-meta {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    min-width: 0;
+    margin-bottom: 0;
+    padding: 0;
+  }
+  .who {
+    overflow-wrap: anywhere;
+  }
+  .row:not(.row--user) .cbx-bubble,
+  .row:not(.row--user) .tools {
+    grid-column: 1 / -1;
+    justify-self: start;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .row--user .col {
+    max-width: 100%;
+  }
+  .cbx-bubble {
+    padding: 10px 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+  .tools {
+    transition: none;
+  }
 }
 .swipe-n {
   font-size: var(--cbx-fs-xs);

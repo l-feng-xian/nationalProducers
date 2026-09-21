@@ -8,6 +8,7 @@ import { useCharactersStore, defaultAssistantCharacter } from './characters'
 import { useSettingsStore } from './settings'
 import { useGroupsStore } from './groups'
 import { toPlain } from '@/utils/plain'
+import type { GeneratedImage } from '@/types/image'
 import {
   invalidateDeletedSeq,
   invalidateFromSeq,
@@ -189,6 +190,11 @@ export const useChatsStore = defineStore('chats', () => {
     messages.value = [...messages.value, row]
     await refreshMeta(meta.id)
     return row
+  }
+
+  async function attachImage(chatId: string, messageId: string, image: GeneratedImage) {
+    const row = await messagesRepo.attachImage(chatId, messageId, image)
+    if (current.value?.id === chatId) patchLocal(messageId, { images: row.images })
   }
 
   async function appendAi(name: string, characterId: string): Promise<ChatMessage | null> {
@@ -384,6 +390,7 @@ export const useChatsStore = defineStore('chats', () => {
     createSolo,
     createGroup,
     appendUser,
+    attachImage,
     appendAi,
     patchLocal,
     persist,

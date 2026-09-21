@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ImagePlus, MessageCircle, Plus, ScanText, UsersRound } from 'lucide-vue-next'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatComposer from '@/components/chat/ChatComposer.vue'
 import PromptPreview from '@/components/chat/PromptPreview.vue'
+import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
+import { dialogueImagePrompt } from '@/services/image/prompts'
+import type { CharacterImageReference, GeneratedImage } from '@/types/image'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useGroupsStore } from '@/stores/groups'
@@ -24,6 +28,52 @@ const groups = useGroupsStore()
 const settings = useSettingsStore()
 const gen = useGenerationStore()
 const toast = useToast()
+const imageTarget = ref<{
+  chatId: string
+  messageId: string
+  prompt: string
+  references: CharacterImageReference[]
+} | null>(null)
+const canGenerateImage = computed(() =>
+  chats.messages.some((m) => !m.is_system && !m.exclude && m.mes.trim()),
+)
+
+function openImage(messageId?: string) {
+  if (!chats.current || gen.busy) return
+  const rows = chats.messages
+  const target = messageId
+    ? rows.find((m) => m.id === messageId)
+    : [...rows].reverse().find((m) => !m.is_system && !m.exclude && m.mes.trim())
+  if (!target || target.is_system || target.exclude || !target.mes.trim()) return
+  const members = isGroup.value
+    ? groupMembers.value
+    : [chars.byId(chats.current.characterId)].filter((c) => !!c)
+  const references = members.map((character) => ({
+    characterId: character.id,
+    name: character.data.name,
+    blobId: character.avatarBlobId,
+  }))
+  imageTarget.value = {
+    chatId: chats.current.id,
+    messageId: target.id,
+    prompt: dialogueImagePrompt(target, references),
+    references,
+  }
+}
+
+async function applyImage(image: GeneratedImage) {
+  const target = imageTarget.value
+  if (!target) throw new Error('对话已切换，请重新生成配图')
+  await chats.attachImage(target.chatId, target.messageId, image)
+  toast.success('配图已保存到对话')
+}
+
+watch(
+  () => route.params['id'],
+  () => {
+    imageTarget.value = null
+  },
+)
 
 const scroller = ref<HTMLElement | null>(null)
 const { scrollToBottom, follow } = useAutoScroll(scroller)
@@ -131,7 +181,7 @@ async function newChat() {
 </script>
 
 <template>
-  <AppTopbar :title="title">
+  <AppTopbar :title="title" class="chat-topbar">
     <template #actions>
       <span
         v-if="settings.settings.chat.showTokens && gen.lastPrompt"
@@ -141,21 +191,44 @@ async function newChat() {
       </span>
       <button
         v-if="hasChat"
-        class="cbx-btn cbx-btn--ghost"
+        class="cbx-btn cbx-btn--ghost topbar-action"
+        title="根据当前对话与角色参考图生成配图"
+        aria-label="生成对话配图"
+        :disabled="gen.busy || !canGenerateImage"
+        @click="openImage()"
+      >
+        <ImagePlus :size="17" aria-hidden="true" /><span>生成配图</span>
+      </button>
+      <button
+        v-if="hasChat"
+        class="cbx-btn cbx-btn--ghost topbar-action"
         title="看看到底发了什么给模型"
+        aria-label="预览提示词"
         @click="previewOpen = true"
       >
-        预览提示词
+        <ScanText :size="17" aria-hidden="true" /><span>预览提示词</span>
       </button>
-      <button class="cbx-btn cbx-btn--soft" @click="newChat">＋ 新对话</button>
+      <button
+        class="cbx-btn cbx-btn--soft topbar-action"
+        aria-label="新对话"
+        title="新对话"
+        @click="newChat"
+      >
+        <Plus :size="18" aria-hidden="true" /><span>新对话</span>
+      </button>
     </template>
   </AppTopbar>
 
-  <div ref="scroller" class="cbx-scroll body">
-    <div v-if="!hasChat" class="cbx-empty">
-      <span class="cbx-empty__icon">💬</span>
-      <span class="cbx-empty__title">开始一段对话</span>
-      <span class="cbx-empty__desc">直接在下方输入即可，或先到「角色」创建一个角色</span>
+  <div ref="scroller" class="cbx-scroll body" :class="{ 'body--empty': !chats.messages.length }">
+    <div v-if="!chats.messages.length" class="welcome">
+      <div class="welcome-icon">
+        <MessageCircle :size="32" :stroke-width="1.5" aria-hidden="true" />
+      </div>
+      <h2>从一句话，开始新的故事</h2>
+      <p>分享一个想法，或向你的角色打个招呼。<br />每一段对话，都从这里开始。</p>
+      <RouterLink to="/characters" class="welcome-link"
+        ><UsersRound :size="16" aria-hidden="true" />选择一个角色</RouterLink
+      >
     </div>
 
     <div v-else class="stream">
@@ -167,6 +240,9 @@ async function newChat() {
         :show-name="!m.is_user"
         :avatar-blob-id="chars.byId(m.original_avatar)?.avatarBlobId"
         :accent="isGroup ? accentOf(m.original_avatar) : undefined"
+        :can-generate-image="!gen.busy && !m.is_system && !m.exclude && !!m.mes.trim()"
+        @generate-image="openImage(m.id)"
+        @image-loaded="follow"
         @regenerate="gen.regenerate()"
         @swipe="(d) => onSwipe(m.id, d)"
         @copy="toast.success('已复制')"
@@ -193,6 +269,16 @@ async function newChat() {
   </div>
 
   <PromptPreview v-if="previewOpen" @close="previewOpen = false" />
+  <ImageGenerationDialog
+    v-if="imageTarget"
+    title="生成对话配图"
+    :initial-prompt="imageTarget.prompt"
+    :references="imageTarget.references"
+    require-references
+    apply-label="保存到对话"
+    :apply="applyImage"
+    @close="imageTarget = null"
+  />
 
   <ChatComposer
     :busy="gen.busy"
@@ -205,7 +291,74 @@ async function newChat() {
 <style scoped>
 .body {
   flex: 1;
-  padding: var(--cbx-space-5);
+  padding: var(--cbx-space-8) var(--cbx-space-6) var(--cbx-space-4);
+  background: radial-gradient(ellipse at 50% 0, var(--cbx-brand-subtle), transparent 65%);
+}
+.body--empty {
+  display: grid;
+  place-items: center;
+}
+.welcome {
+  padding: var(--cbx-space-8) var(--cbx-space-4);
+  text-align: center;
+}
+.welcome-icon {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto var(--cbx-space-6);
+  border: 1px solid var(--cbx-brand-light-hover);
+  border-radius: var(--cbx-radius-xl);
+  color: var(--cbx-brand);
+  background: var(--cbx-bg);
+  box-shadow: var(--cbx-shadow-sm);
+  transform: rotate(-6deg);
+}
+.welcome-icon svg {
+  transform: rotate(6deg);
+}
+.welcome h2 {
+  font-size: clamp(20px, 2.5vw, 28px);
+  font-weight: var(--cbx-fw-medium);
+  letter-spacing: 0.02em;
+}
+.welcome p {
+  margin: var(--cbx-space-3) 0 var(--cbx-space-6);
+  color: var(--cbx-text-tertiary);
+  font-size: var(--cbx-fs-sm);
+  line-height: 1.9;
+}
+.welcome-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  padding: var(--cbx-space-2) var(--cbx-space-4);
+  border-radius: var(--cbx-radius-pill);
+  background: var(--cbx-brand-subtle);
+  color: var(--cbx-brand);
+  font-size: var(--cbx-fs-sm);
+  text-decoration: none;
+}
+.welcome-link:hover {
+  background: var(--cbx-brand-light-hover);
+}
+.chat-topbar :deep(.title) {
+  min-width: 0;
+}
+.chat-topbar :deep(.actions) {
+  flex-shrink: 0;
+}
+.topbar-action {
+  gap: var(--cbx-space-2);
+}
+.topbar-action svg {
+  flex-shrink: 0;
+}
+.topbar-action:focus-visible,
+.welcome-link:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 3px;
 }
 .stream {
   max-width: var(--cbx-read-w);
@@ -231,6 +384,24 @@ async function newChat() {
 }
 
 @media (max-width: 767px) {
+  .topbar-action {
+    width: 40px;
+    padding: 0;
+  }
+  .topbar-action span {
+    display: none;
+  }
+  .chat-topbar :deep(.cbx-badge) {
+    display: none;
+  }
+  .welcome {
+    padding: var(--cbx-space-4) 0;
+  }
+  .welcome-icon {
+    width: 60px;
+    height: 60px;
+    margin-bottom: var(--cbx-space-4);
+  }
   .tray {
     padding-left: var(--cbx-space-3);
     padding-right: var(--cbx-space-3);

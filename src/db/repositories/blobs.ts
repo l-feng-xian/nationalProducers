@@ -26,6 +26,7 @@ export async function remove(id: string): Promise<void> {
 
 /** 指向 blobs 的记录形状。只取用得着的字段，免得把整套业务类型拖进来 */
 export interface BlobRefSource {
+  messages?: { images?: { blobId: string }[]; force_avatar?: string }[]
   characters?: { avatarBlobId?: string | undefined; depthBlobId?: string | undefined }[]
   groups?: { avatarBlobId?: string | undefined }[]
   gameworlds?: { npcs: { avatarBlobId?: string | undefined }[] }[]
@@ -43,6 +44,10 @@ export interface BlobRefSource {
  */
 export function collectBlobRefs(src: BlobRefSource): Set<string> {
   const out = new Set<string>()
+  for (const message of src.messages ?? []) {
+    if (message.force_avatar) out.add(message.force_avatar)
+    for (const image of message.images ?? []) if (image.blobId) out.add(image.blobId)
+  }
   for (const c of src.characters ?? []) {
     if (c.avatarBlobId) out.add(c.avatarBlobId)
     if (c.depthBlobId) out.add(c.depthBlobId)
@@ -51,7 +56,8 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
     if (g.avatarBlobId) out.add(g.avatarBlobId)
   }
   if (src.persona?.avatarBlobId) out.add(src.persona.avatarBlobId)
-  for (const world of src.gameworlds ?? []) for (const npc of world.npcs) if (npc.avatarBlobId) out.add(npc.avatarBlobId)
+  for (const world of src.gameworlds ?? [])
+    for (const npc of world.npcs) if (npc.avatarBlobId) out.add(npc.avatarBlobId)
   return out
 }
 
@@ -60,6 +66,7 @@ export async function gc(): Promise<number> {
   const db = await getDb()
   const referenced = collectBlobRefs({
     characters: await db.getAll('characters'),
+    messages: await db.getAll('messages'),
     groups: await db.getAll('groups'),
     gameworlds: await db.getAll('gameworlds'),
     persona: (await db.get('settings', 'app'))?.persona,

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
+import ModelServices from '@/components/models/ModelServices.vue'
+import ImageModelServices from '@/components/models/ImageModelServices.vue'
 import { useModelsStore } from '@/stores/models'
 import { formatBytes, storageEstimate } from '@/services/io/backup'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -67,6 +69,8 @@ async function remove(id: string) {
 
     <div class="cbx-scroll body">
       <div class="cbx-form-col col">
+        <ModelServices />
+        <ImageModelServices />
         <section class="cbx-card intro">
           <h3>嵌入模型</h3>
           <p class="note">

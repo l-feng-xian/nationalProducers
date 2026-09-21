@@ -88,7 +88,7 @@ async function send(text: string) {
   const t = text.trim()
   if (!t || busy.value) return
   if (!settings.isConfigured) {
-    error.value = '还没配置模型服务，请先到「设置」里填写接口地址与密钥。'
+    error.value = '还没配置模型服务，请先到「模型管理」里添加并选择服务。'
     return
   }
   messages.value.push({ role: 'user', text: t })
@@ -101,7 +101,7 @@ async function send(text: string) {
     const cfg: { baseUrl: string; apiKey?: string; proxyPrefix?: string; headers?: Record<string, string> } = {
       baseUrl: p.baseUrl,
     }
-    const key = await settings.getApiKey()
+    const key = await settings.getApiKey(p.secretRef)
     if (key) cfg.apiKey = key
     if (p.proxyPrefix) cfg.proxyPrefix = p.proxyPrefix
     if (Object.keys(p.extraHeaders).length) cfg.headers = p.extraHeaders

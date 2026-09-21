@@ -13,6 +13,7 @@ import { cleanGroupMessage, groupStopStrings } from '@/services/group/cards'
 import { group_activation_strategy, type Group } from '@/types/group'
 import type { Character } from '@/types/character'
 import type { ChatMeta } from '@/types/chat'
+import type { ProviderSettings } from '@/types/settings'
 import { toPlain } from '@/utils/plain'
 import { useToast } from '@/composables/useToast'
 import { chatsRepo } from '@/db/repositories'
@@ -77,13 +78,14 @@ export const useGenerationStore = defineStore('generation', () => {
     memoryBusy = true
     memoryController = new AbortController()
     try {
-      const cfg = await providerConfig()
+      const p = settings.settings.provider
+      const cfg = await providerConfig(p)
       const outcome = await extractStateCard({
         prev: card,
         // 从**尾部**截断：保留最新的对话，旧的那头本来就已经被上一次提炼覆盖过
         dialogue: dialogue.slice(-mem.dialogueCharLimit),
         cfg,
-        model: mem.model.trim() || settings.settings.provider.model,
+        model: mem.model.trim() || p.model,
         signal: memoryController.signal,
       })
       const merged = mergeStateCard(card, outcome, last.seq)
@@ -203,11 +205,10 @@ export const useGenerationStore = defineStore('generation', () => {
     return res
   }
 
-  async function providerConfig(): Promise<ProviderConfig> {
+  async function providerConfig(p: ProviderSettings): Promise<ProviderConfig> {
     const settings = useSettingsStore()
-    const p = settings.settings.provider
     const cfg: ProviderConfig = { baseUrl: p.baseUrl }
-    const key = await settings.getApiKey()
+    const key = await settings.getApiKey(p.secretRef)
     if (key) cfg.apiKey = key
     if (p.proxyPrefix) cfg.proxyPrefix = p.proxyPrefix
     if (Object.keys(p.extraHeaders).length) cfg.headers = p.extraHeaders
@@ -299,7 +300,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
     const p = settings.settings.provider
     if (!p.baseUrl || !p.model) {
-      toast.error('请先在「设置 → 模型服务」里填写 baseURL 与模型名')
+      toast.error('请先在「模型管理 → 模型服务」里添加并选择服务')
       return
     }
 
@@ -331,7 +332,7 @@ export const useGenerationStore = defineStore('generation', () => {
       generated = true
       // ↑ 之后再按停止不必单独判：fetch 对已中断的信号会立刻 reject，
       //   走下面 catch 的 aborted 分支，空占位行会被 removeRowFrom 删掉
-      const cfg = await providerConfig()
+      const cfg = await providerConfig(p)
       const req = {
         model: p.model,
         messages: built.messages,
@@ -446,7 +447,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
     const p = settings.settings.provider
     if (!p.baseUrl || !p.model) {
-      toast.error('请先在「设置 → 模型服务」里填写 baseURL 与模型名')
+      toast.error('请先在「模型管理 → 模型服务」里添加并选择服务')
       return
     }
 
@@ -571,7 +572,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const p = settings.settings.provider
     let text = ''
     try {
-      const cfg = await providerConfig()
+      const cfg = await providerConfig(p)
       const req = {
         model: p.model,
         messages: built.messages,

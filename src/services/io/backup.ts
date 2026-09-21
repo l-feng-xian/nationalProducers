@@ -8,7 +8,11 @@
 import { chatRange, getDb } from '@/db/schema'
 import { toPlain } from '@/utils/plain'
 import { collectBlobRefs } from '@/db/repositories/blobs'
-import { readWorldBackups, restoreWorldBackup, type WorldBackup } from '@/services/infinite-world/persistence/backup'
+import {
+  readWorldBackups,
+  restoreWorldBackup,
+  type WorldBackup,
+} from '@/services/infinite-world/persistence/backup'
 
 /**
  * ⚠️ `format` 是**数据格式标识，不是应用名**。应用改名（国货优选 → 幕间）时
@@ -103,11 +107,13 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
   const characters = s.characters ? await db.getAll('characters') : []
   const worldData = s.gameworlds ? await readWorldBackups() : { bundles: [], blobs: [] }
   const groups = s.groups ? await db.getAll('groups') : []
+  const messages = s.chats ? await db.getAll('messages') : []
   const settings = s.settings ? ((await db.get('settings', 'app')) ?? null) : null
 
   const wanted = collectBlobRefs({
     characters,
     groups,
+    messages,
     persona: settings?.persona,
   })
   const blobs: BackupFile['blobs'] = []
@@ -115,7 +121,9 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     if (!wanted.has(b.id)) continue
     blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
   }
-  for (const b of worldData.blobs) if (!blobs.some((image) => image.id === b.id)) blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
+  for (const b of worldData.blobs)
+    if (!blobs.some((image) => image.id === b.id))
+      blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
 
   return {
     format: 'nationalproducers-backup',
@@ -127,7 +135,7 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     worldbooks: s.worldbooks ? await db.getAll('worldbooks') : [],
     groups,
     chats: s.chats ? await db.getAll('chats') : [],
-    messages: s.chats ? await db.getAll('messages') : [],
+    messages,
     blobs,
     // 注意：secrets（API Key）不导出
   }
@@ -238,7 +246,8 @@ export async function applyBackup(
    * 而用户以为自己拒绝了这一项。**用户同意的是 manifest，落地的必须也是它。**
    */
   const allow: SyncScope = scope ? { ...FULL_SCOPE, ...scope } : FULL_SCOPE
-  if (file.version !== undefined && file.version !== 1 && file.version !== 2) throw new Error('不支持此备份版本，请更新应用。')
+  if (file.version !== undefined && file.version !== 1 && file.version !== 2)
+    throw new Error('不支持此备份版本，请更新应用。')
   const db = await getDb()
   const out: ImportResult = {
     gameworlds: 0,
@@ -266,9 +275,13 @@ export async function applyBackup(
   }
 
   // Blob 先还原，角色记录才有头像可指。
-  // 它不是独立的一类，而是依附于角色/群/人设的 —— 三者都不在范围内就没人指向它了
-  const wantBlobs = allow.characters || allow.groups || allow.settings
-  const worldBlobIds = new Set((Array.isArray(file.gameworlds) ? file.gameworlds : []).flatMap((b) => b?.world?.npcs?.map((n) => n.avatarBlobId) ?? []).filter(Boolean))
+  // 图片依附于角色、群、人设或聊天附件；只同步聊天时也需要恢复配图。
+  const wantBlobs = allow.characters || allow.groups || allow.settings || allow.chats
+  const worldBlobIds = new Set(
+    (Array.isArray(file.gameworlds) ? file.gameworlds : [])
+      .flatMap((b) => b?.world?.npcs?.map((n) => n.avatarBlobId) ?? [])
+      .filter(Boolean),
+  )
   for (const b of wantBlobs ? (file.blobs ?? []) : []) {
     if (worldBlobIds.has(b.id)) continue
     try {
@@ -311,8 +324,12 @@ export async function applyBackup(
   await bulk('chats', allow.chats ? (file.chats ?? []).map(stripMemIndex) : [])
   await bulk('messages', allow.chats ? (file.messages ?? []) : [])
   for (const bundle of allow.gameworlds && Array.isArray(file.gameworlds) ? file.gameworlds : []) {
-    try { out.blobs += await restoreWorldBackup(bundle, file.blobs ?? []); out.gameworlds++ }
-    catch (e) { skip('gameworlds', e) }
+    try {
+      out.blobs += await restoreWorldBackup(bundle, file.blobs ?? [])
+      out.gameworlds++
+    } catch (e) {
+      skip('gameworlds', e)
+    }
   }
 
   /**

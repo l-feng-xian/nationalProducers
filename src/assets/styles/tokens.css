@@ -110,6 +110,8 @@
   --cbx-fs-lg: 18px;
   --cbx-fs-xl: 20px;
   --cbx-fs-h1: 24px;
+  /* 对话消息正文字号：设置页滑块运行时在 :root 上覆盖此变量。 */
+  --cbx-message-fs: var(--cbx-fs-md);
   --cbx-lh: 1.5;
   --cbx-fw-normal: 400;
   --cbx-fw-medium: 500;

@@ -3,6 +3,7 @@
  */
 
 import { world_info_insertion_strategy } from './worldinfo'
+import type { ImageModelService } from './image'
 
 export type ChatMode = 'solo' | 'group'
 
@@ -89,6 +90,12 @@ export interface ProviderSettings {
   modelCache?: { at: number; ids: string[] }
 }
 
+export interface ModelService {
+  id: string
+  name: string
+  provider: ProviderSettings
+}
+
 /** 与 ST 全局世界书设置一一对应（world-info.js L69-82） */
 export interface WorldInfoSettings {
   world_info_depth: number
@@ -152,7 +159,12 @@ export interface Settings {
   id: 'app'
   schemaVersion: number
   theme: 'light' | 'dark' | 'system'
+  /** 当前服务的配置，供生成与提示词组装使用。 */
   provider: ProviderSettings
+  modelServices: ModelService[]
+  activeModelServiceId: string
+  imageModelServices: ImageModelService[]
+  activeImageModelServiceId: string
   worldInfo: WorldInfoSettings
   persona: PersonaSettings
   prompt: PromptSettings
@@ -160,7 +172,13 @@ export interface Settings {
   constraint: Record<ChatMode, ConstraintPromptConfig>
   memory: MemorySettings
   depth: DepthSettings
-  chat: { streamFlushMs: number; sendOnEnter: boolean; showTokens: boolean }
+  chat: {
+    streamFlushMs: number
+    sendOnEnter: boolean
+    showTokens: boolean
+    /** 对话消息正文字号（px），范围 10–30，默认 16；运行时写入 :root 的 --cbx-message-fs。 */
+    messageFontSize: number
+  }
   updatedAt: number
 }
 
@@ -192,6 +210,10 @@ export function defaultSettings(): Settings {
       contextWindow: 16384,
       extraHeaders: {},
     },
+    modelServices: [],
+    activeModelServiceId: '',
+    imageModelServices: [],
+    activeImageModelServiceId: '',
     worldInfo: {
       world_info_depth: 2,
       world_info_min_activations: 0,
@@ -247,7 +269,7 @@ export function defaultSettings(): Settings {
       solo: { enabled: true, text: DEFAULT_SOLO_CONSTRAINT, depth: 0, role: 0, order: 200 },
       group: { enabled: true, text: DEFAULT_GROUP_CONSTRAINT, depth: 0, role: 0, order: 200 },
     },
-    chat: { streamFlushMs: 100, sendOnEnter: true, showTokens: false },
+    chat: { streamFlushMs: 100, sendOnEnter: true, showTokens: false, messageFontSize: 16 },
     updatedAt: Date.now(),
   }
 }

@@ -1,16 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { findPreset } from '@/services/vector/presets'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
 import { useSettingsStore } from '@/stores/settings'
-import { useToast } from '@/composables/useToast'
-import { listModels, chatOnce } from '@/services/provider/openaiCompatible'
-import { ProviderError } from '@/types/provider'
 
 const settings = useSettingsStore()
-const toast = useToast()
 
 /** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const USER_MACRO = '{{user}}'
@@ -27,299 +23,15 @@ const budgetTokens = computed(() => {
   return cap > 0 ? Math.min(raw, cap) : raw
 })
 
-const apiKey = ref('')
-const showKey = ref(false)
-const testing = ref(false)
-const models = ref<string[]>([])
-const loadingModels = ref(false)
-
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
-  apiKey.value = await settings.getApiKey()
 })
-
-async function saveKey() {
-  await settings.setApiKey(apiKey.value.trim())
-  toast.success('API Key 已保存到本机')
-}
-
-async function cfg() {
-  const p = settings.settings.provider
-  const c: { baseUrl: string; apiKey?: string; proxyPrefix?: string } = { baseUrl: p.baseUrl }
-  const k = await settings.getApiKey()
-  if (k) c.apiKey = k
-  if (p.proxyPrefix) c.proxyPrefix = p.proxyPrefix
-  return c
-}
-
-async function fetchModels() {
-  loadingModels.value = true
-  try {
-    const list = await listModels(await cfg())
-    models.value = list.map((m) => m.id)
-    if (list.length) {
-      // 拉完直接展开全部，省得用户还要再点一下才知道拉到了什么
-      typing.value = false
-      pickerOpen.value = true
-      toast.success(`拉到 ${list.length} 个模型`)
-    } else {
-      toast.warning('接口没有返回任何模型')
-    }
-  } catch (e) {
-    toast.error(e instanceof ProviderError ? e.message : String(e))
-  } finally {
-    loadingModels.value = false
-  }
-}
-
-// ── 模型下拉 ──
-const pickerOpen = ref(false)
-const pickerEl = ref<HTMLElement | null>(null)
-
-/**
- * 只在用户**正在输入**时才按文本筛选。
- * 点 ▾ 展开时一律显示全部 —— 否则选定某个模型后再点开，
- * 就只剩它自己一条，反而没法换成别的。
- */
-const typing = ref(false)
-
-const filteredModels = computed(() => {
-  if (!typing.value) return models.value
-  const q = settings.settings.provider.model.trim().toLowerCase()
-  if (!q) return models.value
-  return models.value.filter((m) => m.toLowerCase().includes(q))
-})
-
-function togglePicker() {
-  typing.value = false
-  pickerOpen.value = !pickerOpen.value
-}
-function onModelFocus() {
-  if (models.value.length) pickerOpen.value = true
-}
-function onModelInput() {
-  typing.value = true
-  if (models.value.length) pickerOpen.value = true
-}
-function pickModel(m: string) {
-  settings.settings.provider.model = m
-  typing.value = false
-  pickerOpen.value = false
-  settings.touch()
-}
-/** 放弃筛选，显示全部候选 */
-function clearModelFilter() {
-  typing.value = false
-}
-
-function onDocPointerDown(e: PointerEvent) {
-  if (!pickerOpen.value) return
-  const el = pickerEl.value
-  if (el && !el.contains(e.target as Node)) pickerOpen.value = false
-}
-function onDocKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') pickerOpen.value = false
-}
-onMounted(() => {
-  document.addEventListener('pointerdown', onDocPointerDown)
-  document.addEventListener('keydown', onDocKeydown)
-})
-onUnmounted(() => {
-  document.removeEventListener('pointerdown', onDocPointerDown)
-  document.removeEventListener('keydown', onDocKeydown)
-})
-
-async function testConnection() {
-  const p = settings.settings.provider
-  if (!p.baseUrl || !p.model) {
-    toast.error('请先填写 baseURL 与模型名')
-    return
-  }
-  testing.value = true
-  try {
-    const out = await chatOnce(
-      await cfg(),
-      {
-        model: p.model,
-        messages: [{ role: 'user', content: '说"连接成功"四个字' }],
-        stream: false,
-        maxTokens: 32,
-      },
-      undefined,
-      // 这颗按钮要的是**快速结论**：只发 32 token，正常几秒内就回。
-      // 用默认的 5 分钟意味着服务不通时要转五分钟圈才告诉用户，还不如直接判超时
-      60_000,
-    )
-    toast.success(`连接成功：${out.slice(0, 40)}`)
-  } catch (e) {
-    toast.error(e instanceof ProviderError ? e.message : String(e))
-  } finally {
-    testing.value = false
-  }
-}
 </script>
 
 <template>
   <AppTopbar title="设置" />
   <div class="cbx-scroll body">
     <div class="cbx-form-col">
-      <!-- ① 模型服务 -->
-      <section class="cbx-card sec">
-        <h3>模型服务</h3>
-        <p class="note">
-          任何 OpenAI 兼容接口均可。浏览器直连会受 CORS 限制：DeepSeek、硅基流动等允许跨域； OpenAI
-          官方、Ollama 等需填写代理地址（开发期可填 <code>/llm</code>）。
-        </p>
-
-        <label class="cbx-field cbx-field--lg">
-          <span class="cbx-field__label">baseURL</span>
-          <input
-            v-model="settings.settings.provider.baseUrl"
-            class="cbx-input"
-            placeholder="https://api.deepseek.com/v1"
-            @change="settings.touch()"
-          />
-        </label>
-
-        <label class="cbx-field cbx-field--lg">
-          <span class="cbx-field__label">API Key</span>
-          <!-- .cbx-ctl（不是 .rowline）：输入框 + 图标按钮作为一个整体受档位约束 -->
-          <div class="cbx-ctl">
-            <input
-              v-model="apiKey"
-              class="cbx-input"
-              :type="showKey ? 'text' : 'password'"
-              placeholder="sk-..."
-              @blur="saveKey"
-            />
-            <button class="cbx-icon-btn" @click="showKey = !showKey">
-              {{ showKey ? '🙈' : '👁' }}
-            </button>
-          </div>
-          <span class="cbx-field__hint">仅保存在本机 IndexedDB，不会随配置导出</span>
-        </label>
-
-        <div class="cbx-field">
-          <span class="cbx-field__label">模型</span>
-          <div class="rowline">
-            <!--
-              这里刻意不用 <datalist>：浏览器会拿输入框现值去过滤候选，
-              现值与拉回来的模型名不匹配时下拉就一片空白，且没有可见的下拉入口。
-            -->
-            <div ref="pickerEl" class="picker">
-              <input
-                v-model="settings.settings.provider.model"
-                class="cbx-input"
-                placeholder="deepseek-chat"
-                @change="settings.touch()"
-                @focus="onModelFocus"
-                @input="onModelInput"
-              />
-              <button
-                v-if="models.length"
-                class="picker__toggle"
-                type="button"
-                :title="`共 ${models.length} 个模型`"
-                @click="togglePicker"
-              >
-                ▾
-              </button>
-
-              <div v-if="pickerOpen" class="picker__panel cbx-scroll">
-                <div v-if="!filteredModels.length" class="picker__empty">
-                  没有匹配「{{ settings.settings.provider.model }}」的模型
-                  <button class="cbx-btn cbx-btn--ghost xs" type="button" @click="clearModelFilter">
-                    显示全部 {{ models.length }} 个
-                  </button>
-                </div>
-                <button
-                  v-for="m in filteredModels"
-                  :key="m"
-                  class="picker__item"
-                  type="button"
-                  :class="{ 'picker__item--on': m === settings.settings.provider.model }"
-                  @click="pickModel(m)"
-                >
-                  {{ m }}
-                </button>
-              </div>
-            </div>
-
-            <button class="cbx-btn cbx-btn--ghost" :disabled="loadingModels" @click="fetchModels">
-              {{ loadingModels ? '拉取中…' : '拉取列表' }}
-            </button>
-          </div>
-          <span v-if="models.length" class="cbx-field__hint">
-            已拉到 {{ models.length }} 个模型，点输入框右侧 ▾ 选择；也可以直接手输。
-          </span>
-        </div>
-
-        <label class="cbx-field cbx-field--lg">
-          <span class="cbx-field__label">代理地址（可选）</span>
-          <input
-            v-model="settings.settings.provider.proxyPrefix"
-            class="cbx-input"
-            placeholder="留空 = 直连；开发期可填 /llm"
-            @change="settings.touch()"
-          />
-          <span class="cbx-field__hint">
-            填 <code>/llm</code> 会走 vite.config.ts 的 dev proxy，目标由 .env.local 的
-            VITE_LLM_ORIGIN 决定
-          </span>
-        </label>
-
-        <div class="grid2">
-          <label class="cbx-field">
-            <span class="cbx-field__label">温度 {{ settings.settings.provider.temperature }}</span>
-            <input
-              v-model.number="settings.settings.provider.temperature"
-              class="cbx-input"
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              @change="settings.touch()"
-            />
-          </label>
-          <label class="cbx-field">
-            <span class="cbx-field__label">最大回复 token</span>
-            <input
-              v-model.number="settings.settings.provider.maxTokens"
-              class="cbx-input"
-              type="number"
-              @change="settings.touch()"
-            />
-          </label>
-          <label class="cbx-field">
-            <span class="cbx-field__label">上下文窗口</span>
-            <input
-              v-model.number="settings.settings.provider.contextWindow"
-              class="cbx-input"
-              type="number"
-              @change="settings.touch()"
-            />
-          </label>
-        </div>
-
-        <!-- 布尔值不占网格轨道；同时这里是单层 <label>，
-             修掉了原来 label 套 label 的非法结构 -->
-        <div class="switchrow">
-          <label class="cbx-switch swopt">
-            <input
-              v-model="settings.settings.provider.stream"
-              type="checkbox"
-              @change="settings.touch()"
-            />
-            <span class="cbx-switch__track" />
-            <span>流式输出</span>
-          </label>
-        </div>
-
-        <button class="cbx-btn cbx-btn--primary" :disabled="testing" @click="testConnection">
-          {{ testing ? '测试中…' : '测试连接' }}
-        </button>
-      </section>
-
       <!-- ② 提示词与深度（需求 4） -->
       <section class="cbx-card sec">
         <h3>提示词与插入深度</h3>
@@ -691,6 +403,22 @@ async function testConnection() {
             <span>顶栏显示 token 计数</span>
           </label>
         </div>
+        <label class="cbx-field fontrow">
+          <span class="cbx-field__label">
+            消息字体大小 · {{ settings.settings.chat.messageFontSize }}px
+          </span>
+          <input
+            v-model.number="settings.settings.chat.messageFontSize"
+            type="range"
+            class="fontrow__range"
+            min="10"
+            max="30"
+            step="1"
+            aria-label="消息字体大小"
+            @input="settings.touch()"
+          />
+          <span class="cbx-field__hint">调整对话消息正文的字号（10–30px），拖动立即生效。</span>
+        </label>
       </section>
 
       <!-- ⑥ 数据（整节已移至「数据管理」页）-->
@@ -762,95 +490,6 @@ async function testConnection() {
   color: var(--cbx-text-secondary);
   cursor: pointer;
 }
-/* 模型名属于中等长度字段。档位下放到 .picker 本身而不是 .cbx-field：
-   同一行还有「拉取列表」按钮，标在字段上会把按钮一起收窄。 */
-.picker {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  max-width: var(--cbx-fieldw-md);
-}
-.picker__toggle {
-  position: absolute;
-  right: 1px;
-  top: 1px;
-  bottom: 1px;
-  width: 32px;
-  border: none;
-  background: transparent;
-  color: var(--cbx-text-tertiary);
-  cursor: pointer;
-  border-radius: 0 var(--cbx-radius-md) var(--cbx-radius-md) 0;
-}
-.picker__toggle:hover {
-  background: var(--cbx-bg-hover);
-  color: var(--cbx-text);
-}
-.picker input {
-  padding-right: 36px;
-}
-/* 输入框收窄到 400 了，候选面板不能跟着收窄（模型 ID 很长且是 mono 字体）：
-   以输入框左缘为基准按内容向右生长，lg 封顶。
-   .cbx-card 无 overflow:hidden，面板右缘 ≈900 < 卡片右缘 1540，不会溢出；
-   100vw 那一项是移动端兜底。 */
-.picker__panel {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 4px);
-  left: 0;
-  right: auto;
-  min-width: 100%;
-  width: max-content;
-  max-width: min(var(--cbx-fieldw-lg), calc(100vw - 2 * var(--cbx-space-5)));
-  max-height: 260px;
-  padding: var(--cbx-space-1);
-  background: var(--cbx-bg);
-  border: 1px solid var(--cbx-border);
-  border-radius: var(--cbx-radius-md);
-  box-shadow: var(--cbx-shadow-md);
-}
-.picker__item {
-  display: block;
-  width: 100%;
-  min-height: 34px;
-  padding: var(--cbx-space-2) var(--cbx-space-3);
-  border: none;
-  background: none;
-  font-family: var(--cbx-font-mono);
-  font-size: var(--cbx-fs-sm);
-  color: var(--cbx-text);
-  text-align: left;
-  border-radius: var(--cbx-radius-sm);
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.picker__item:hover {
-  background: var(--cbx-bg-hover);
-}
-.picker__item--on {
-  background: var(--cbx-brand-light);
-  color: var(--cbx-brand);
-  font-weight: var(--cbx-fw-medium);
-}
-.picker__empty {
-  padding: var(--cbx-space-3);
-  font-size: var(--cbx-fs-xs);
-  color: var(--cbx-text-tertiary);
-  text-align: center;
-}
-.xs {
-  height: 28px;
-  padding: 0 var(--cbx-space-3);
-  font-size: var(--cbx-fs-xs);
-  margin-top: var(--cbx-space-2);
-}
-.rowline {
-  display: flex;
-  gap: var(--cbx-space-2);
-  align-items: center;
-}
 /* 字段收窄之后，多出来的横向空间要变成「更多列 / 更少行」，
    否则只是把空白从卡片外挪进卡片内。
    ⚠ 用 auto-fill 不用 auto-fit：auto-fit 会折叠空轨道，让只有 2 个字段的
@@ -880,6 +519,16 @@ async function testConnection() {
   font-weight: var(--cbx-fw-medium);
   color: var(--cbx-text-secondary);
 }
+/* 消息字号滑块：原生 range + 主题色轨道，宽度占满卡片 */
+.fontrow {
+  display: block;
+}
+.fontrow__range {
+  width: 100%;
+  margin: var(--cbx-space-2) 0 var(--cbx-space-1);
+  accent-color: var(--cbx-brand);
+  cursor: pointer;
+}
 /* 深度可视化是「图示」不是控件，给它内容宽度上限，
    别让它在 1238px 的卡片里被拉成一条空条 */
 .depth-preview {
@@ -896,22 +545,6 @@ async function testConnection() {
 }
 
 @media (max-width: 767px) {
-  .picker__item {
-    min-height: var(--cbx-tap-min);
-  }
-  .picker__toggle {
-    /* 桌面留 1px 不盖住输入框边框；移动端优先保证 44px 触控区 */
-    width: var(--cbx-tap-min);
-    top: 0;
-    bottom: 0;
-  }
-  .picker input {
-    padding-right: calc(var(--cbx-tap-min) + 4px);
-  }
-  /* 页面级私有规则，base.css 的解除块管不到它：漏了这条手机上模型框卡在 400px */
-  .picker {
-    max-width: none;
-  }
   .body {
     padding: var(--cbx-space-4) var(--cbx-space-3);
   }

@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ImagePlus, Sparkles, Undo2 } from 'lucide-vue-next'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import GreetingsEditor from '@/components/character/GreetingsEditor.vue'
 import ExampleDialogueEditor from '@/components/character/ExampleDialogueEditor.vue'
+import AiCharacterDialog from '@/components/character/AiCharacterDialog.vue'
+import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
+import { characterImagePrompt } from '@/services/image/prompts'
+import type { GeneratedImage } from '@/types/image'
+import type { GeneratedCharacterData } from '@/services/character/generate'
 import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useWorldsStore } from '@/stores/worlds'
@@ -45,7 +51,67 @@ const avatarInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
 /** PNG 导出要转码 + 编码，可能几百毫秒；连点会并发跑两遍、下两个文件、内存峰值翻倍 */
 const exporting = ref(false)
+const aiOpen = ref(false)
+const coverOpen = ref(false)
+const coverPrompt = ref('')
+const avatarBusy = ref(false)
+const aiDescription = ref('')
+const beforeAiFill = ref<GeneratedCharacterData | null>(null)
+const hasCharacterContent = computed(() => {
+  const data = model.value?.data
+  return (
+    !!data &&
+    !!(
+      (data.name.trim() && data.name !== '新角色') ||
+      data.description.trim() ||
+      data.personality.trim() ||
+      data.scenario.trim() ||
+      data.first_mes.trim() ||
+      data.mes_example.trim() ||
+      data.alternate_greetings.some((item) => item.trim())
+    )
+  )
+})
 let dirty = false
+
+function openCover() {
+  if (!model.value?.data.description.trim()) {
+    toast.info('请先填写角色简介，再生成封面')
+    return
+  }
+  coverPrompt.value = characterImagePrompt(model.value.data)
+  coverOpen.value = true
+}
+
+async function applyCover(image: GeneratedImage) {
+  await replaceAvatar(image.blob)
+}
+
+function applyAiCharacter(data: GeneratedCharacterData) {
+  if (!model.value) return
+  const { name, description, personality, scenario, first_mes, alternate_greetings, mes_example } =
+    model.value.data
+  beforeAiFill.value = toPlain({
+    name,
+    description,
+    personality,
+    scenario,
+    first_mes,
+    alternate_greetings,
+    mes_example,
+  })
+  Object.assign(model.value.data, data)
+  tab.value = 'basic'
+  aiOpen.value = false
+  toast.success('已填入角色资料，请检查后保存')
+}
+
+function undoAiFill() {
+  if (!model.value || !beforeAiFill.value) return
+  Object.assign(model.value.data, toPlain(beforeAiFill.value))
+  beforeAiFill.value = null
+  toast.success('已撤销 AI 填入')
+}
 
 const TABS = [
   { key: 'basic', label: '基本' },
@@ -165,27 +231,43 @@ async function save() {
 
 async function onAvatar(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
-  if (!f || !model.value) return
-  const old = model.value.avatarBlobId
-  const oldDepth = model.value.depthBlobId
-  const id = await blobsRepo.put(f)
-  model.value.avatarBlobId = id
-  // 深度图和立绘是一对，换了图旧深度图必须立刻作废 ——
-  // 留着会渲染出和新图对不上的视差，比没有视差更糟
-  model.value.depthBlobId = undefined
-  if (old) {
-    invalidateObjectUrl(old)
-    await blobsRepo.remove(old)
+  if (!f) return
+  try {
+    await replaceAvatar(f)
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    ;(e.target as HTMLInputElement).value = ''
   }
-  if (oldDepth) {
-    invalidateObjectUrl(oldDepth)
-    await blobsRepo.remove(oldDepth)
-  }
-  await save()
-  ;(e.target as HTMLInputElement).value = ''
+}
 
-  // 图片已经落盘了，深度图是**附加增强**：失败只是没有视差，绝不能回滚换图
-  await makeDepth(f)
+async function replaceAvatar(source: Blob) {
+  const m = model.value
+  if (!m || avatarBusy.value || depthBusy.value) throw new Error('图片正在保存，请稍后重试')
+  avatarBusy.value = true
+  const old = m.avatarBlobId
+  const oldDepth = m.depthBlobId
+  let id: string | undefined
+  try {
+    id = await blobsRepo.put(source)
+    releaseParallax()
+    m.avatarBlobId = id
+    m.depthBlobId = undefined
+    try {
+      await save()
+    } catch (error) {
+      m.avatarBlobId = old
+      m.depthBlobId = oldDepth
+      await blobsRepo.remove(id)
+      throw error
+    }
+    // 先保存新引用；旧图片留给引用清理，避免破坏共享该封面的其他角色。
+    if (old) invalidateObjectUrl(old)
+    if (oldDepth) invalidateObjectUrl(oldDepth)
+    await makeDepth(source)
+  } finally {
+    avatarBusy.value = false
+  }
 }
 
 /**
@@ -331,6 +413,19 @@ async function remove() {
 
   <div v-if="model" class="cbx-scroll body">
     <div class="cbx-form-col">
+      <div class="ai-entry">
+        <button class="cbx-btn cbx-btn--soft" :disabled="saving" @click="aiOpen = true">
+          <Sparkles :size="16" />AI 创建角色
+        </button>
+        <button
+          v-if="beforeAiFill"
+          class="cbx-btn cbx-btn--ghost"
+          :disabled="saving"
+          @click="undoAiFill"
+        >
+          <Undo2 :size="16" />撤销 AI 填入
+        </button>
+      </div>
       <div class="cbx-tabs">
         <button
           v-for="t in TABS"
@@ -373,12 +468,19 @@ async function remove() {
             </div>
             <button
               class="cbx-btn cbx-btn--ghost full"
-              :disabled="depthBusy"
+              :disabled="depthBusy || avatarBusy"
               @click="avatarInput?.click()"
             >
               更换图片
             </button>
             <input ref="avatarInput" type="file" accept="image/*" hidden @change="onAvatar" />
+            <button
+              class="cbx-btn cbx-btn--soft full"
+              :disabled="depthBusy || avatarBusy"
+              @click="openCover"
+            >
+              <ImagePlus :size="16" />生成封面
+            </button>
 
             <!-- 深度图状态。只有启用了深度模型才出现，没启用时这块完全不存在 -->
             <div v-if="settings.settings.depth.modelId && model.avatarBlobId" class="depth">
@@ -554,12 +656,33 @@ async function remove() {
       </section>
     </div>
   </div>
+  <AiCharacterDialog
+    v-if="model && aiOpen"
+    v-model="aiDescription"
+    :has-content="hasCharacterContent"
+    @close="aiOpen = false"
+    @generated="applyAiCharacter"
+  />
+  <ImageGenerationDialog
+    v-if="model && coverOpen"
+    title="生成角色封面"
+    :initial-prompt="coverPrompt"
+    apply-label="设为角色封面"
+    :apply="applyCover"
+    @close="coverOpen = false"
+  />
 </template>
 
 <style scoped>
 .body {
   flex: 1;
   padding: var(--cbx-space-5);
+}
+.ai-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cbx-space-2);
+  margin-bottom: var(--cbx-space-4);
 }
 /* 与设置页统一：宽度/对齐/字段上限由 base.css 的 .cbx-form-col 提供
    （模板里 class="wrap" → class="cbx-form-col"，本规则整条删除）。

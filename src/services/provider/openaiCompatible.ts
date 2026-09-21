@@ -68,7 +68,7 @@ function wrapFetchError(e: unknown): ProviderError {
   const msg = e instanceof Error ? e.message : String(e)
   return new ProviderError(
     'cors',
-    `无法连接到接口：${msg}。若是浏览器跨域限制，请在设置里填写代理地址。`,
+    `无法连接到接口：${msg}。若是浏览器跨域限制，请在模型管理中编辑服务的代理地址。`,
   )
 }
 
@@ -159,13 +159,37 @@ export async function chatOnce(
   }
 }
 
-/** 拉取模型列表，用于设置页下拉 */
-export async function listModels(cfg: ProviderConfig, signal?: AbortSignal): Promise<ModelInfo[]> {
-  const url = resolveUrl(cfg.baseUrl, '/models', cfg.proxyPrefix)
-  // 调用方（设置页）压根不传 signal，守卫装在这里才兜得住
+/** 返回可用的接口根地址，供编辑器保存，后续生成请求也使用同一路径。 */
+export async function listModels(
+  cfg: ProviderConfig,
+  signal?: AbortSignal,
+): Promise<{ models: ModelInfo[]; baseUrl: string }> {
+  const baseUrl = cfg.baseUrl.trim().replace(/\/+$/, '')
+  // 传输层统一提供超时保护，也支持调用方取消。
   const guard = armStall({ idleMs: MODELS_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   try {
-    return await fetchModels(url, cfg, guard)
+    try {
+      const models = await fetchModels(resolveUrl(baseUrl, '/models', cfg.proxyPrefix), cfg, guard)
+      return { models, baseUrl }
+    } catch (error) {
+      // 只对裸域名尝试 /v1；显式配置的路径、鉴权失败和网络错误不做猜测。
+      const parsed = new URL(baseUrl)
+      const canRetry =
+        !guard.signal.aborted &&
+        parsed.pathname === '/' &&
+        !parsed.search &&
+        !parsed.hash &&
+        error instanceof ProviderError &&
+        (error.kind === 'parse' || error.status === 404 || error.status === 405)
+      if (!canRetry) throw error
+      const versioned = `${baseUrl}/v1`
+      const models = await fetchModels(
+        resolveUrl(versioned, '/models', cfg.proxyPrefix),
+        cfg,
+        guard,
+      )
+      return { models, baseUrl: versioned }
+    }
   } finally {
     guard.dispose()
   }
@@ -187,15 +211,29 @@ async function fetchModels(
     throw wrapAbortable(e, guard, MODELS_TIMEOUT_MS)
   }
   if (!res.ok) throw await toProviderError(res)
-  let j: { data?: { id?: string }[] }
+  let raw: string
   try {
-    j = (await res.json()) as typeof j
+    raw = await res.text()
   } catch (e) {
     throw wrapAbortable(e, guard, MODELS_TIMEOUT_MS)
   }
-  return (j.data ?? [])
-    .map((m) => m.id)
-    .filter((id): id is string => typeof id === 'string')
-    .sort()
-    .map((id) => ({ id }))
+  let j: { data?: unknown; error?: { message?: string } } | null
+  try {
+    j = JSON.parse(raw) as typeof j
+  } catch {
+    throw new ProviderError(
+      'parse',
+      raw.trimStart().startsWith('<')
+        ? '模型列表接口返回了网页，请检查接口地址是否缺少 /v1'
+        : '模型列表接口返回了无效 JSON，请检查接口地址',
+    )
+  }
+  if (j?.error) throw new ProviderError('server', j.error.message || '模型列表接口返回错误')
+  if (!Array.isArray(j?.data)) {
+    throw new ProviderError('parse', '接口未返回模型列表（data 数组），请检查接口地址')
+  }
+  const ids = j.data
+    .map((m: unknown) => (m && typeof m === 'object' && 'id' in m ? m.id : undefined))
+    .filter((id): id is string => typeof id === 'string' && !!id.trim())
+  return [...new Set(ids)].sort().map((id) => ({ id }))
 }

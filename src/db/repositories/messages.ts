@@ -8,6 +8,41 @@
 import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
 import type { ChatMessage } from '@/types/chat'
+import type { GeneratedImage } from '@/types/image'
+
+/** 图片和附件引用原子写入；目标消息已删除时不复活消息、不留下孤立图片。 */
+export async function attachImage(
+  chatId: string,
+  messageId: string,
+  image: GeneratedImage,
+): Promise<ChatMessage> {
+  const db = await getDb()
+  const tx = db.transaction(['messages', 'blobs'], 'readwrite')
+  const store = tx.objectStore('messages')
+  const row = await store.index('by_msgId').get([chatId, messageId])
+  if (!row) {
+    await tx.done
+    throw new Error('原消息已删除，无法保存配图')
+  }
+  const id = crypto.randomUUID()
+  const createdAt = Date.now()
+  await tx
+    .objectStore('blobs')
+    .put({ id, data: image.blob, mime: image.blob.type, size: image.blob.size, createdAt })
+  row.images = [
+    ...(row.images ?? []),
+    {
+      blobId: id,
+      prompt: image.prompt,
+      model: image.model,
+      serviceName: image.serviceName,
+      createdAt,
+    },
+  ]
+  await store.put(toPlain(row))
+  await tx.done
+  return row
+}
 
 /** 只用到 openCursor 这一件事，结构化声明即可，免得把 idb 的泛型拖进签名 */
 type MsgStore = {

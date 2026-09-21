@@ -1,6 +1,7 @@
 import { getDb } from '../schema'
 import { toPlain } from '../plain'
-import { defaultSettings, type Settings } from '@/types/settings'
+import { defaultSettings, type ModelService, type Settings } from '@/types/settings'
+import { newImageModelService } from '@/types/image'
 
 /**
  * 按**默认值的形状**合并：只有类型对得上的值才允许覆盖默认值。
@@ -53,7 +54,57 @@ export async function load(): Promise<Settings> {
     await db.put('settings', toPlain(s))
     return s
   }
-  return coalesce(defaultSettings(), existing)
+  const s = coalesce(defaultSettings(), existing)
+  if (!Array.isArray(existing.modelServices)) {
+    // 保留旧 secretRef，已有密钥无需重新输入。
+    s.modelServices = [{ id: 'default', name: '默认服务', provider: s.provider }]
+    s.activeModelServiceId = 'default'
+  } else {
+    const ids = new Set<string>()
+    s.modelServices = existing.modelServices.flatMap((raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+      const service = coalesce<ModelService>(
+        { id: '', name: '', provider: defaultSettings().provider },
+        raw,
+      )
+      if (!service.id || ids.has(service.id)) return []
+      ids.add(service.id)
+      service.name = service.name.trim() || '未命名服务'
+      const rawProvider = (raw as { provider?: { secretRef?: unknown } }).provider
+      if (typeof rawProvider?.secretRef !== 'string' || !rawProvider.secretRef) {
+        service.provider.secretRef = `model-service:${service.id}`
+      }
+      const cache = service.provider.modelCache
+      if (cache) {
+        service.provider.modelCache = {
+          at: typeof cache.at === 'number' ? cache.at : 0,
+          ids: Array.isArray(cache.ids) ? cache.ids.filter((id) => typeof id === 'string') : [],
+        }
+      }
+      return [service]
+    })
+  }
+  const active =
+    s.modelServices.find((service) => service.id === s.activeModelServiceId) ?? s.modelServices[0]
+  s.activeModelServiceId = active?.id ?? ''
+  s.provider = active?.provider ?? defaultSettings().provider
+  const imageIds = new Set<string>()
+  s.imageModelServices = s.imageModelServices.flatMap((raw: unknown) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+    const service = coalesce(newImageModelService(''), raw)
+    if (!service.id || imageIds.has(service.id)) return []
+    imageIds.add(service.id)
+    service.name = service.name.trim() || '未命名文生图配置'
+    // 文生图密钥使用独立命名空间，不接受导入数据中的共享引用。
+    service.secretRef = `image-service:${service.id}`
+    if (!['', 'b64_json', 'url'].includes(service.responseFormat)) service.responseFormat = ''
+    if (!['', 'multipart', 'json'].includes(service.referenceMode)) service.referenceMode = ''
+    return [service]
+  })
+  if (!s.imageModelServices.some((service) => service.id === s.activeImageModelServiceId)) {
+    s.activeImageModelServiceId = s.imageModelServices[0]?.id ?? ''
+  }
+  return s
 }
 
 export async function save(s: Settings): Promise<void> {
