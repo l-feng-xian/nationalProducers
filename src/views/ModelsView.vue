@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, ref } from 'vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import ModelServices from '@/components/models/ModelServices.vue'
@@ -84,11 +85,12 @@ async function remove(id: string) {
             维度和向量分布都不一样，旧索引无法复用。已有的对话内容不受影响。
           </p>
           <p v-if="models.persisted === false" class="note note--warn">
-            ⚠️ 浏览器没有授予持久化存储许可。模型仍然可用，但磁盘空间紧张时可能被系统清掉，
+            <AppIcon name="TriangleAlert" tone="warning" />
+            浏览器没有授予持久化存储许可。模型仍然可用，但磁盘空间紧张时可能被系统清掉，
             届时需要重新下载。多用几次本站通常就会自动授予。
           </p>
           <p v-if="models.errors['__check']" class="note note--warn">
-            ⚠️ 检查下载状态失败：{{ models.errors['__check'] }}
+            <AppIcon name="TriangleAlert" tone="warning" /> 检查下载状态失败：{{ models.errors['__check'] }}
           </p>
         </section>
 
@@ -133,12 +135,18 @@ async function remove(id: string) {
             </header>
 
             <div class="chips">
-              <span v-if="models.activeId === p.id" class="chip chip--ok">✓ 已启用</span>
+              <span v-if="models.activeId === p.id" class="chip chip--ok"
+                ><AppIcon name="Check" /> 已启用</span
+              >
               <span v-else-if="statusOf(p.id) === 'ready'" class="chip chip--ready">已下载</span>
               <span v-else-if="statusOf(p.id) === 'unknown'" class="chip">检查中…</span>
               <span v-else class="chip chip--warn">未下载</span>
               <span class="chip">{{ formatBytes(p.bytes) }}</span>
-              <span class="chip">{{ p.mobileFriendly ? '📱 手机可用' : '🖥️ 建议桌面' }}</span>
+              <span class="chip"
+                ><AppIcon :name="p.mobileFriendly ? 'Smartphone' : 'Monitor'" />{{
+                  p.mobileFriendly ? '手机可用' : '建议桌面'
+                }}</span
+              >
             </div>
 
             <p class="card__blurb">{{ p.blurb }}</p>
@@ -247,13 +255,19 @@ async function remove(id: string) {
             </header>
 
             <div class="chips">
-              <span v-if="models.activeDepthId === p.id" class="chip chip--ok">✓ 已启用</span>
+              <span v-if="models.activeDepthId === p.id" class="chip chip--ok"
+                ><AppIcon name="Check" /> 已启用</span
+              >
               <span v-else-if="statusOf(p.id) === 'ready'" class="chip chip--ready">已下载</span>
               <span v-else-if="statusOf(p.id) === 'unknown'" class="chip">检查中…</span>
               <span v-else class="chip chip--warn">未下载</span>
               <span class="chip">{{ formatBytes(p.bytes) }}</span>
               <span class="chip">约 {{ (p.approxMs / 1000).toFixed(0) }} 秒/张</span>
-              <span class="chip">{{ p.mobileFriendly ? '📱 手机可用' : '🖥️ 建议桌面' }}</span>
+              <span class="chip"
+                ><AppIcon :name="p.mobileFriendly ? 'Smartphone' : 'Monitor'" />{{
+                  p.mobileFriendly ? '手机可用' : '建议桌面'
+                }}</span
+              >
             </div>
 
             <p class="card__blurb">{{ p.blurb }}</p>
@@ -353,6 +367,9 @@ async function remove(id: string) {
   flex-direction: column;
   gap: var(--cbx-space-3);
   padding: var(--cbx-space-4);
+  /* 网格项默认 min-width:auto(=min-content)，会把 1fr 轨道顶宽、超出容器。
+     显式压到 0，卡片才肯缩进单列容器里（配合 grid 的 minmax(0,1fr)）。 */
+  min-width: 0;
   background: var(--cbx-bg);
   border: 1px solid var(--cbx-border);
   border-radius: var(--cbx-radius);
@@ -637,9 +654,11 @@ async function remove(id: string) {
 
 @media (max-width: 767px) {
   .grid {
-    /* 手机上 320px 的 minmax 会在 375-16*2 的容器里勉强挤成一列，
-       但某些折叠屏/横屏会挤成两列且每列过窄，直接写死单列更稳 */
-    grid-template-columns: 1fr;
+    /* 手机单列。⚠️ 必须是 minmax(0, 1fr) 不能是 1fr：1fr = minmax(auto,1fr)，
+       auto 的下界是 min-content，卡里那串长仓库 id（onnx-community/depth-anything-v2-small）
+       会把轨道撑到 ~400px、超出 360 视口，底部冒出横向滚动条。minmax(0,…) 把下界压到 0，
+       轨道锁死在容器宽度内，内容再自己换行/省略。 */
+    grid-template-columns: minmax(0, 1fr);
   }
   .acts .cbx-btn {
     min-height: var(--cbx-tap-min);

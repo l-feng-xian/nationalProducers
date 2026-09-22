@@ -1,15 +1,7 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  ChevronDown,
-  Eye,
-  EyeOff,
-  LoaderCircle,
-  PlugZap,
-  RefreshCw,
-  Save,
-  X,
-} from 'lucide-vue-next'
+import { ChevronDown, LoaderCircle, PlugZap, RefreshCw, Save, X } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { chatOnce, listModels } from '@/services/provider/openaiCompatible'
@@ -242,7 +234,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
             :disabled="saving"
             @click="close"
           >
-            <X :size="18" />
+            <X :size="20" />
           </button>
         </header>
         <fieldset class="editor-fields" :disabled="saving">
@@ -288,7 +280,13 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
                 :aria-label="showKey ? '隐藏密钥' : '显示密钥'"
                 @click="showKey = !showKey"
               >
-                <EyeOff v-if="showKey" :size="18" /><Eye v-else :size="18" />
+                <span class="icon-swap"
+                  ><Transition name="icon-swap"
+                    ><AppIcon
+                      :key="String(showKey)"
+                      :name="showKey ? 'EyeOff' : 'Eye'"
+                      :active="showKey" /></Transition
+                ></span>
               </button>
             </div>
             <span v-if="keyError" class="field-error" role="alert">{{ keyError }}</span>
@@ -323,7 +321,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
                     :aria-expanded="pickerOpen"
                     @click="togglePicker"
                   >
-                    <ChevronDown :size="18" />
+                    <ChevronDown :size="20" />
                   </button>
                 </div>
                 <div v-if="pickerOpen" id="service-model-list" class="picker-panel cbx-scroll">
@@ -353,10 +351,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
                 :aria-label="loadingModels ? '拉取中' : '拉取模型列表'"
                 @click="fetchModels"
               >
-                <LoaderCircle v-if="loadingModels" :size="18" class="spin" /><RefreshCw
-                  v-else
-                  :size="18"
-                />
+                <LoaderCircle v-if="loadingModels" :size="20" /><RefreshCw v-else :size="20" />
               </button>
             </div>
           </div>
@@ -415,7 +410,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
             :disabled="testing || loadingModels || loadingKey || saving || !!keyError"
             @click="testConnection"
           >
-            <LoaderCircle v-if="testing" :size="16" class="spin" /><PlugZap v-else :size="16" />{{
+            <LoaderCircle v-if="testing" :size="16" /><PlugZap v-else :size="16" />{{
               testing ? '测试中' : '测试连接'
             }}
           </button>
@@ -424,7 +419,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
             class="cbx-btn cbx-btn--primary"
             :disabled="saving || loadingKey || !!keyError"
           >
-            <LoaderCircle v-if="saving" :size="16" class="spin" /><Save v-else :size="16" />{{
+            <LoaderCircle v-if="saving" :size="16" /><Save v-else :size="16" />{{
               saving ? '保存中' : '保存'
             }}
           </button>
@@ -561,19 +556,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
 .feedback--warning {
   color: var(--cbx-warning-hover);
 }
-.spin {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none;
-  }
-}
+
 @media (max-width: 480px) {
   .editor-head,
   .editor-footer,

@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口的能力集",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "fs:default",
+    {
+      "//": "导出功能：downloadBlob 走 dialog.save 选路径 + fs.writeFile 落盘。fs:default 不含写命令，缺了它 write_file 会被 ACL 挡（实测真机报 Command plugin:fs|write_file not allowed by ACL）。",
+      "//2": "静态 scope 给应用私有目录，方便验证；用户从原生对话框选的路径由 dialog 插件在运行时动态加进 scope，不必写死。",
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPCACHE/**" }, { "path": "$APPLOCALDATA/**" }]
+    },
+    {
+      "//": "⚠️ 必须是对象形式。只写字符串 \"http:default\" 会拿到一个空 allowlist，每个请求都报 url not allowed on the configured scope。",
+      "//2": "** 才能跨点匹配多级域名（单个 * 匹配不了 api.openai.com）；:* 才能放行非默认端口（Ollama 11434 / LM Studio 1234）。baseUrl 由用户自己填，白名单不可能穷举，这里就是要最宽。",
+      "identifier": "http:default",
+      "allow": [{ "url": "https://**:*" }, { "url": "http://**:*" }]
+    }
+  ]
+}

@@ -75,6 +75,23 @@
 ### 0.3 新依赖决策
 - `markdown-it` + `dompurify`（+ `@types/markdown-it`）：LLM 输出是不可信 HTML 源，**不要手搓 sanitizer**。
 - 不引入 `@vueuse/core`（`useBreakpoint` 15 行自写）、不引入拖拽库（图谱与排序自写 pointer events）、不引入图表/裁剪库。
+- **Tauri v2**（`@tauri-apps/cli` + `api` + `plugin-http` / `plugin-dialog` / `plugin-fs` / `plugin-barcode-scanner`）：
+  打包安卓原生 App。引入它的**真正理由不是"做个壳"，而是 CORS** —— 打包后 webview 跑在
+  自定义协议上，直连 AI 接口的请求带 `Content-Type: application/json` + `Authorization`，
+  **一律触发预检**，没有任何侥幸空间；而要求每个用户自备 https 反代是不可接受的。
+  plugin-http 把请求交给 Rust 的 reqwest 发出，从根上绕开同源策略。
+  另外三个插件各自对应一个"安卓上会失效的 Web API"：
+  `dialog`+`fs` 顶替 `<a download>`（**安卓 WebView 不处理 blob: 下载**），
+  `barcode-scanner` 顶替 `getUserMedia`（WebView 扫码要改每次都会被重新生成的
+  `RustWebChromeClient.kt`，改了留不住）。
+  ⚠️ 版本必须 npm 与 crate 对齐，Tauri CLI 会在构建前直接拒绝不一致的组合；
+  `tauri-plugin-http` 因此锁在 2.6（npm 侧最新只到 2.6.1，crate 已到 2.7）。
+- `virtua`（`virtua/vue`）：聊天页消息虚拟滚动。**这是本项目少数几个"不自写"的决定**，理由是
+  消息高度天然不可预知（Markdown、异步配图、swipe 换文、内联编辑、流式边生成边变高），
+  手写就得自己维护高度缓存 + 屏外尺寸变化的滚动补偿，而这正是滚动跳动类 bug 的温床；
+  virtua 用 ResizeObserver 自动测量，无需提供任何高度估值。选它而非 `@tanstack/vue-virtual`
+  也是这个原因（后者要手工 `measureElement`）。零运行时依赖，框架 peer 全是 optional。
+  用法见 `ChatView.vue`：**只在消息数超过阈值时启用**，低于阈值仍走扁平 `v-for`。
 
 ---
 

@@ -12,6 +12,8 @@
  * 纯 service：不 import vue/pinia。
  */
 
+import { isTauri } from '@/services/platform/env'
+
 /** 连上服务器、拿到自己 id 的等待上限 */
 const READY_TIMEOUT = 8000
 
@@ -71,8 +73,13 @@ export function absoluteSignalUrl(): string {
  * 试它只会白白多等一个超时，还让用户以为是服务器挂了。
  */
 export function signalCandidates(): string[] {
-  const out = [sameOriginSignalUrl()]
+  // 原生壳里没有「同源反代」这回事：页面跑在 Tauri 自定义协议上，
+  // sameOriginSignalUrl() 会拼出 ws://tauri.localhost/ws —— 那个 host 根本不存在，
+  // 试它必定是白等一个超时。直接用绝对地址。
   const abs = absoluteSignalUrl()
+  if (isTauri) return abs ? [abs] : []
+
+  const out = [sameOriginSignalUrl()]
   const blocked = location.protocol === 'https:' && abs.startsWith('ws://')
   if (abs && abs !== out[0] && !blocked) out.push(abs)
   return out

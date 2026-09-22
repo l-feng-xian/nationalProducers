@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed } from 'vue'
 
 /**
@@ -19,10 +20,12 @@ const slot = computed(() => Math.max(0, FAKE.length - Math.max(0, props.depth)))
 <template>
   <div class="dp">
     <template v-for="(m, i) in FAKE" :key="i">
-      <div v-if="i === slot" class="dp__inject">⬅ 提示词插在这里</div>
+      <div v-if="i === slot" class="dp__inject"><AppIcon name="ArrowLeft" /> 提示词插在这里</div>
       <div class="dp__msg">{{ m }}</div>
     </template>
-    <div v-if="slot >= FAKE.length" class="dp__inject">⬅ 提示词插在这里</div>
+    <div v-if="slot >= FAKE.length" class="dp__inject">
+      <AppIcon name="ArrowLeft" /> 提示词插在这里
+    </div>
     <div class="dp__gen">（模型从这里开始生成）</div>
   </div>
 </template>

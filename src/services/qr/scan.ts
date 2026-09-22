@@ -8,6 +8,8 @@
  * 纯 service：不 import vue/pinia。
  */
 
+import { isTauri } from '@/services/platform/env'
+
 /** 解码时把画面缩到这个宽度。原分辨率逐帧跑 jsQR 在手机上会明显掉帧 */
 const DECODE_WIDTH = 640
 
@@ -66,6 +68,43 @@ export interface ScanHandle {
 }
 
 /**
+ * 原生扫码（仅移动端）。全屏原生扫码器，不用 `<video>`，所以传进来的那个元素在这条
+ * 路径上是空着的 —— 原生界面会盖在上面。
+ *
+ * 插件是动态 import：Web 构建不该把它打进包。
+ */
+async function startNativeScan(
+  onResult: (text: string) => void,
+  onError?: (e: Error) => void,
+): Promise<ScanHandle> {
+  const { scan, checkPermissions, requestPermissions, cancel, Format } = await import(
+    '@tauri-apps/plugin-barcode-scanner'
+  )
+  let state = await checkPermissions()
+  if (state !== 'granted') state = await requestPermissions()
+  if (state !== 'granted') throw new Error('摄像头权限被拒绝，请到系统设置里允许后重试')
+
+  let stopped = false
+  // scan() 一次只认一个码；识别到就回调，之后由调用方决定是否关闭
+  void scan({ windowed: false, formats: [Format.QRCode] })
+    .then((r) => {
+      if (!stopped && r?.content) onResult(r.content)
+    })
+    .catch((e) => {
+      // 用户主动取消不算错误
+      if (stopped) return
+      onError?.(e instanceof Error ? e : new Error(String(e)))
+    })
+
+  return {
+    stop: () => {
+      stopped = true
+      void cancel()
+    },
+  }
+}
+
+/**
  * 打开摄像头并持续识别，认出第一个码就回调（随后仍会继续扫，由调用方决定何时 stop）。
  *
  * 摄像头要求安全上下文，调用前先判 `isSecureContext` 给出人话提示，
@@ -76,6 +115,11 @@ export async function startCameraScan(
   onResult: (text: string) => void,
   onError?: (e: Error) => void,
 ): Promise<ScanHandle> {
+  // 原生壳走系统扫码器：WebView 里的 getUserMedia 需要原生侧重写
+  // WebChromeClient.onPermissionRequest 才会放行，而那个文件每次构建都会被重新生成，
+  // 改了留不住。插件在原生层扫码并自己申请权限，整条链路都绕开了。
+  if (isTauri) return startNativeScan(onResult, onError)
+
   if (!isSecureContext) {
     throw new Error('摄像头需要 https 或 localhost，请用 npm run dev:lan 或部署到 https 站点后再试')
   }

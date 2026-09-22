@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -55,14 +56,16 @@ async function pick(characterId: string | undefined, title: string) {
       <div class="cbx-modal" role="dialog" aria-modal="true">
         <header class="cbx-modal__head">
           <h3>新建对话</h3>
-          <button class="cbx-icon-btn" aria-label="关闭" @click="close">✕</button>
+          <button class="cbx-icon-btn" aria-label="关闭" @click="close">
+            <AppIcon name="X" />
+          </button>
         </header>
 
         <div class="cbx-modal__body cbx-scroll">
           <div class="cbx-group-label">选择角色</div>
 
           <div v-if="!chars.items.length" class="cbx-empty">
-            <span class="cbx-empty__icon">🎭</span>
+            <span class="cbx-empty__icon"><AppIcon name="Characters" tone="brand" /></span>
             <span class="cbx-empty__desc">还没有角色</span>
             <button class="cbx-btn cbx-btn--soft" @click="goCreate">去创建角色</button>
           </div>
@@ -78,14 +81,18 @@ async function pick(characterId: string | undefined, title: string) {
           <hr class="cbx-divider" />
           <div class="cbx-group-label">群聊（1vN）</div>
           <div v-for="g in groups.items" :key="g.id" class="row" @click="pickGroup(g.id, g.name)">
-            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">👥</div>
+            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">
+              <AppIcon name="UsersRound" tone="brand" />
+            </div>
             <div class="row__text">
               <div class="row__name">{{ g.name }}</div>
               <div class="row__desc">{{ g.members.length }} 位成员</div>
             </div>
           </div>
           <div class="row row--plain" @click="goNewGroup">
-            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">＋</div>
+            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">
+              <AppIcon name="Plus" />
+            </div>
             <div class="row__text">
               <div class="row__name">新建群聊</div>
               <div class="row__desc">选多个角色，配置他们之间的关系</div>
@@ -94,7 +101,9 @@ async function pick(characterId: string | undefined, title: string) {
 
           <hr class="cbx-divider" />
           <div class="row row--plain" @click="pick(undefined, '新对话')">
-            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">💬</div>
+            <div class="cbx-avatar cbx-avatar--sm cbx-avatar__fallback">
+              <AppIcon name="MessageCircle" />
+            </div>
             <div class="row__text">
               <div class="row__name">不选角色</div>
               <div class="row__desc">用内置的通用助手直接聊</div>

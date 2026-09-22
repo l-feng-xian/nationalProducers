@@ -1,5 +1,6 @@
 import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
+import { pruneUnreferenced } from './blobs'
 import { emptyCharacter, type Character } from '@/types/character'
 
 /**
@@ -89,7 +90,17 @@ export async function remove(id: string): Promise<void> {
   const chatStore = tx.objectStore('chats')
   const chatIds = await chatStore.index('by_characterId').getAllKeys(id)
   const msgStore = tx.objectStore('messages')
+  // 删这些会话的消息前先收集其配图（images[].blobId + force_avatar）。删掉会话后
+  // 这些图就再也数不到了 —— 只删头像/深度图会漏掉会话里生成的配图，留下孤儿。
+  const imageBlobs = new Set<string>()
   for (const cid of chatIds) {
+    let cursor = await msgStore.openCursor(chatRange(cid))
+    while (cursor) {
+      const m = cursor.value
+      if (m.force_avatar) imageBlobs.add(m.force_avatar)
+      for (const img of m.images ?? []) if (img.blobId) imageBlobs.add(img.blobId)
+      cursor = await cursor.continue()
+    }
     await msgStore.delete(chatRange(cid))
     await chatStore.delete(cid)
   }
@@ -122,4 +133,6 @@ export async function remove(id: string): Promise<void> {
 
   await tx.objectStore('characters').delete(id)
   await tx.done
+  // 会话已删除，回收「删完后全库无人再引用」的配图（分支共享的图交给它比对，不误删）
+  await pruneUnreferenced(imageBlobs)
 }

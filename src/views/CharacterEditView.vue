@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ImagePlus, Sparkles, Undo2 } from 'lucide-vue-next'
+import { ImagePlus, Sparkles, Undo2 } from '@/components/icons'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import GreetingsEditor from '@/components/character/GreetingsEditor.vue'
@@ -321,7 +322,8 @@ async function startChat() {
 async function exportJson() {
   const m = model.value
   if (!m) return
-  downloadBlob(await exportCharacterJson(m), safeFileName(m.data.name, 'json'))
+  const at = await downloadBlob(await exportCharacterJson(m), safeFileName(m.data.name, 'json'))
+  if (at) toast.success(`已导出到 ${at}`)
 }
 
 async function exportPng() {
@@ -332,7 +334,8 @@ async function exportPng() {
     // 导出的是库里的角色，未保存的改动不会进卡里 —— 先落盘再导
     if (dirty) await save()
     const { blob, notice } = await exportCharacterPng(m)
-    downloadBlob(blob, safeFileName(m.data.name, 'png'))
+    const at = await downloadBlob(blob, safeFileName(m.data.name, 'png'))
+    if (at) toast.success(`已导出到 ${at}`)
     if (notice) toast.warning(notice)
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
@@ -488,7 +491,9 @@ async function remove() {
                 正在生成深度图…{{ depthPct ? ` ${depthPct}%` : '' }}
               </span>
               <template v-else-if="model.depthBlobId">
-                <span class="depth__state depth__state--ok">✓ 已有深度图 · 卡片可视差</span>
+                <span class="depth__state depth__state--ok"
+                  ><AppIcon name="Check" /> 已有深度图 · 卡片可视差</span
+                >
                 <button class="cbx-btn cbx-btn--ghost tiny" @click="regenDepth">重新生成</button>
               </template>
               <template v-else>

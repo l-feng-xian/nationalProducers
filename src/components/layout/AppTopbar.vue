@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useUiStore } from '@/stores/ui'
+import MenuIcon from '@/components/icons/MenuIcon.vue'
 
 defineProps<{ title: string }>()
 
@@ -8,7 +9,16 @@ const ui = useUiStore()
 
 <template>
   <header class="topbar">
-    <button class="cbx-icon-btn menu-btn" aria-label="菜单" @click="ui.toggleDrawer()">☰</button>
+    <!-- 菜单：三线 ↔ X 连续变形，可在过渡中反向切换。 -->
+    <button
+      class="cbx-icon-btn menu-btn"
+      type="button"
+      aria-label="菜单"
+      :aria-expanded="ui.drawerOpen"
+      @click="ui.toggleDrawer()"
+    >
+      <MenuIcon :open="ui.drawerOpen" />
+    </button>
     <h1 class="title">{{ title }}</h1>
     <div class="actions"><slot name="actions" /></div>
   </header>

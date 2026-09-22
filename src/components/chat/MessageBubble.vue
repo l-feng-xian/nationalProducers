@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,8 +8,8 @@ import {
   ImagePlus,
   Pencil,
   RotateCcw,
-  Trash2,
-} from 'lucide-vue-next'
+  Trash2
+} from '@/components/icons'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useLongPress } from '@/composables/useLongPress'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -38,12 +38,21 @@ const emit = defineEmits<{
   branch: []
   generateImage: []
   imageLoaded: []
+  /**
+   * 进入/退出内联编辑。给虚拟滚动用：`editing`/`draft` 是组件内状态，
+   * 这一行一旦滚出窗口被卸载，用户正在改的草稿就无声没了（全量渲染时不会）。
+   * 父组件据此把这一行钉在 keepMounted 里。
+   */
+  editingChange: [editing: boolean]
 }>()
 
 const html = computed(() => renderMarkdown(props.msg.mes))
 const isUser = computed(() => props.msg.is_user)
 const timeLabel = computed(() =>
-  new Date(props.msg.send_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  new Date(props.msg.send_date).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 )
 const hasSwipes = computed(() => (props.msg.swipes?.length ?? 0) > 1)
 const swipeLabel = computed(() => {
@@ -70,6 +79,10 @@ function commitEdit() {
 function cancelEdit() {
   editing.value = false
 }
+// 统一在状态本身上报，省得 start/commit/cancel 三处各喊一次、将来加第四条路径又漏掉。
+// ⚠️ 刻意不在 onUnmounted 里补一次 false：卸载恰恰是我们要避免的事，
+// 真被卸载了还去取消钉住，就成了自己把自己解钉的回环。
+watch(editing, v => emit('editingChange', v))
 
 // ── 移动端长按动作面板 ──
 const sheetOpen = ref(false)
@@ -88,7 +101,12 @@ function act(fn: () => void) {
 
 <template>
   <div class="row" :class="{ 'row--user': isUser }">
-    <CbxAvatar v-if="!isUser" :blob-id="avatarBlobId" :name="msg.name" size="sm" />
+    <CbxAvatar
+      v-if="!isUser"
+      :blob-id="avatarBlobId"
+      :name="msg.name"
+      size="sm"
+    />
 
     <div class="col">
       <div class="message-meta">
@@ -100,14 +118,27 @@ function act(fn: () => void) {
       <div
         class="cbx-bubble"
         :class="isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai'"
-        :style="accent ? { borderLeft: `3px solid var(--cbx-char-${accent})` } : undefined"
+        :style="
+          accent
+            ? { borderLeft: `3px solid var(--cbx-char-${accent})` }
+            : undefined
+        "
         v-bind="handlers"
       >
         <template v-if="editing">
-          <textarea ref="ta" v-model="draft" class="cbx-textarea edit" rows="4" />
+          <textarea
+            ref="ta"
+            v-model="draft"
+            class="cbx-textarea edit"
+            rows="4"
+          />
           <div class="edit__ops">
-            <button class="cbx-btn cbx-btn--ghost xs" @click="cancelEdit">取消</button>
-            <button class="cbx-btn cbx-btn--primary xs" @click="commitEdit">保存</button>
+            <button class="cbx-btn cbx-btn--ghost xs" @click="cancelEdit">
+              取消
+            </button>
+            <button class="cbx-btn cbx-btn--primary xs" @click="commitEdit">
+              保存
+            </button>
           </div>
         </template>
         <template v-else>
@@ -135,13 +166,23 @@ function act(fn: () => void) {
           aria-label="根据此处对话生成配图"
           @click="emit('generateImage')"
         >
-          <ImagePlus :size="14" aria-hidden="true" />
+          <ImagePlus :size="16" aria-hidden="true" />
         </button>
-        <button class="cbx-icon-btn tool" title="复制" aria-label="复制" @click="copy">
-          <Copy :size="14" aria-hidden="true" />
+        <button
+          class="cbx-icon-btn tool"
+          title="复制"
+          aria-label="复制"
+          @click="copy"
+        >
+          <Copy :size="16" aria-hidden="true" />
         </button>
-        <button class="cbx-icon-btn tool" title="编辑" aria-label="编辑" @click="startEdit">
-          <Pencil :size="14" aria-hidden="true" />
+        <button
+          class="cbx-icon-btn tool"
+          title="编辑"
+          aria-label="编辑"
+          @click="startEdit"
+        >
+          <Pencil :size="16" aria-hidden="true" />
         </button>
         <template v-if="!isUser">
           <button
@@ -150,7 +191,7 @@ function act(fn: () => void) {
             aria-label="重新生成"
             @click="emit('regenerate')"
           >
-            <RotateCcw :size="14" aria-hidden="true" />
+            <RotateCcw :size="16" aria-hidden="true" />
           </button>
           <template v-if="hasSwipes">
             <button
@@ -178,7 +219,7 @@ function act(fn: () => void) {
           aria-label="从这里分支出新对话"
           @click="emit('branch')"
         >
-          <GitBranch :size="14" aria-hidden="true" />
+          <GitBranch :size="16" aria-hidden="true" />
         </button>
         <button
           class="cbx-icon-btn tool tool--danger"
@@ -186,15 +227,21 @@ function act(fn: () => void) {
           aria-label="删除本条"
           @click="emit('remove')"
         >
-          <Trash2 :size="14" aria-hidden="true" />
+          <Trash2 tone="danger" :size="16" aria-hidden="true" />
         </button>
-        <span v-if="msg.extra?.stopped" class="cbx-badge cbx-badge--warning">已中断</span>
+        <span v-if="msg.extra?.stopped" class="cbx-badge cbx-badge--warning"
+          >已中断</span
+        >
       </div>
     </div>
 
     <!-- 移动端长按面板 -->
     <Teleport to="body">
-      <div v-if="sheetOpen" class="cbx-modal__scrim sheet-scrim" @click.self="sheetOpen = false">
+      <div
+        v-if="sheetOpen"
+        class="cbx-modal__scrim sheet-scrim"
+        @click.self="sheetOpen = false"
+      >
         <div class="sheet cbx-safe-b">
           <button class="sheet__item" @click="copy">复制</button>
           <button class="sheet__item" @click="startEdit">编辑</button>
@@ -205,17 +252,31 @@ function act(fn: () => void) {
           >
             根据此处对话生成配图
           </button>
-          <button v-if="!isUser" class="sheet__item" @click="act(() => emit('regenerate'))">
+          <button
+            v-if="!isUser"
+            class="sheet__item"
+            @click="act(() => emit('regenerate'))"
+          >
             重新生成
           </button>
-          <button class="sheet__item" @click="act(() => emit('branch'))">从这里分支出新对话</button>
-          <button class="sheet__item sheet__item--danger" @click="act(() => emit('remove'))">
+          <button class="sheet__item" @click="act(() => emit('branch'))">
+            从这里分支出新对话
+          </button>
+          <button
+            class="sheet__item sheet__item--danger"
+            @click="act(() => emit('remove'))"
+          >
             删除本条
           </button>
-          <button class="sheet__item sheet__item--danger" @click="act(() => emit('removeFrom'))">
+          <button
+            class="sheet__item sheet__item--danger"
+            @click="act(() => emit('removeFrom'))"
+          >
             删除本条及之后
           </button>
-          <button class="sheet__item sheet__cancel" @click="sheetOpen = false">取消</button>
+          <button class="sheet__item sheet__cancel" @click="sheetOpen = false">
+            取消
+          </button>
         </div>
       </div>
     </Teleport>
@@ -227,7 +288,10 @@ function act(fn: () => void) {
   display: flex;
   gap: var(--cbx-space-3);
   align-items: flex-start;
-  margin-bottom: var(--cbx-space-6);
+  /* ⚠️ 必须是 padding 不能是 margin：虚拟滚动靠 ResizeObserver 量每行高度，
+     而它量的是 border-box，**不含 margin**。用 margin 的话这 24px 间距会整条
+     从虚拟列表的高度模型里消失，累积成越滚越偏。 */
+  padding-bottom: var(--cbx-space-6);
 }
 .row--user {
   flex-direction: row-reverse;
@@ -261,11 +325,13 @@ function act(fn: () => void) {
 }
 .cbx-bubble {
   padding: 14px 18px;
-  line-height: 1.8;
+  line-height: 1.6;
 }
 .cbx-bubble--ai {
   background: var(--cbx-bg);
-  border-color: color-mix(in srgb, var(--cbx-border) 70%, transparent);
+  /* 原为 color-mix(... 70%, transparent)，但 Chrome 110 WebView 不支持 color-mix，
+     失效后 border-color 会回落成 currentColor（=正文色）→ 边框突然变重。直接用边框色。 */
+  border-color: var(--cbx-border);
   border-top-left-radius: var(--cbx-radius-sm);
   box-shadow: 0 2px 8px var(--cbx-brand-subtle);
 }

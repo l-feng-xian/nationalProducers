@@ -1,5 +1,6 @@
 import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
+import { pruneUnreferenced } from './blobs'
 import { newChatMetadata, type ChatMeta, type ChatMetadata } from '@/types/chat'
 
 export async function list(): Promise<ChatMeta[]> {
@@ -80,14 +81,28 @@ export async function rename(id: string, title: string): Promise<void> {
   await tx.done
 }
 
-/** 删会话同时删其全部消息，必须同事务 */
+/** 删会话同时删其全部消息、向量块与仅本会话引用的配图 */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
   // memchunks 必须和 messages 在**同一事务**里删：分开删的话，中途失败会留下
   // 几 MB 的孤儿向量，而且没有任何东西会再去回收它们
   const tx = db.transaction(['chats', 'messages', 'memchunks'], 'readwrite')
+  // 删除前先在同一游标里收集本会话消息引用到的图片（配图 + force_avatar）。
+  // 会话删掉后这些记录就再也数不到了，孤儿图片会永久留在 blobs 里（此前只有
+  // 设置页「清理未引用图片」才会回收）。这里只扫本会话主键区间，纯文本会话候选为空。
+  const candidates = new Set<string>()
+  let cursor = await tx.objectStore('messages').openCursor(chatRange(id))
+  while (cursor) {
+    const m = cursor.value as { force_avatar?: string; images?: { blobId?: string }[] }
+    if (m.force_avatar) candidates.add(m.force_avatar)
+    for (const img of m.images ?? []) if (img.blobId) candidates.add(img.blobId)
+    cursor = await cursor.continue()
+  }
   await tx.objectStore('messages').delete(chatRange(id))
   await tx.objectStore('memchunks').delete(chatRange(id))
   await tx.objectStore('chats').delete(id)
   await tx.done
+  // 会话已删除，再回收「删完后全库无人引用」的图片。分支会共享 blobId，
+  // 所以交给 pruneUnreferenced 逐个比对全库可达集，不会误删分支仍在用的配图。
+  await pruneUnreferenced(candidates)
 }

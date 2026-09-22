@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Send, Square } from 'lucide-vue-next'
+import { Send, Square } from '@/components/icons'
 
 const props = defineProps<{ busy: boolean; sendOnEnter: boolean }>()
 const emit = defineEmits<{ send: [text: string]; stop: [] }>()
@@ -109,8 +109,8 @@ function onKeydown(e: KeyboardEvent) {
           :title="busy ? '停止生成' : '发送消息'"
           @click="onAction"
         >
-          <Square v-if="busy" :size="17" :stroke-width="2" fill="currentColor" aria-hidden="true" />
-          <Send v-else class="send-icon" :size="23" :stroke-width="1.8" aria-hidden="true" />
+          <Square v-if="busy" :size="20" active fill="currentColor" aria-hidden="true" />
+          <Send v-else class="send-icon" :size="20" aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -130,7 +130,7 @@ function onKeydown(e: KeyboardEvent) {
         }"
         @animationend.self="finishFlight"
       >
-        <Send :size="26" :stroke-width="1.8" fill="var(--cbx-bg)" />
+        <Send :size="24" fill="var(--cbx-bg)" />
       </span>
     </div>
   </Teleport>
@@ -240,12 +240,7 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--cbx-text-disabled);
   background: var(--cbx-bg-secondary);
 }
-.send-icon {
-  transition: transform 200ms var(--cbx-ease);
-}
-.send-button:hover:not(:disabled) .send-icon {
-  transform: translate(1px, -1px) rotate(-8deg);
-}
+
 .send-button--launching .send-icon {
   visibility: hidden;
 }

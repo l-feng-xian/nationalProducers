@@ -1,0 +1,107 @@
+/**
+ * 数据管理页各子表格的共享样式（消息 / 向量块 / 其他数据表）。
+ *
+ * 与 DataView 主表同一家族：自己横向滚、sticky 表头、数字列右对齐。
+ * 各组件以 <style scoped src> 引入，选择器按类名生效。
+ */
+
+.dtblwrap {
+  overflow-x: auto;
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-md);
+}
+.dtbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cbx-fs-sm);
+  min-width: 560px;
+}
+.dtbl th,
+.dtbl td {
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--cbx-border);
+}
+.dtbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--cbx-bg-secondary);
+  font-size: var(--cbx-fs-xs);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-tertiary);
+}
+.dtbl tbody tr:last-child td {
+  border-bottom: 0;
+}
+.dtbl__row {
+  cursor: pointer;
+  transition: background var(--cbx-transition);
+}
+@media (hover: hover) {
+  .dtbl__row:hover {
+    background: var(--cbx-bg-hover);
+  }
+}
+.dtbl__row--on {
+  background: var(--cbx-brand-light);
+}
+.dtbl__row--on:hover {
+  background: var(--cbx-brand-light-hover);
+}
+/* 长文本列：截断悬浮看全 */
+.dtbl__clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+.dnum {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dzero {
+  color: var(--cbx-text-placeholder);
+}
+.dpager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cbx-space-2);
+  flex-wrap: wrap;
+}
+.dpager__info {
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.dpager__acts {
+  display: flex;
+  gap: var(--cbx-space-2);
+}
+.dthumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: var(--cbx-radius-sm);
+  background: var(--cbx-bg-secondary);
+  display: block;
+}
+.dthumb--missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-placeholder);
+}
+@media (max-width: 767px) {
+  .dtbl {
+    min-width: 480px;
+  }
+  .dtbl__clip {
+    max-width: 160px;
+  }
+  .dpager .cbx-btn {
+    min-height: var(--cbx-tap-min);
+  }
+}

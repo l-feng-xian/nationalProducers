@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 /**
  * 局域网扫码同步。
  *
@@ -24,7 +25,9 @@ const sync = useSyncStore()
 const chats = useChatsStore()
 const chars = useCharactersStore()
 const gameworlds = useInfiniteWorldStore()
-onMounted(() => { void gameworlds.load().catch((e) => toast.error(String(e))) })
+onMounted(() => {
+  void gameworlds.load().catch((e) => toast.error(String(e)))
+})
 const toast = useToast()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -199,13 +202,15 @@ onBeforeUnmount(stopCamera)
       <div class="cbx-modal" role="dialog" aria-modal="true">
         <header class="cbx-modal__head">
           <h3>二维码同步</h3>
-          <button class="cbx-icon-btn" aria-label="关闭" @click="close">✕</button>
+          <button class="cbx-icon-btn" aria-label="关闭" @click="close">
+            <AppIcon name="X" />
+          </button>
         </header>
 
         <div class="cbx-modal__body cbx-scroll">
           <p v-if="!secure" class="note note--warn">
-            ⚠️ 当前不是安全上下文，摄像头与 WebRTC 都会被浏览器禁用。 请用
-            <code>npm run dev:lan</code> 启动，或把应用部署到 https 站点后再试。
+            <AppIcon name="TriangleAlert" tone="warning" /> 当前不是安全上下文，摄像头与 WebRTC 都会被浏览器禁用。
+            请用 <code>npm run dev:lan</code> 启动，或把应用部署到 https 站点后再试。
           </p>
 
           <!-- 1 选角色 -->
@@ -234,7 +239,7 @@ onBeforeUnmount(stopCamera)
                 >
                   <span class="peer__dot" />
                   <span class="peer__name">{{ p.name }}</span>
-                  <span class="peer__go">连接 →</span>
+                  <span class="peer__go">连接 <AppIcon name="ArrowRight" /></span>
                 </button>
               </div>
               <p v-else-if="!sync.discovering" class="cbx-field__hint">
@@ -297,7 +302,9 @@ onBeforeUnmount(stopCamera)
               <template v-else>第 2 步：让发起方扫下面这个应答码，扫完就连上了。</template>
             </p>
             <p v-if="!sync.relayed && sync.fallbackReason" class="note note--warn">
-              ⚠️ 没连上信令服务器，已退回手动模式（要扫两次码）：{{ sync.fallbackReason }}
+              <AppIcon name="TriangleAlert" tone="warning" /> 没连上信令服务器，已退回手动模式（要扫两次码）：{{
+                sync.fallbackReason
+              }}
             </p>
             <div class="qr">
               <canvas ref="canvas" />
@@ -326,7 +333,9 @@ onBeforeUnmount(stopCamera)
             <div class="cam">
               <video ref="video" playsinline muted />
             </div>
-            <p v-if="scanErr" class="note note--warn">⚠️ {{ scanErr }}</p>
+            <p v-if="scanErr" class="note note--warn">
+              <AppIcon name="TriangleAlert" tone="warning" /> {{ scanErr }}
+            </p>
             <details class="fallback">
               <summary>没有摄像头？</summary>
               <div class="acts">
@@ -359,7 +368,7 @@ onBeforeUnmount(stopCamera)
 
           <!-- 5 已连通：选方向与范围 -->
           <template v-else-if="sync.step === 'ready'">
-            <p class="note">✅ 已连接。选择要同步的内容，然后决定方向。</p>
+            <p class="note"><AppIcon name="Check" tone="success" /> 已连接。选择要同步的内容，然后决定方向。</p>
             <div class="opts">
               <label v-for="it in SCOPE_ITEMS" :key="it.key" class="opt">
                 <input v-model="sync.scope[it.key]" type="checkbox" />
@@ -391,7 +400,9 @@ onBeforeUnmount(stopCamera)
             <p class="note">对方要发来这些数据：</p>
             <p class="big">{{ describeCounts(sync.incoming.counts) }}</p>
             <p class="cbx-field__hint">传输体积约 {{ formatBytes(sync.incoming.bytes) }}</p>
-            <p v-if="overlapWarning" class="note note--warn">⚠️ {{ overlapWarning }}</p>
+            <p v-if="overlapWarning" class="note note--warn">
+              <AppIcon name="TriangleAlert" tone="warning" /> {{ overlapWarning }}
+            </p>
             <div class="acts">
               <button class="cbx-btn cbx-btn--primary" @click="sync.answerConfirm(true)">
                 接收
@@ -412,7 +423,7 @@ onBeforeUnmount(stopCamera)
             <p class="note">对方想<b>从这台设备取走</b>这些数据：</p>
             <p class="big">{{ describeScope(sync.pullRequest) }}</p>
             <p v-if="sync.pullRequest.settings" class="note note--warn">
-              ⚠️ 含「设置」——你的接口地址、模型与人设会一并送出去。
+              <AppIcon name="TriangleAlert" tone="warning" /> 含「设置」——你的接口地址、模型与人设会一并送出去。
             </p>
             <p class="cbx-field__hint">
               只会发送上面列出的类别；你在上一页没勾的项目已经排除在外。不确定就拒绝。
@@ -443,7 +454,7 @@ onBeforeUnmount(stopCamera)
 
           <!-- 8 完成 -->
           <template v-else-if="sync.step === 'done'">
-            <p class="note">✅ 同步完成。</p>
+            <p class="note"><AppIcon name="Check" tone="success" /> 同步完成。</p>
             <p v-if="sync.result" class="big">{{ describeCounts(sync.result) }}</p>
             <div class="acts">
               <button class="cbx-btn cbx-btn--primary" @click="finish">完成</button>
@@ -452,7 +463,7 @@ onBeforeUnmount(stopCamera)
 
           <!-- 9 出错 -->
           <template v-else-if="sync.step === 'error'">
-            <p class="note note--warn">⚠️ {{ sync.error }}</p>
+            <p class="note note--warn"><AppIcon name="TriangleAlert" tone="warning" /> {{ sync.error }}</p>
             <div class="acts">
               <button class="cbx-btn cbx-btn--soft" @click="sync.reset()">重新开始</button>
               <button class="cbx-btn cbx-btn--ghost" @click="close">关闭</button>

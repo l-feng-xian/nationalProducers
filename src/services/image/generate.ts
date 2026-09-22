@@ -1,5 +1,5 @@
 import type { GeneratedImage, ImageModelService, ImageReferenceInput } from '@/types/image'
-import { buildHeaders, resolveUrl } from '@/services/provider/http'
+import { buildHeaders, resolveUrl, send as httpSend } from '@/services/provider/http'
 import { armStall } from '@/services/provider/timeout'
 import { toProviderError } from '@/services/provider/stream'
 import { ProviderError } from '@/types/provider'
@@ -134,7 +134,7 @@ export async function generateImage(args: {
         requestBody = form
       }
       guard.signal.throwIfAborted()
-      return fetch(target, { method: 'POST', headers, body: requestBody, signal: guard.signal })
+      return httpSend({ url: target, method: 'POST', headers, body: requestBody, signal: guard.signal })
     }
     let response: Response
     let usedMode: 'multipart' | 'json' | undefined
@@ -187,7 +187,8 @@ export async function generateImage(args: {
       // 图片通常来自另一 CDN，绝不向其转发服务密钥。
       let image: Response
       try {
-        image = await fetch(url.href, {
+        image = await httpSend({
+          url: url.href,
           signal: guard.signal,
           credentials: 'omit',
           referrerPolicy: 'no-referrer',

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -74,13 +75,15 @@ async function startChat(g: Group) {
 <template>
   <AppTopbar title="群聊">
     <template #actions>
-      <button class="cbx-btn cbx-btn--primary" @click="create">＋ 新建群聊</button>
+      <button class="cbx-btn cbx-btn--primary" @click="create">
+        <AppIcon name="Plus" /> 新建群聊
+      </button>
     </template>
   </AppTopbar>
 
   <div class="cbx-scroll body">
     <div v-if="!groups.items.length" class="cbx-empty">
-      <span class="cbx-empty__icon">👥</span>
+      <span class="cbx-empty__icon"><AppIcon name="UsersRound" tone="brand" /></span>
       <span class="cbx-empty__title">还没有群聊</span>
       <span class="cbx-empty__desc">
         群聊是 1vN 的多角色对话：把两个以上角色放进同一个场景，还能配置他们之间的关系
@@ -92,7 +95,9 @@ async function startChat(g: Group) {
         <div class="card__top">
           <div class="faces">
             <!-- 没成员时给个占位，否则这一行只剩右侧一个 ✕ 悬着，是条空白 -->
-            <span v-if="!g.members.length" class="faces__none" aria-hidden="true">👥</span>
+            <span v-if="!g.members.length" class="faces__none" aria-hidden="true"
+              ><AppIcon name="UsersRound" tone="brand"
+            /></span>
             <CbxAvatar
               v-for="f in faces(g)"
               :key="f.id"
@@ -103,8 +108,10 @@ async function startChat(g: Group) {
             />
             <span v-if="overflow(g)" class="faces__more">+{{ overflow(g) }}</span>
           </div>
-          <span v-if="g.fav" class="fav" title="已收藏">★</span>
-          <button class="cbx-icon-btn del" title="删除群聊" @click="remove(g)">✕</button>
+          <span v-if="g.fav" class="fav" title="已收藏"><AppIcon name="Star" /></span>
+          <button class="cbx-icon-btn del" title="删除群聊" @click="remove(g)">
+            <AppIcon name="X" tone="danger" />
+          </button>
         </div>
 
         <h4 class="card__name">{{ g.name }}</h4>

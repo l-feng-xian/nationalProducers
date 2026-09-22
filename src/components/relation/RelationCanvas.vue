@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   bowSignOf,
@@ -427,7 +428,12 @@ function edgeIsOn(e: GraphEdge): boolean {
       <!-- 边 -->
       <g v-for="d in drawEdges" :key="d.e.id">
         <!-- 透明粗描边：加大命中区域，细线很难点中 -->
-        <path :d="d.path" class="edge__hit" @pointerdown.stop @click.stop="onEdgeClick(d.e, d.label)" />
+        <path
+          :d="d.path"
+          class="edge__hit"
+          @pointerdown.stop
+          @click.stop="onEdgeClick(d.e, d.label)"
+        />
         <path
           :d="d.path"
           class="edge"
@@ -455,7 +461,11 @@ function edgeIsOn(e: GraphEdge): boolean {
       <g
         v-for="n in drawNodes"
         :key="n.id"
-        :class="{ 'node--on': selectedNodeId === n.id, 'node--me': n.isUser, 'node--dim': n.dimmed }"
+        :class="{
+          'node--on': selectedNodeId === n.id,
+          'node--me': n.isUser,
+          'node--dim': n.dimmed,
+        }"
         class="node"
       >
         <circle :cx="n.x" :cy="n.y" :r="NODE_R" class="node__ring" />
@@ -487,9 +497,14 @@ function edgeIsOn(e: GraphEdge): boolean {
         <!-- 连接柄 -->
         <g v-if="!readonly" class="handle" @pointerdown.stop="startLink(n.id)">
           <circle :cx="n.x + NODE_R - 3" :cy="n.y - NODE_R + 3" r="9" class="handle__bg" />
-          <text :x="n.x + NODE_R - 3" :y="n.y - NODE_R + 8" text-anchor="middle" class="handle__plus">
-            ＋
-          </text>
+          <path
+            :d="`M${n.x + NODE_R - 7} ${n.y - NODE_R + 3}h8 M${n.x + NODE_R - 3} ${n.y - NODE_R - 1}v8`"
+            class="handle__plus"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
         </g>
       </g>
     </svg>
@@ -498,10 +513,13 @@ function edgeIsOn(e: GraphEdge): boolean {
     <div v-if="draftEdge" class="pop" :style="popStyle">
       <div class="pop__head">
         <span class="pop__title">
-          {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.from ?? '') }} →
+          {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.from ?? '') }}
+          <AppIcon name="ArrowRight" />
           {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.to ?? '') }}
         </span>
-        <button class="cbx-icon-btn pop__x" title="关闭" @click="closeEditor">✕</button>
+        <button class="cbx-icon-btn pop__x" title="关闭" @click="closeEditor">
+          <AppIcon name="X" tone="danger" />
+        </button>
       </div>
       <input
         v-model="draftEdge.label"
@@ -520,9 +538,12 @@ function edgeIsOn(e: GraphEdge): boolean {
       />
       <div class="pop__ops">
         <button class="cbx-btn cbx-btn--ghost sm" @click="emit('swap-edge', draftEdge.id)">
-          ⇄ 交换方向
+          <AppIcon name="ArrowLeftRight" /> 交换方向
         </button>
-        <button class="cbx-btn cbx-btn--ghost sm pop__del" @click="emit('remove-edge', draftEdge.id)">
+        <button
+          class="cbx-btn cbx-btn--ghost sm pop__del"
+          @click="emit('remove-edge', draftEdge.id)"
+        >
           删除
         </button>
       </div>
@@ -625,8 +646,24 @@ function edgeIsOn(e: GraphEdge): boolean {
   fill: var(--cbx-brand);
 }
 .handle__plus {
-  fill: var(--cbx-text-on-brand);
-  font-size: 11px;
+  fill: none;
+  color: var(--cbx-text-on-brand);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform var(--cbx-icon-duration) var(--cbx-icon-ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .handle:hover .handle__plus {
+    transform: rotate(90deg);
+  }
+}
+.handle:active .handle__plus {
+  transform: rotate(90deg) scale(0.85);
+}
+@media (prefers-reduced-motion: reduce) {
+  .handle__plus {
+    transition: none;
+  }
 }
 
 .edge {

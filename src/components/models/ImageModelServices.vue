@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ImagePlus, Pencil, Plus, Trash2 } from 'lucide-vue-next'
+import { ImagePlus, Pencil, Plus, Trash2 } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -63,7 +63,7 @@ async function remove(service: ImageModelService) {
       </button>
     </header>
     <p v-if="!settings.settings.imageModelServices.length" class="empty">
-      <ImagePlus :size="26" />添加文生图模型，即可为角色和对话生成图片。
+      <ImagePlus :size="24" />添加文生图模型，即可为角色和对话生成图片。
     </p>
     <div v-else class="cards">
       <article
@@ -73,7 +73,7 @@ async function remove(service: ImageModelService) {
         :class="{ active: service.id === settings.settings.activeImageModelServiceId }"
       >
         <header class="card-head">
-          <ImagePlus :size="22" />
+          <ImagePlus :size="20" />
           <h4>{{ service.name }}</h4>
           <input
             type="radio"
@@ -101,7 +101,7 @@ async function remove(service: ImageModelService) {
               :disabled="busy"
               @click="edit(service)"
             >
-              <Pencil :size="17" />
+              <Pencil :size="20" />
             </button>
             <button
               class="cbx-icon-btn delete"
@@ -110,7 +110,7 @@ async function remove(service: ImageModelService) {
               :disabled="busy"
               @click="remove(service)"
             >
-              <Trash2 :size="17" />
+              <Trash2 tone="danger" :size="20" />
             </button>
           </div>
         </footer>

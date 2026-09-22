@@ -1259,7 +1259,9 @@ src/
 验收：solo 深度 0 → 约束文本出现在最后一条消息**之后**；设 2 → 出现在倒数第 2 条**之前**；group 独立生效互不干扰；约束文本里的 `{{relations}}` 在群模式被替换、单聊模式替换为空。
 
 ### 阶段 6 — 打磨与数据
-产出：全库导出/导入 zip、未引用 blob GC、消息编辑/删除/分支、Markdown + 代码高亮、消息 >500 时虚拟滚动、错误边界、空状态、暗色补洞（`--cbx-gray-*` 在 dark 下未覆盖导致滚动条拇指发白）。
+产出：全库导出/导入 zip、未引用 blob GC、消息编辑/删除/分支、Markdown + 代码高亮、消息 >500 时虚拟滚动（**已实现**：`ChatView.vue` 的
+`VIRTUAL_THRESHOLD`，超阈值才用 `virtua` 的 `Virtualizer`，低于阈值保持扁平渲染以免牺牲
+Ctrl+F 查找与跨消息选中；配套见 `useAutoScroll` 的贴底 settle 与 `renderMarkdown` 的 LRU）、错误边界、空状态、暗色补洞（`--cbx-gray-*` 在 dark 下未覆盖导致滚动条拇指发白）。
 验收：1000 条消息滚动 60fps；导出后在全新浏览器导入完全还原。
 
 ### 依赖关系

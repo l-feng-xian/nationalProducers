@@ -59,4 +59,12 @@ export interface MessageImage {
   model: string
   serviceName: string
   createdAt: number
+  /**
+   * 像素尺寸，附图时探测一次存下来。用来在图真正解码出来之前就把高度占住：
+   * 配图是从 IndexedDB 异步取 Blob 再 createObjectURL 的，不占位的话这一行会
+   * 先塌成一行占位文字、再撑到最高 560px —— 虚拟滚动下每次滚回来都跳一次。
+   * 老记录没有这两个字段，回退到原来的自适应高度。
+   */
+  width?: number
+  height?: number
 }

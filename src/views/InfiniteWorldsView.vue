@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -27,7 +28,7 @@ async function remove(id: string, name: string) {
   <AppTopbar title="无限世界">
     <template #actions>
       <button class="cbx-btn cbx-btn--primary" @click="router.push('/game-worlds/new')">
-        ＋ 创建世界
+        <AppIcon name="Plus" /> 创建世界
       </button>
     </template>
   </AppTopbar>
@@ -35,7 +36,7 @@ async function remove(id: string, name: string) {
     <p v-if="loading">正在读取世界…</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <div v-else-if="!worlds.items.length" class="cbx-empty">
-      <span class="cbx-empty__icon">🌿</span>
+      <span class="cbx-empty__icon"><AppIcon name="Sprout" tone="brand" /></span>
       <span class="cbx-empty__title">还没有无限世界</span>
       <span class="cbx-empty__desc">配置世界观、玩家身份和居民后，开始一段可持续探索的田园生活。</span>
       <button class="cbx-btn cbx-btn--soft" @click="router.push('/game-worlds/new')">创建第一个世界</button>

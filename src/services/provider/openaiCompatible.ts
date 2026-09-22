@@ -3,7 +3,7 @@
  * 一切实现了 `/chat/completions` 的服务。
  */
 
-import { buildHeaders, resolveUrl } from './http'
+import { buildHeaders, resolveUrl, send } from './http'
 import { parseSSE, toProviderError } from './stream'
 import { armStall, type StallGuard } from './timeout'
 import {
@@ -87,7 +87,8 @@ export async function* streamChat(
   try {
     let res: Response
     try {
-      res = await fetch(url, {
+      res = await send({
+        url,
         method: 'POST',
         headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
         body: bodyOf({ ...req, stream: true }),
@@ -134,7 +135,8 @@ export async function chatOnce(
   try {
     let res: Response
     try {
-      res = await fetch(url, {
+      res = await send({
+        url,
         method: 'POST',
         headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
         body: bodyOf({ ...req, stream: false }),
@@ -202,7 +204,8 @@ async function fetchModels(
 ): Promise<ModelInfo[]> {
   let res: Response
   try {
-    res = await fetch(url, {
+    res = await send({
+      url,
       method: 'GET',
       headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
       signal: guard.signal,

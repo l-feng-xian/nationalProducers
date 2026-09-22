@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -259,7 +260,7 @@ async function removeGroup() {
              全局人设是跨所有对话的默认值，这里配的是**只在这个群聊里**的身份 -->
         <div class="me">
           <div class="me__head">
-            <span class="me__icon">🙋</span>
+            <span class="me__icon"><AppIcon name="UserRound" /></span>
             <span class="cbx-field__label">我扮演的角色</span>
             <span v-if="!model.persona.name && !model.persona.description" class="cbx-badge">
               沿用全局人设
@@ -309,7 +310,7 @@ async function removeGroup() {
               :disabled="i === 0"
               @click="move(c.id, -1)"
             >
-              ↑
+              <AppIcon name="ArrowUp" />
             </button>
             <button
               class="cbx-icon-btn tiny"
@@ -317,12 +318,25 @@ async function removeGroup() {
               :disabled="i === memberChars.length - 1"
               @click="move(c.id, 1)"
             >
-              ↓
+              <AppIcon name="ArrowDown" />
             </button>
-            <button class="cbx-icon-btn tiny" title="静音/取消" @click="toggleMute(c.id)">
-              🔇
+            <button
+              class="cbx-icon-btn tiny"
+              :title="model.disabled_members.includes(c.id) ? '取消静音' : '静音'"
+              :aria-pressed="model.disabled_members.includes(c.id)"
+              @click="toggleMute(c.id)"
+            >
+              <span class="icon-swap"
+                ><Transition name="icon-swap"
+                  ><AppIcon
+                    :key="String(model.disabled_members.includes(c.id))"
+                    :name="model.disabled_members.includes(c.id) ? 'VolumeX' : 'Volume2'"
+                    :size="16" /></Transition
+              ></span>
             </button>
-            <button class="cbx-icon-btn tiny" title="移除" @click="removeMember(c.id)">✕</button>
+            <button class="cbx-icon-btn tiny" title="移除" @click="removeMember(c.id)">
+              <AppIcon name="X" tone="danger" />
+            </button>
           </div>
         </div>
 
@@ -331,7 +345,7 @@ async function removeGroup() {
         <div v-if="!candidates.length" class="cbx-field__hint">没有可添加的角色了</div>
         <div class="chips">
           <button v-for="c in candidates" :key="c.id" class="cbx-chip" @click="addMember(c.id)">
-            ＋ {{ c.data.name }}
+            <AppIcon name="Plus" /> {{ c.data.name }}
           </button>
         </div>
       </section>
@@ -371,7 +385,7 @@ async function removeGroup() {
             class="cbx-btn cbx-btn--soft"
             @click="addRelation()"
           >
-            ＋ 添加关系
+            <AppIcon name="Plus" /> 添加关系
           </button>
         </div>
 
@@ -405,7 +419,7 @@ async function removeGroup() {
                 </option>
               </select>
               <button class="cbx-icon-btn tiny" title="交换方向" @click="swapDirection(r)">
-                ⇄
+                <AppIcon name="ArrowLeftRight" />
               </button>
               <select v-model="r.to" class="cbx-input rel__who" @change="save">
                 <option v-for="n in relationNodes" :key="n.id" :value="n.id">
@@ -419,7 +433,7 @@ async function removeGroup() {
                 @change="save"
               />
               <button class="cbx-icon-btn tiny" title="删除" @click="removeRelation(r.id)">
-                ✕
+                <AppIcon name="X" tone="danger" />
               </button>
             </div>
           </div>

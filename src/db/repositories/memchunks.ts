@@ -30,6 +30,71 @@ export async function countByChat(chatId: string): Promise<number> {
   return db.count('memchunks', chatRange(chatId))
 }
 
+/**
+ * 一次事务里批量数多个会话的块数。
+ *
+ * 数据管理页的会话列表要给每行显示向量块数 —— 以前是每个会话各开一个
+ * `countByChat` 事务再 Promise.all，会话多了就是几十个并发事务；这里
+ * 改成单事务顺序 count，IDB 的 count 不取值、只走 B 树，顺序跑也很快。
+ */
+export async function countByChats(ids: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
+  if (!ids.length) return out
+  const db = await getDb()
+  const tx = db.transaction('memchunks')
+  const store = tx.objectStore('memchunks')
+  for (const id of ids) out[id] = await store.count(chatRange(id))
+  await tx.done
+  return out
+}
+
+/** 数据管理页展示用的块元数据：vec 被剥离成维度与字节数，不带向量本体 */
+export interface ChunkMetaRow {
+  kindRank: 0 | 1
+  ord: number
+  textPreview: string
+  startSeq: number
+  endSeq: number
+  srcCount: number
+  dims: number
+  bytes: number
+}
+
+/**
+ * 按会话分页读块元数据（升序）。
+ *
+ * 数据管理页浏览向量块用这个 —— `listByChat` 会把整会话几千块向量
+ * （Float32Array，几 MB 起）全部拉进内存打包，浏览场景绝不能走它。
+ * before 是上一页最后一行的 `[kindRank, ord]`（排他）。
+ */
+export async function pageByChat(
+  chatId: string,
+  opts: { limit?: number; before?: [number, number] } = {},
+): Promise<{ rows: ChunkMetaRow[]; hasMore: boolean }> {
+  const limit = opts.limit ?? 50
+  const db = await getDb()
+  const range = opts.before
+    ? IDBKeyRange.bound([chatId], [chatId, opts.before[0], opts.before[1]], false, true)
+    : chatRange(chatId)
+  const rows: ChunkMetaRow[] = []
+  let cursor = await db.transaction('memchunks').store.openCursor(range)
+  while (cursor && rows.length < limit) {
+    const { text, srcSeqs, endSeq, vec } = cursor.value as MemChunk
+    rows.push({
+      kindRank: cursor.value.kindRank,
+      ord: cursor.value.ord,
+      textPreview: text.length > 60 ? `${text.slice(0, 60)}…` : text,
+      startSeq: srcSeqs.length ? Math.min(...srcSeqs) : -1,
+      endSeq,
+      srcCount: srcSeqs.length,
+      dims: vec.length,
+      bytes: vec.byteLength,
+    })
+    cursor = await cursor.continue()
+  }
+  return { rows, hasMore: cursor !== null }
+}
+
 export async function clearChat(chatId: string): Promise<void> {
   const db = await getDb()
   await db.delete('memchunks', chatRange(chatId))

@@ -1,5 +1,6 @@
 import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
+import { pruneUnreferenced } from './blobs'
 import { emptyGroup, type Group, type GroupRelation, type GroupNodeLayout } from '@/types/group'
 
 /**
@@ -122,10 +123,21 @@ export async function remove(id: string): Promise<void> {
   const chatStore = tx.objectStore('chats')
   const msgStore = tx.objectStore('messages')
   const chatIds = await chatStore.index('by_groupId').getAllKeys(id)
+  // 删会话消息前先收集配图，删掉后就数不到了 —— 只删群头像会漏掉会话里的配图
+  const imageBlobs = new Set<string>()
   for (const cid of chatIds) {
+    let cursor = await msgStore.openCursor(chatRange(cid))
+    while (cursor) {
+      const m = cursor.value
+      if (m.force_avatar) imageBlobs.add(m.force_avatar)
+      for (const img of m.images ?? []) if (img.blobId) imageBlobs.add(img.blobId)
+      cursor = await cursor.continue()
+    }
     await msgStore.delete(chatRange(cid))
     await chatStore.delete(cid)
   }
   await tx.objectStore('groups').delete(id)
   await tx.done
+  // 会话已删除，回收删完后全库无人再引用的配图（分支共享的图不误删）
+  await pruneUnreferenced(imageBlobs)
 }

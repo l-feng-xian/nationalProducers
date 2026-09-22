@@ -1,8 +1,11 @@
 /**
- * 浏览器下载 + 文件名清洗。
+ * 文件保存 + 文件名清洗。
  * 仓里原本有三份复制的 createObjectURL/click/revoke，统一到这里。
- * 本文件不 import vue/pinia，可被 services 与 views 共用。
+ * 本文件不 import vue/pinia，可被 services 与 views 共用（所以不在这里弹 toast，
+ * 由调用方拿返回值自己提示）。
  */
+
+import { isTauri } from '@/services/platform/env'
 
 /** Windows 保留设备名，带任何扩展名都不能创建 */
 const WIN_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
@@ -33,8 +36,33 @@ export function safeFileName(raw: string, ext: string, fallback = 'character'): 
   return s + dot
 }
 
+/**
+ * 保存一个文件。返回落点描述（Web 是文件名，原生壳是完整路径），用户取消返回 null。
+ *
+ * ⚠️ 为什么不能只有 `<a download>` 这一条路：**安卓 WebView 不处理 `blob:` 下载**，
+ * 没有原生 DownloadListener 的话点了毫无反应 —— 不报错、不弹窗、什么都不发生。
+ * 所以原生壳里改走系统保存对话框 + 直接写文件。
+ *
+ * 插件都是**动态 import**：Web 构建里不该把它们打进包。
+ */
+export async function downloadBlob(blob: Blob, filename: string): Promise<string | null> {
+  if (isTauri) {
+    const [{ save }, { writeFile }] = await Promise.all([
+      import('@tauri-apps/plugin-dialog'),
+      import('@tauri-apps/plugin-fs'),
+    ])
+    const target = await save({ defaultPath: filename })
+    if (!target) return null
+    // 路径来自原生对话框，本身就是用户授权的落点，**不要**再传 baseDir 去套 scope
+    await writeFile(target, new Uint8Array(await blob.arrayBuffer()))
+    return target
+  }
+  downloadViaAnchor(blob, filename)
+  return filename
+}
+
 /** 触发一次浏览器下载。anchor 必须挂进 document，游离 anchor 的合成 click 在部分内核上无效 */
-export function downloadBlob(blob: Blob, filename: string): void {
+function downloadViaAnchor(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

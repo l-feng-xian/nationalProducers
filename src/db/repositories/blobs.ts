@@ -19,6 +19,20 @@ export async function get(id: string): Promise<Blob | undefined> {
   return rec?.data
 }
 
+/** 单事务批量取多条记录（含元数据与 Blob 本体），数据管理页图片子表用 */
+export async function getMany(
+  ids: string[],
+): Promise<Record<string, BlobRecord | undefined>> {
+  const out: Record<string, BlobRecord | undefined> = {}
+  if (!ids.length) return out
+  const db = await getDb()
+  const tx = db.transaction('blobs')
+  const store = tx.objectStore('blobs')
+  for (const id of ids) out[id] = await store.get(id)
+  await tx.done
+  return out
+}
+
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
   await db.delete('blobs', id)
@@ -61,16 +75,25 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
   return out
 }
 
-/** 扫全库引用，删除未被任何记录引用的图片。设置页「清理未引用图片」 */
-export async function gc(): Promise<number> {
+/**
+ * 全库可达的图片 id 集。gc、整库备份、「删会话连带清图」都从这里取同一张可达面，
+ * 字段清单只在 {@link collectBlobRefs} 一处维护，不会两处各漏一个引用字段。
+ */
+export async function reachableBlobIds(): Promise<Set<string>> {
   const db = await getDb()
-  const referenced = collectBlobRefs({
+  return collectBlobRefs({
     characters: await db.getAll('characters'),
     messages: await db.getAll('messages'),
     groups: await db.getAll('groups'),
     gameworlds: await db.getAll('gameworlds'),
     persona: (await db.get('settings', 'app'))?.persona,
   })
+}
+
+/** 扫全库引用，删除未被任何记录引用的图片。设置页「清理未引用图片」 */
+export async function gc(): Promise<number> {
+  const db = await getDb()
+  const referenced = await reachableBlobIds()
 
   const ids = await db.getAllKeys('blobs')
   let removed = 0
@@ -79,5 +102,28 @@ export async function gc(): Promise<number> {
     await db.delete('blobs', id)
     removed++
   }
+  return removed
+}
+
+/**
+ * 从候选集里回收「删除操作发生后、全库已无人引用」的图片。
+ *
+ * 删会话时用：被删会话消息带的配图（images[].blobId）与 force_avatar 都是候选。
+ * **不能直接删候选** —— 分支（copyUpTo）会让另一个会话的消息共享同一 blobId，
+ * 直接删会击穿仍在使用它的分支会话配图。所以在会话/消息已删除之后，重算一次
+ * 全库可达集，只回收真正的孤儿。候选为空时零成本返回，纯文本会话不付这次扫描。
+ */
+export async function pruneUnreferenced(candidates: Set<string>): Promise<number> {
+  if (candidates.size === 0) return 0
+  const referenced = await reachableBlobIds()
+  const db = await getDb()
+  const tx = db.transaction('blobs', 'readwrite')
+  let removed = 0
+  for (const id of candidates) {
+    if (referenced.has(id)) continue
+    await tx.store.delete(id)
+    removed++
+  }
+  await tx.done
   return removed
 }

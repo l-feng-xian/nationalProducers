@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -320,12 +321,12 @@ async function finish() {
           <div class="actions"><button class="cbx-btn cbx-btn--soft" @click="relationView = relationView === 'graph' ? 'list' : 'graph'">{{ relationView === 'graph' ? '切换到关系列表' : '切换到图谱' }}</button></div>
           <div v-if="relationView === 'graph'" class="graph-wrap"><RelationGraph :members="members" :relations="draft.relations" :layout="draft.relationLayout" @update:layout="draft.relationLayout = $event" @create-relation="createRelation" @remove-relation="(id) => draft.relations = draft.relations.filter((r) => r.id !== id)" @swap-relation="swapRelation" /></div>
           <div class="relation-add">
-            <select v-model="relationFrom" class="cbx-input" aria-label="关系起点"><option v-for="m in members" :key="m.id" :value="m.id">{{ m.name }}</option></select><span>→</span>
+            <select v-model="relationFrom" class="cbx-input" aria-label="关系起点"><option v-for="m in members" :key="m.id" :value="m.id">{{ m.name }}</option></select><span><AppIcon name="ArrowRight" /></span>
             <select v-model="relationTo" class="cbx-input" aria-label="关系终点"><option value="" disabled>选择对象</option><option v-for="m in members.filter((m) => m.id !== relationFrom)" :key="m.id" :value="m.id">{{ m.name }}</option></select>
             <button class="cbx-btn cbx-btn--soft" :disabled="!relationTo || relationFrom === relationTo" @click="createRelation(relationFrom, relationTo)">添加关系</button>
           </div>
           <div v-for="r in draft.relations" :key="r.id" class="relation-row">
-            <strong>{{ members.find((m) => m.id === r.from)?.name }} → {{ members.find((m) => m.id === r.to)?.name }}</strong>
+            <strong>{{ members.find((m) => m.id === r.from)?.name }} <AppIcon name="ArrowRight" /> {{ members.find((m) => m.id === r.to)?.name }}</strong>
             <label>关系名称<input v-model="r.label" class="cbx-input" /></label>
             <label>说明<input v-model="r.desc" class="cbx-input" /></label>
             <div class="npc-row"><label>好感<input v-model.number="r.score" class="cbx-input" type="number" min="-100" max="100" /></label><label>信任<input v-model.number="r.trust" class="cbx-input" type="number" min="0" max="100" /></label><button class="cbx-btn cbx-btn--ghost" @click="draft.relations = draft.relations.filter((item) => item.id !== r.id)">删除关系</button></div>

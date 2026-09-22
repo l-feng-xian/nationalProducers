@@ -18,6 +18,17 @@
   --cbx-brand-light-hover: rgba(34, 139, 230, 0.16);
   --cbx-brand-subtle: rgba(34, 139, 230, 0.08); /* 幽灵按钮默认底 */
 
+  /* 图标与按钮共用品牌蓝。
+     ⚠️ 原本用 color-mix() 让它自动随主题混色，但 **color-mix() 到 Chrome 111 才支持**，
+     安卓 WebView 常年停在更旧版本（实测 MuMu 是 Chrome 110）—— 那里 color-mix 直接失效，
+     `--cbx-icon-rest` 变成非法值，品牌图标于是渲染成**纯黑**（PC 上正常，正是"与 PC 不一致"的根因）。
+     所以改成预先算好的静态值（就是 color-mix 在 srgb 下会得到的结果），明暗两套各写一份。
+     light：icon-rest = 84% text-secondary(#495057) + 16% brand(#228be6)；
+            grad-a  = 82% brand(#228be6) + 18% on-brand(#fff)。 */
+  --cbx-icon-rest: #43596e;
+  --cbx-icon-grad-a: #4aa0ea;
+  --cbx-icon-grad-b: var(--cbx-brand);
+
   /* ── 语义状态色 ─────────────────────────────────────────── */
   --cbx-success: #12b886;
   --cbx-success-hover: #0ca678;
@@ -76,18 +87,14 @@
 
   /* ── 阴影 (Mantine shadow，低透明度分层) ────────────────── */
   --cbx-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
-  --cbx-shadow-sm:
-    0 1px 3px rgba(0, 0, 0, 0.05), 0 10px 15px -5px rgba(0, 0, 0, 0.05),
-    0 7px 7px -5px rgba(0, 0, 0, 0.04);
-  --cbx-shadow-md:
-    0 1px 3px rgba(0, 0, 0, 0.05), 0 20px 25px -5px rgba(0, 0, 0, 0.05),
-    0 10px 10px -5px rgba(0, 0, 0, 0.04);
-  --cbx-shadow-lg:
-    0 1px 3px rgba(0, 0, 0, 0.05), 0 28px 23px -7px rgba(0, 0, 0, 0.05),
-    0 12px 12px -7px rgba(0, 0, 0, 0.04);
-  --cbx-shadow-xl:
-    0 1px 3px rgba(0, 0, 0, 0.05), 0 36px 28px -7px rgba(0, 0, 0, 0.05),
-    0 17px 17px -7px rgba(0, 0, 0, 0.04);
+  --cbx-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05),
+    0 10px 15px -5px rgba(0, 0, 0, 0.05), 0 7px 7px -5px rgba(0, 0, 0, 0.04);
+  --cbx-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.05),
+    0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --cbx-shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.05),
+    0 28px 23px -7px rgba(0, 0, 0, 0.05), 0 12px 12px -7px rgba(0, 0, 0, 0.04);
+  --cbx-shadow-xl: 0 1px 3px rgba(0, 0, 0, 0.05),
+    0 36px 28px -7px rgba(0, 0, 0, 0.05), 0 17px 17px -7px rgba(0, 0, 0, 0.04);
 
   /* ── 间距 (4px 基准) ───────────────────────────────────── */
   --cbx-space-1: 4px;
@@ -100,9 +107,8 @@
   --cbx-space-10: 40px;
 
   /* ── 字体 ──────────────────────────────────────────────── */
-  --cbx-font:
-    'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
-    Helvetica, Arial, sans-serif;
+  --cbx-font: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', Helvetica, Arial, sans-serif;
   --cbx-font-mono: 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
   --cbx-fs-xs: 12px;
   --cbx-fs-sm: 14px; /* 按钮 / 控件默认 */
@@ -192,6 +198,11 @@
   --cbx-brand-light: rgba(51, 154, 240, 0.14);
   --cbx-brand-light-hover: rgba(51, 154, 240, 0.2);
   --cbx-brand-subtle: rgba(51, 154, 240, 0.12);
+  /* color-mix 的暗色结果（见 :root 里的说明）：
+     icon-rest = 84% text-secondary(#c9c9c9) + 16% brand(#339af0)；
+     grad-a  = 82% brand(#339af0) + 18% on-brand(#fff)。 */
+  --cbx-icon-rest: #b1c1cf;
+  --cbx-icon-grad-a: #58acf3;
 
   --cbx-bg: #242424; /* dark-7 */
   --cbx-bg-secondary: #1f1f1f; /* dark-8，侧栏更深 */
@@ -213,10 +224,14 @@
   --cbx-border-focus: #339af0;
 
   --cbx-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.4);
-  --cbx-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 10px 15px -5px rgba(0, 0, 0, 0.3);
-  --cbx-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.3), 0 20px 25px -5px rgba(0, 0, 0, 0.35);
-  --cbx-shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.35), 0 28px 23px -7px rgba(0, 0, 0, 0.4);
-  --cbx-shadow-xl: 0 1px 3px rgba(0, 0, 0, 0.35), 0 36px 28px -7px rgba(0, 0, 0, 0.45);
+  --cbx-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3),
+    0 10px 15px -5px rgba(0, 0, 0, 0.3);
+  --cbx-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.3),
+    0 20px 25px -5px rgba(0, 0, 0, 0.35);
+  --cbx-shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.35),
+    0 28px 23px -7px rgba(0, 0, 0, 0.4);
+  --cbx-shadow-xl: 0 1px 3px rgba(0, 0, 0, 0.35),
+    0 36px 28px -7px rgba(0, 0, 0, 0.45);
 
   /* 补齐暗色缺口：原本未覆盖，导致滚动条拇指是亮灰 */
   --cbx-gray-4: #4a4a4a;
@@ -245,6 +260,9 @@
     --cbx-brand-light: rgba(51, 154, 240, 0.14);
     --cbx-brand-light-hover: rgba(51, 154, 240, 0.2);
     --cbx-brand-subtle: rgba(51, 154, 240, 0.12);
+    /* 同 :root[data-theme='dark']，见那里的说明 */
+    --cbx-icon-rest: #b1c1cf;
+    --cbx-icon-grad-a: #58acf3;
 
     --cbx-bg: #242424;
     --cbx-bg-secondary: #1f1f1f;
@@ -266,10 +284,14 @@
     --cbx-border-focus: #339af0;
 
     --cbx-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.4);
-    --cbx-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 10px 15px -5px rgba(0, 0, 0, 0.3);
-    --cbx-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.3), 0 20px 25px -5px rgba(0, 0, 0, 0.35);
-    --cbx-shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.35), 0 28px 23px -7px rgba(0, 0, 0, 0.4);
-    --cbx-shadow-xl: 0 1px 3px rgba(0, 0, 0, 0.35), 0 36px 28px -7px rgba(0, 0, 0, 0.45);
+    --cbx-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3),
+      0 10px 15px -5px rgba(0, 0, 0, 0.3);
+    --cbx-shadow-md: 0 1px 3px rgba(0, 0, 0, 0.3),
+      0 20px 25px -5px rgba(0, 0, 0, 0.35);
+    --cbx-shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.35),
+      0 28px 23px -7px rgba(0, 0, 0, 0.4);
+    --cbx-shadow-xl: 0 1px 3px rgba(0, 0, 0, 0.35),
+      0 36px 28px -7px rgba(0, 0, 0, 0.45);
 
     /* 补齐暗色缺口：原本未覆盖，导致滚动条拇指是亮灰 */
     --cbx-gray-4: #4a4a4a;

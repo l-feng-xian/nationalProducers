@@ -121,7 +121,7 @@ try {
     }
   })
 
-  await page.getByRole('button', { name: '＋ 新建角色', exact: true }).click()
+  await page.getByRole('button', { name: '新建角色', exact: true }).click()
   await page.waitForURL(/\/characters\/[^/]+$/)
   const characterId = page.url().split('/').at(-1)
   const characterUrl = page.url()

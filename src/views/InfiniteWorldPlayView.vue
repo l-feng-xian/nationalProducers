@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -204,7 +205,7 @@ onUnmounted(() => {
     </div>
     <template v-if="ready && world && summary">
       <div class="hud time" :data-phase="phase">
-        <div class="time-heading"><strong>{{ dayText }}</strong><span class="time-phase"><span aria-hidden="true">{{ phase === 'night' ? '☾' : '☀' }}</span> {{ DAY_PHASE_LABEL[phase] }}</span></div>
+        <div class="time-heading"><strong>{{ dayText }}</strong><span class="time-phase"><AppIcon :name="phase === 'night' ? 'Moon' : 'Sun'" :size="16" /> {{ DAY_PHASE_LABEL[phase] }}</span></div>
         <span>{{ ['春', '夏', '秋', '冬'][world.settings.season] }} · {{ summary.weather === 'clear' ? '晴' : summary.weather === 'storm' ? '雷雨' : '雨' }}</span>
         <div class="time-track" role="progressbar" aria-label="一天的进度" :aria-valuemin="0" :aria-valuemax="1440" :aria-valuenow="summary.minute" :aria-valuetext="dayText"><i :style="{ left: `${summary.minute / 1440 * 100}%` }" /></div>
       </div>
@@ -212,10 +213,10 @@ onUnmounted(() => {
       <div class="hud toolbar"><button @click="paused = !paused">{{ pauseText }}</button><button @click="panel = panel === 'bag' ? null : 'bag'">背包</button><button @click="panel = panel === 'residents' ? null : 'residents'">居民</button><button :disabled="saving" @click="manualSave">{{ saving ? '保存中…' : '保存进度' }}</button></div>
       <p class="hud guide">WASD / 方向键移动 · 走近居民按 E 交谈 · B 背包 · Esc 暂停<br />每 30 秒自动保存 · {{ message || '沿着主路走过河桥，看看更远处的森林。' }}</p>
       <div class="touch-pad" aria-label="移动控制">
-        <button aria-label="向上移动" @pointerdown.prevent="startMoving($event, 0, -1)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving">↑</button>
-        <button aria-label="向左移动" @pointerdown.prevent="startMoving($event, -1, 0)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving">←</button>
-        <button aria-label="向下移动" @pointerdown.prevent="startMoving($event, 0, 1)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving">↓</button>
-        <button aria-label="向右移动" @pointerdown.prevent="startMoving($event, 1, 0)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving">→</button>
+        <button aria-label="向上移动" @pointerdown.prevent="startMoving($event, 0, -1)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving"><AppIcon name="ArrowUp" /></button>
+        <button aria-label="向左移动" @pointerdown.prevent="startMoving($event, -1, 0)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving"><AppIcon name="ArrowLeft" /></button>
+        <button aria-label="向下移动" @pointerdown.prevent="startMoving($event, 0, 1)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving"><AppIcon name="ArrowDown" /></button>
+        <button aria-label="向右移动" @pointerdown.prevent="startMoving($event, 1, 0)" @pointerup="stopMoving" @pointercancel="stopMoving" @lostpointercapture="stopMoving"><AppIcon name="ArrowRight" /></button>
       </div>
       <button
         v-if="nearNpc && !talking && !panel && !paused"

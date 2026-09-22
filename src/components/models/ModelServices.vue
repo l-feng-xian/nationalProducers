@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Check, Pencil, Plus, Server, Trash2 } from 'lucide-vue-next'
+import { Check, Pencil, Plus, Server, Trash2 } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -64,7 +64,7 @@ async function remove(service: ModelService) {
       </button>
     </header>
     <div v-if="!settings.settings.modelServices.length" class="services-empty">
-      <Server :size="28" aria-hidden="true" />
+      <Server :size="32" aria-hidden="true" />
       <span>暂无模型服务</span>
     </div>
     <div v-else class="services-grid">
@@ -115,7 +115,7 @@ async function remove(service: ModelService) {
         </dl>
         <footer class="service-footer">
           <span v-if="service.id === settings.settings.activeModelServiceId" class="service-active"
-            ><Check :size="14" />当前服务</span
+            ><Check :size="16" />当前服务</span
           >
           <span v-else class="service-kind">{{
             service.provider.stream ? '流式输出' : '非流式输出'
@@ -128,7 +128,7 @@ async function remove(service: ModelService) {
               :aria-label="`编辑 ${service.name}`"
               @click="edit(service)"
             >
-              <Pencil :size="17" />
+              <Pencil :size="20" />
             </button>
             <button
               class="cbx-icon-btn service-delete"
@@ -137,7 +137,7 @@ async function remove(service: ModelService) {
               :aria-label="`删除 ${service.name}`"
               @click="remove(service)"
             >
-              <Trash2 :size="17" />
+              <Trash2 tone="danger" :size="20" />
             </button>
           </div>
         </footer>

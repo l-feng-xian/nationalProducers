@@ -7,8 +7,25 @@
 
 import { getDb, chatRange } from '../schema'
 import { toPlain } from '../plain'
+import { pruneUnreferenced } from './blobs'
 import type { ChatMessage } from '@/types/chat'
 import type { GeneratedImage } from '@/types/image'
+
+/**
+ * 探测像素尺寸，供渲染时占位。**必须在开事务之前做** —— 事务里只能 await IDB 请求，
+ * 在里面等解码会让事务静默自动提交（见 schema.ts 开头的铁律）。
+ * 解不出来就不存，渲染端自然回退到自适应高度。
+ */
+async function probeSize(blob: Blob): Promise<{ width: number; height: number } | undefined> {
+  try {
+    const bitmap = await createImageBitmap(blob)
+    const size = { width: bitmap.width, height: bitmap.height }
+    bitmap.close()
+    return size.width > 0 && size.height > 0 ? size : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** 图片和附件引用原子写入；目标消息已删除时不复活消息、不留下孤立图片。 */
 export async function attachImage(
@@ -16,6 +33,7 @@ export async function attachImage(
   messageId: string,
   image: GeneratedImage,
 ): Promise<ChatMessage> {
+  const size = await probeSize(image.blob)
   const db = await getDb()
   const tx = db.transaction(['messages', 'blobs'], 'readwrite')
   const store = tx.objectStore('messages')
@@ -37,6 +55,7 @@ export async function attachImage(
       model: image.model,
       serviceName: image.serviceName,
       createdAt,
+      ...(size ?? {}),
     },
   ]
   await store.put(toPlain(row))
@@ -225,7 +244,18 @@ export async function removeFrom(chatId: string, fromSeq: number): Promise<void>
 export async function clear(chatId: string): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(['chats', 'messages'], 'readwrite')
-  await tx.objectStore('messages').delete(chatRange(chatId))
+  const store = tx.objectStore('messages')
+  // 删除前收集本会话消息引用的图片（配图 + force_avatar），删完后回收孤儿。
+  // 与 chats.remove 同理：清空消息会让这些 blob 失去引用，否则永久留在 blobs 里。
+  const candidates = new Set<string>()
+  let cursor = await store.openCursor(chatRange(chatId))
+  while (cursor) {
+    const m = cursor.value
+    if (m.force_avatar) candidates.add(m.force_avatar)
+    for (const img of m.images ?? []) if (img.blobId) candidates.add(img.blobId)
+    cursor = await cursor.continue()
+  }
+  await store.delete(chatRange(chatId))
   const chats = tx.objectStore('chats')
   const meta = await chats.get(chatId)
   if (meta) {
@@ -234,6 +264,8 @@ export async function clear(chatId: string): Promise<void> {
     await chats.put(toPlain(meta))
   }
   await tx.done
+  // 分支会共享 blobId，交给 pruneUnreferenced 比对全库可达集，只删真正无人引用的
+  await pruneUnreferenced(candidates)
 }
 
 /**

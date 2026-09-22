@@ -44,9 +44,7 @@ body {
   background: var(--cbx-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition:
-    background var(--cbx-transition),
-    color var(--cbx-transition);
+  transition: background var(--cbx-transition), color var(--cbx-transition);
 }
 
 h1,
@@ -99,6 +97,16 @@ a:hover {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+/* 触屏设备（手机 / 打包后的安卓 App）隐藏滚动条：原生就是叠加式无条，
+   而上面把 ::-webkit-scrollbar 显式设了 8px 宽会让它常驻可见，与原生观感不符。 */
+@media (pointer: coarse) {
+  * {
+    scrollbar-width: none;
+  }
+  ::-webkit-scrollbar {
+    display: none;
+  }
+}
 
 :focus-visible {
   outline: 2px solid var(--cbx-border-focus);
@@ -124,9 +132,7 @@ a:hover {
   font-weight: var(--cbx-fw-medium);
   line-height: 1;
   cursor: pointer;
-  transition:
-    background var(--cbx-transition),
-    color var(--cbx-transition),
+  transition: background var(--cbx-transition), color var(--cbx-transition),
     box-shadow var(--cbx-transition);
   white-space: nowrap;
 }
@@ -189,8 +195,7 @@ a:hover {
   background: var(--cbx-bg);
   border: 1px solid var(--cbx-border-strong);
   border-radius: var(--cbx-radius-md);
-  transition:
-    border-color var(--cbx-transition),
+  transition: border-color var(--cbx-transition),
     box-shadow var(--cbx-transition);
 }
 .cbx-input:focus {
@@ -209,9 +214,7 @@ a:hover {
   color: var(--cbx-text-secondary);
   font-size: var(--cbx-fs-sm);
   cursor: pointer;
-  transition:
-    background var(--cbx-transition),
-    color var(--cbx-transition);
+  transition: background var(--cbx-transition), color var(--cbx-transition);
 }
 .cbx-nav-item:hover {
   background: var(--cbx-bg-hover);
@@ -271,6 +274,9 @@ a:hover {
 /* —— 滚动容器 —— flex 子项必须有 min-height:0，否则撑破父级不滚动 —— */
 .cbx-scroll {
   overflow-y: auto;
+  /* 页面级容器只纵向滚。横向一律裁掉，杜绝任何页面在底部冒出横向滚动条
+     （真正需要横滑的元素——点名条、表格——自己开 overflow-x:auto，不受这条影响）。 */
+  overflow-x: hidden;
   min-height: 0;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -295,8 +301,7 @@ a:hover {
   border: 1px solid var(--cbx-border-strong);
   border-radius: var(--cbx-radius-md);
   resize: vertical;
-  transition:
-    border-color var(--cbx-transition),
+  transition: border-color var(--cbx-transition),
     box-shadow var(--cbx-transition);
 }
 .cbx-textarea:focus {
@@ -326,9 +331,7 @@ a:hover {
   cursor: pointer;
   font-size: var(--cbx-fs-md);
   line-height: 1;
-  transition:
-    background var(--cbx-transition),
-    color var(--cbx-transition);
+  transition: background var(--cbx-transition), color var(--cbx-transition);
 }
 .cbx-icon-btn:hover:not(:disabled) {
   background: var(--cbx-bg-active);
@@ -418,7 +421,7 @@ a:hover {
   margin-bottom: 0;
 }
 .cbx-md p {
-  margin: 0 0 var(--cbx-space-3);
+  margin: 0 0 var(--cbx-space-2);
 }
 .cbx-md h1,
 .cbx-md h2,
@@ -729,9 +732,7 @@ a:hover {
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   white-space: nowrap;
-  transition:
-    color var(--cbx-transition),
-    border-color var(--cbx-transition);
+  transition: color var(--cbx-transition), border-color var(--cbx-transition);
 }
 .cbx-tab--active {
   color: var(--cbx-brand);
@@ -975,6 +976,36 @@ a:hover {
 ::view-transition-new(cbx-morph) {
   animation-duration: 120ms;
   animation-timing-function: var(--cbx-ease);
+}
+
+/* 数据管理「图片」表：缩略图 ⇄ 放大预览（useBlobPreview / BlobLightbox）。
+
+   这一组和 cbx-morph 的取舍**正好相反**：上面那条「不要照抄 object-fit:cover;
+   height:100%」说的是两端等比的场景，而这里两端比例根本不同 ——
+   缩略图是 56px 见方的 cover 裁切，大图是 contain 的完整原图。
+   不接管快照尺寸的话，UA 默认的 block-size:auto 会让两张快照各按自己的
+   宽高比铺开：56×56 的那张在放大后变成一个巨大的正方形，从大图四周溢出来，
+   就是一圈糊掉的重影。让两张都以 cover 填满过渡组，整个过程才是一次连续的
+   「裁切框放大」，两端的可见内容始终对得上。 */
+::view-transition-group(cbx-blob-morph) {
+  animation-duration: 320ms;
+  animation-timing-function: var(--cbx-ease);
+}
+::view-transition-old(cbx-blob-morph),
+::view-transition-new(cbx-blob-morph) {
+  /* 关掉默认交叉淡化：两端内容不同，半透明叠在一起是发灰的双影。
+     新快照全程不透明盖住旧的，看到的就只有一个连续放大的裁切框。 */
+  animation: none;
+  mix-blend-mode: normal;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* ⚠️ 少了这行就前功尽弃：object-fit 只负责把内容缩放到内容盒，**裁不裁要看
+     overflow**，而这两个伪元素默认是 visible。1:1 的缩略图快照按 cover 铺满
+     1.5:1 的过渡组后，上下会各溢出一截**画在盒子外面**——屏幕上就是大图四周
+     糊着一圈放大的缩略图重影（实测靠给各伪元素描边才认出来：盒子是对的，
+     溢出的是内容）。 */
+  overflow: clip;
 }
 
 /* 无障碍硬要求：请求减少动效时彻底关掉。

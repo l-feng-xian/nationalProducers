@@ -1,0 +1,40 @@
+[package]
+name = "nationalproducers"
+version = "0.1.0"
+description = "幕间 · AI 沉浸式角色扮演聊天"
+authors = ["nationalProducers"]
+edition = "2021"
+
+[lib]
+# `_lib` 后缀看着多余，但 Windows 上 lib 与 bin 同名会冲突（rust-lang/cargo#8519）
+name = "nationalproducers_lib"
+# ⚠️ cdylib 不能少：安卓那边就是靠它产出 libnationalproducers_lib.so，
+# 少了这一项 Gradle 侧没有任何东西可打包。
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# provider 请求全部走它：在 Rust 侧用 reqwest 发出，绕开 webview 的 CORS。
+# 锁 2.6：npm 侧 @tauri-apps/plugin-http 最新只到 2.6.1，
+# 而 crate 会解析到 2.7.0，Tauri CLI 会因大小版本不一致直接拒绝构建。
+tauri-plugin-http = "2.6"
+# 原生保存对话框 + 写文件：安卓 WebView 不处理 blob: 下载，导出功能得靠这两个。
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 扫码只在移动端有：桌面没有这个插件的实现，放进通用 dependencies 会编译不过。
+# 用它而不是 webview 的 getUserMedia —— 后者要在原生侧重写 WebChromeClient
+# 的 onPermissionRequest 才会放行，而那个文件（RustWebChromeClient.kt）是
+# **每次构建重新生成**的，改了留不住。
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
+
+# 调试信息是 dev 构建的内存大头，降一档能显著少占内存与磁盘，
+# 断点行号仍在（见 .cargo/config.toml 里那段 OOM 说明）。
+[profile.dev]
+debug = 1

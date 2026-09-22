@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -213,14 +214,16 @@ async function onImport(e: Event) {
   <AppTopbar title="角色">
     <template #actions>
       <button class="cbx-btn cbx-btn--ghost" @click="fileInput?.click()">导入角色卡</button>
-      <button class="cbx-btn cbx-btn--primary" @click="create">＋ 新建角色</button>
+      <button class="cbx-btn cbx-btn--primary" @click="create">
+        <AppIcon name="Plus" /> 新建角色
+      </button>
       <input ref="fileInput" type="file" accept=".png,.json" multiple hidden @change="onImport" />
     </template>
   </AppTopbar>
 
   <div class="cbx-scroll body">
     <div v-if="!chars.items.length" class="cbx-empty">
-      <span class="cbx-empty__icon">🎭</span>
+      <span class="cbx-empty__icon"><AppIcon name="Characters" tone="brand" /></span>
       <span class="cbx-empty__title">还没有角色</span>
       <span class="cbx-empty__desc">点右上角新建，或导入 SillyTavern 的 PNG / JSON 角色卡</span>
     </div>

@@ -1,6 +1,17 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import SunIcon from '@/components/icons/SunIcon.vue'
+import MoonIcon from '@/components/icons/MoonIcon.vue'
+import MonitorIcon from '@/components/icons/MonitorIcon.vue'
+import CharactersIcon from '@/components/icons/CharactersIcon.vue'
+import GroupsIcon from '@/components/icons/GroupsIcon.vue'
+import WorldsIcon from '@/components/icons/WorldsIcon.vue'
+import GameWorldsIcon from '@/components/icons/GameWorldsIcon.vue'
+import ModelsIcon from '@/components/icons/ModelsIcon.vue'
+import DataIcon from '@/components/icons/DataIcon.vue'
+import SettingsIcon from '@/components/icons/SettingsIcon.vue'
 import { useUiStore } from '@/stores/ui'
 import { useChatsStore } from '@/stores/chats'
 import { APP_NAME } from '@/constants/app'
@@ -16,8 +27,19 @@ const route = useRoute()
 const router = useRouter()
 const chats = useChatsStore()
 
-/** 图标进按钮、文案进 title —— 见模板里的说明 */
-const themeIcon = { light: '☀️', dark: '🌙', system: '🖥️' }
+/**
+ * 侧栏 7 个顶层分区（角色/群聊/世界书…）之间是**平级**关系，不是逐层深入。
+ * 但 RouterLink 默认 push，于是「角色→群聊→世界书→模型」会在历史里叠 4 层，
+ * 手势返回要一层层退，很烦（用户报的「路由多层嵌套」）。
+ *
+ * 规则：当前在**聊天页（首页）**时 push，从别处进分区能靠返回回到聊天；
+ * 已经在某个分区里再切别的分区就 replace，平级切换不叠历史。
+ * 详情页（/characters/:id 等）的下钻仍由各自页面 push，返回正常回列表。
+ */
+const replaceNav = computed(() => !route.path.startsWith('/chat'))
+
+/** 图标进按钮、文案进 title —— 见模板里的说明。动画 SVG 组件，切换时新图标弹入。 */
+const themeIcon = { light: SunIcon, dark: MoonIcon, system: MonitorIcon }
 const themeLabel = { light: '浅色', dark: '深色', system: '跟随系统' }
 
 onMounted(() => {
@@ -60,7 +82,7 @@ function newChat() {
       <img class="brand__logo" :src="`${BASE_URL}logo.jpg`" :alt="APP_NAME" />
       <span class="brand__name">{{ APP_NAME }}</span>
       <!-- 主题切换：收在品牌行右端。只显示图标，当前模式放 title/aria-label，
-           否则「🖥️ 跟随系统」这种长文案会把 240px 的侧栏顶栏挤变形 -->
+           否则「跟随系统」这种长文案会把 240px 的侧栏顶栏挤变形 -->
       <button
         class="cbx-icon-btn theme-btn"
         type="button"
@@ -68,15 +90,21 @@ function newChat() {
         :aria-label="`主题：${themeLabel[ui.theme]}`"
         @click="ui.cycleTheme()"
       >
-        {{ themeIcon[ui.theme] }}
+        <span class="icon-swap">
+          <Transition name="icon-swap">
+            <component :is="themeIcon[ui.theme]" :key="ui.theme" />
+          </Transition>
+        </span>
       </button>
     </div>
 
-    <button class="cbx-btn cbx-btn--soft new-chat" @click="newChat">＋ 新建对话</button>
+    <button class="cbx-btn cbx-btn--soft new-chat" @click="newChat">
+      <AppIcon name="Plus" /> 新建对话
+    </button>
 
     <div class="cbx-scroll sessions">
       <div v-if="!chats.list.length" class="cbx-empty">
-        <span class="cbx-empty__icon">💬</span>
+        <span class="cbx-empty__icon"><AppIcon name="MessageCircle" /></span>
         <span class="cbx-empty__desc">还没有对话</span>
       </div>
 
@@ -91,61 +119,76 @@ function newChat() {
         >
           <span class="item__title">{{ c.title }}</span>
           <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id, c.title)">
-            ✕
+            <AppIcon name="X" tone="danger" />
           </button>
         </div>
       </template>
     </div>
 
     <nav class="foot">
+      <!-- 导航与操作图标共享尺寸网格和三态过渡，内部图层按语义运动 -->
       <RouterLink
         to="/characters"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/characters') }"
       >
-        🎭 角色
+        <span class="nav-ico"><CharactersIcon /></span>
+        <span>角色</span>
       </RouterLink>
       <RouterLink
         to="/groups"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/groups') }"
       >
-        👥 群聊
+        <span class="nav-ico"><GroupsIcon /></span>
+        <span>群聊</span>
       </RouterLink>
       <RouterLink
         to="/worlds"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/worlds') }"
       >
-        📚 世界书
+        <span class="nav-ico"><WorldsIcon /></span>
+        <span>世界书</span>
       </RouterLink>
       <RouterLink
         to="/game-worlds"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/game-worlds') }"
       >
-        🌿 无限世界
+        <span class="nav-ico"><GameWorldsIcon /></span>
+        <span>无限世界</span>
       </RouterLink>
       <RouterLink
         to="/models"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/models') }"
       >
-        🧠 模型管理
+        <span class="nav-ico"><ModelsIcon /></span>
+        <span>模型管理</span>
       </RouterLink>
       <RouterLink
         to="/data"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/data') }"
       >
-        🗃️ 数据管理
+        <span class="nav-ico"><DataIcon /></span>
+        <span>数据管理</span>
       </RouterLink>
       <RouterLink
         to="/settings"
         class="cbx-nav-item"
+        :replace="replaceNav"
         :class="{ 'cbx-nav-item--active': route.path.startsWith('/settings') }"
       >
-        ⚙️ 设置
+        <span class="nav-ico"><SettingsIcon /></span>
+        <span>设置</span>
       </RouterLink>
     </nav>
   </aside>
@@ -228,11 +271,18 @@ function newChat() {
 .foot .cbx-nav-item:hover {
   text-decoration: none;
 }
-/* 推到品牌行最右端；.brand 是 flex，margin-left:auto 就够，不用改父级 */
+.nav-ico {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: var(--cbx-icon-md);
+  height: var(--cbx-icon-md);
+}
 .theme-btn {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: var(--cbx-fs-md);
+}
+.item:focus-within .item__del {
+  opacity: 1;
 }
 
 @media (hover: none) {

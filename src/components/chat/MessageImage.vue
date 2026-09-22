@@ -1,24 +1,63 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Download } from 'lucide-vue-next'
+import { Download } from '@/components/icons'
 import { useObjectUrl } from '@/composables/useObjectUrl'
+import { blobsRepo } from '@/db/repositories'
+import { downloadBlob, safeFileName } from '@/utils/download'
+import { useToast } from '@/composables/useToast'
 import type { MessageImage } from '@/types/image'
 const props = defineProps<{ image: MessageImage }>()
 const emit = defineEmits<{ loaded: [] }>()
 const { url } = useObjectUrl(computed(() => props.image.blobId))
+const toast = useToast()
+
+/**
+ * 保存配图。原本是 `<a :href="blobUrl" download>`，而**安卓 WebView 不处理
+ * blob: 下载** —— 点了毫无反应。统一走 downloadBlob，原生壳里会弹系统保存框。
+ * 直接从库里取原始 Blob，不用再 fetch 一遍 objectURL。
+ */
+async function saveImage() {
+  const blob = await blobsRepo.get(props.image.blobId)
+  if (!blob) {
+    toast.error('配图已丢失')
+    return
+  }
+  const ext = (props.image.width && blob.type.split('/')[1]) || 'png'
+  const at = await downloadBlob(blob, safeFileName('对话配图', ext, '对话配图'))
+  if (at) toast.success(`已保存到 ${at}`)
+}
+
+/**
+ * 附图时存下的像素尺寸 → 用 aspect-ratio 把高度**先占住**，Blob 还在从
+ * IndexedDB 里读的时候这一格就已经是最终高度，不会「先一行字、再撑满」跳两次。
+ * 老记录没存尺寸，回退到不占位（与改动前一致）。
+ */
+const frameStyle = computed(() => {
+  const { width, height } = props.image
+  return width && height ? { aspectRatio: `${width} / ${height}` } : undefined
+})
 </script>
 
 <template>
   <figure class="message-image">
-    <a v-if="url" :href="url" target="_blank" rel="noopener" aria-label="查看对话配图原图"
-      ><img :src="url" alt="根据对话生成的配图" loading="lazy" @load="emit('loaded')"
+    <!-- 不用 loading="lazy"：虚拟滚动本身已经是窗口化，再叠一层浏览器懒加载
+         只会让高度在滚入后又变一次 -->
+    <a v-if="url" class="frame" :style="frameStyle" :href="url" target="_blank" rel="noopener" aria-label="查看对话配图原图"
+      ><img :src="url" alt="根据对话生成的配图" @load="emit('loaded')"
     /></a>
-    <span v-else class="placeholder">正在读取配图…</span>
+    <span v-else class="placeholder frame" :style="frameStyle">正在读取配图…</span>
     <figcaption>
       <span>{{ image.serviceName }} · {{ image.model }}</span
-      ><a v-if="url" :href="url" download="对话配图" aria-label="下载配图" title="下载配图"
-        ><Download :size="16"
-      /></a>
+      ><button
+        v-if="url"
+        type="button"
+        class="save"
+        aria-label="保存配图"
+        title="保存配图"
+        @click="saveImage"
+      >
+        <Download :size="16" />
+      </button>
     </figcaption>
     <details>
       <summary>画面描述</summary>
@@ -32,12 +71,25 @@ const { url } = useObjectUrl(computed(() => props.image.blobId))
   margin: 12px 0 0;
   width: min(100%, 420px);
 }
-img {
+/* 占位框：有尺寸时 aspect-ratio 撑开，没有则退回内容高度 */
+.frame {
   display: block;
   width: 100%;
   max-height: 560px;
+}
+img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 560px;
   object-fit: contain;
   border-radius: var(--cbx-radius-sm);
+}
+.placeholder.frame {
+  display: grid;
+  place-items: center;
+  border-radius: var(--cbx-radius-sm);
+  background: var(--cbx-bg-secondary);
 }
 figcaption {
   display: flex;
@@ -53,6 +105,14 @@ figcaption span {
 }
 a {
   color: inherit;
+}
+.save {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
 }
 details {
   margin-top: 6px;

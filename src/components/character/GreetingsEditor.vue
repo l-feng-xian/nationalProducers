@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed } from 'vue'
 import { confirmDialog } from '@/composables/useConfirm'
 
@@ -66,7 +67,7 @@ function move(i: number, dir: -1 | 1) {
         <span class="item__idx">开场白 {{ i + 1 }}</span>
         <div class="item__ops">
           <button class="cbx-icon-btn" title="上移" :disabled="i === 0" @click="move(i, -1)">
-            ↑
+            <AppIcon name="ArrowUp" />
           </button>
           <button
             class="cbx-icon-btn"
@@ -74,7 +75,7 @@ function move(i: number, dir: -1 | 1) {
             :disabled="i === all.length - 1"
             @click="move(i, 1)"
           >
-            ↓
+            <AppIcon name="ArrowDown" />
           </button>
           <button
             class="cbx-icon-btn"
@@ -82,7 +83,7 @@ function move(i: number, dir: -1 | 1) {
             :disabled="all.length === 1"
             @click="removeAt(i)"
           >
-            ✕
+            <AppIcon name="X" tone="danger" />
           </button>
         </div>
       </div>
@@ -95,7 +96,7 @@ function move(i: number, dir: -1 | 1) {
       />
     </div>
 
-    <button class="cbx-btn cbx-btn--soft" @click="add">＋ 添加开场白</button>
+    <button class="cbx-btn cbx-btn--soft" @click="add"><AppIcon name="Plus" /> 添加开场白</button>
   </div>
 </template>
 

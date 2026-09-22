@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ImagePlus, X } from 'lucide-vue-next'
+import { ImagePlus, X } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import { blobsRepo } from '@/db/repositories'
@@ -98,7 +98,8 @@ async function generate() {
     })
     if (disposed || controller !== ctl || ctl.signal.aborted) return
     // 回写参考图格式缓存：下次同服务生成不再先白跑一趟被拒的请求。
-    if (image.referenceMode) await settings.patchImageReferenceMode(snapshot.id, image.referenceMode)
+    if (image.referenceMode)
+      await settings.patchImageReferenceMode(snapshot.id, image.referenceMode)
     if (preview.value) URL.revokeObjectURL(preview.value)
     result.value = image
     preview.value = URL.createObjectURL(image.blob)
@@ -147,7 +148,7 @@ async function apply() {
             :disabled="saving"
             @click="close"
           >
-            <X :size="18" />
+            <X :size="20" />
           </button>
         </header>
         <div class="image-body cbx-scroll">

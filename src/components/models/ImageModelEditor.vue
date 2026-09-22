@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Eye, EyeOff, X } from 'lucide-vue-next'
+import { X } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { newImageModelService, type ImageModelService } from '@/types/image'
@@ -131,7 +132,7 @@ async function save() {
             :disabled="saving"
             @click="close"
           >
-            <X :size="18" />
+            <X :size="20" />
           </button>
         </header>
         <div class="image-body cbx-scroll">
@@ -181,7 +182,13 @@ async function save() {
                   :aria-label="showKey ? '隐藏密钥' : '显示密钥'"
                   @click="showKey = !showKey"
                 >
-                  <EyeOff v-if="showKey" :size="18" /><Eye v-else :size="18" />
+                  <span class="icon-swap"
+                    ><Transition name="icon-swap"
+                      ><AppIcon
+                        :key="String(showKey)"
+                        :name="showKey ? 'EyeOff' : 'Eye'"
+                        :active="showKey" /></Transition
+                  ></span>
                 </button>
               </div>
             </div>

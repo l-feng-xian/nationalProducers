@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { LoaderCircle, Sparkles, X } from 'lucide-vue-next'
+import { LoaderCircle, Sparkles, X } from '@/components/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { generateCharacter, type GeneratedCharacterData } from '@/services/character/generate'
 import { toPlain } from '@/utils/plain'
@@ -87,7 +87,7 @@ async function generate() {
         <header class="ai-head">
           <h2 id="ai-character-title"><Sparkles :size="20" aria-hidden="true" />AI 创建角色</h2>
           <button type="button" class="cbx-icon-btn" aria-label="关闭" @click="close">
-            <X :size="18" />
+            <X :size="20" />
           </button>
         </header>
         <div class="ai-body cbx-scroll">
@@ -130,7 +130,7 @@ async function generate() {
             class="cbx-btn cbx-btn--primary"
             :disabled="busy || !description.trim() || !settings.isConfigured"
           >
-            <LoaderCircle v-if="busy" :size="16" class="spin" /><Sparkles v-else :size="16" />
+            <LoaderCircle v-if="busy" :size="16" /><Sparkles v-else :size="16" />
             {{ busy ? '生成中…' : '生成并填入' }}
           </button>
         </footer>
@@ -214,19 +214,7 @@ async function generate() {
 .ai-footer {
   border-top: 1px solid var(--cbx-border);
 }
-.spin {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spin {
-    animation: none;
-  }
-}
+
 @media (max-width: 767px) {
   .ai-head,
   .ai-body,

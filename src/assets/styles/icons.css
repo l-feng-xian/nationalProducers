@@ -1,0 +1,264 @@
+/* A 24-unit drawing grid, 18-unit optical body, rounded 1.8-unit strokes.
+   Transform separate layers: press > optical correction > semantic parts.
+   Transitions can reverse from their current frame, including rapid re-entry. */
+:root {
+  --cbx-icon-sm: 16px;
+  --cbx-icon-md: 20px;
+  --cbx-icon-lg: 32px;
+  --cbx-icon-duration: 360ms;
+  --cbx-icon-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cbx-icon {
+  display: inline-block;
+  width: var(--icon-size, var(--cbx-icon-md));
+  height: var(--icon-size, var(--cbx-icon-md));
+  flex: 0 0 auto;
+  vertical-align: -0.2em;
+  overflow: visible;
+  pointer-events: none;
+  transition:
+    color var(--cbx-icon-duration) ease,
+    opacity var(--cbx-icon-duration) ease,
+    stroke-width var(--cbx-icon-duration) ease;
+}
+
+:where(.cbx-btn, .cbx-badge, .chip, .tiny, .item__del) .cbx-icon {
+  --icon-size: var(--cbx-icon-sm);
+}
+
+.cbx-icon__press,
+.cbx-icon__body,
+.cbx-icon__part {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  transition:
+    transform var(--cbx-icon-duration) var(--cbx-icon-ease),
+    opacity var(--cbx-icon-duration) ease;
+}
+
+.cbx-icon__part {
+  transform-origin: var(--part-origin);
+  transform: var(--part-rest);
+  opacity: var(--part-rest-opacity);
+  transition-delay: var(--part-delay);
+}
+
+/* Still for most of the cycle; only a small internal detail breathes. */
+.cbx-icon--ambient .cbx-icon__accent {
+  animation: cbx-icon-breathe 7s ease-in-out infinite;
+}
+
+/* tone=brand 时，glyph 里显式 currentColor 的填充件（如 Orbit 的卫星）
+   跟随描边同一渐变，而不是落在按钮文字灰上。 */
+.cbx-icon--brand [fill='currentColor'] {
+  fill: var(--icon-fill);
+}
+
+@keyframes cbx-icon-breathe {
+  0%,
+  72%,
+  100% {
+    opacity: 1;
+  }
+  86% {
+    opacity: 0.64;
+  }
+}
+
+/* Explicit selected state, navigation, toggles, tabs and disclosure controls. */
+:where(
+    .cbx-nav-item--active,
+    [aria-current='page'],
+    [aria-pressed='true'],
+    [aria-selected='true'],
+    [aria-expanded='true'],
+    [data-icon-active='true']
+  )
+  .cbx-icon
+  .cbx-icon__part,
+.cbx-icon--active .cbx-icon__part {
+  transform: var(--part-active);
+  opacity: var(--part-active-opacity);
+}
+
+.cbx-icon--active,
+:where(.cbx-nav-item--active, [aria-current='page']) .cbx-icon {
+  stroke-width: 2;
+}
+
+/* Mouse hover and keyboard focus have the same visual vocabulary. */
+@media (hover: hover) and (pointer: fine) {
+  :where(button, a, [role='button'], [data-icon-trigger]):where(
+      :hover:not(:disabled):not([aria-disabled='true'])
+    )
+    .cbx-icon__part {
+    transform: var(--part-hover);
+    opacity: 1;
+  }
+  :where(button, a, [role='button'], [data-icon-trigger]):where(
+      :hover:not(:disabled):not([aria-disabled='true'])
+    )
+    .cbx-icon__body {
+    transform: translateY(-0.5px);
+  }
+}
+
+:where(button, a, [role='button'], [data-icon-trigger]):where(:focus-visible) .cbx-icon__part {
+  transform: var(--part-hover);
+  opacity: 1;
+}
+
+:where(button, a, [role='button'], [data-icon-trigger]):active:not(:disabled):not(
+    [aria-disabled='true']
+  )
+  .cbx-icon__press {
+  transform: scale(0.88);
+  transition-duration: 100ms;
+}
+:where(button, a, [role='button'], [data-icon-trigger]):active:not(:disabled):not(
+    [aria-disabled='true']
+  )
+  .cbx-icon__part {
+  transform: var(--part-active);
+  opacity: var(--part-active-opacity);
+  transition-duration: 140ms;
+  transition-delay: 0ms;
+}
+
+/* A nested disabled action must not pick up a parent row's hover/selection. */
+:where(:disabled, [aria-disabled='true']) .cbx-icon__part {
+  transform: var(--part-rest) !important;
+  opacity: 0.55;
+}
+:where(:disabled, [aria-disabled='true']) .cbx-icon:not(.cbx-icon--loader) .cbx-icon__body,
+:where(:disabled, [aria-disabled='true']) .cbx-icon__press {
+  transform: none !important;
+}
+:where(:disabled, [aria-disabled='true']) .cbx-icon__accent {
+  animation: none;
+}
+
+.cbx-icon--loader .cbx-icon__body {
+  animation: cbx-icon-spin 1s linear infinite;
+}
+.cbx-icon--brand {
+  --icon-gradient-a: var(--cbx-icon-rest);
+  --icon-gradient-b: var(--cbx-icon-rest);
+  color: var(--cbx-icon-rest);
+}
+.cbx-icon--brand stop {
+  transition: stop-color var(--cbx-icon-duration) ease;
+}
+.cbx-icon--danger {
+  color: var(--cbx-error);
+}
+.cbx-icon--warning {
+  color: var(--cbx-warning-hover);
+}
+.cbx-icon--success {
+  color: var(--cbx-success);
+}
+
+/* Match the page's blue buttons, with neutral resting navigation. Semantic
+   tones and icons on solid buttons keep their own inherited contrast. */
+.cbx-icon--brand.cbx-icon--active,
+.cbx-empty__icon .cbx-icon--brand,
+:where(
+    .cbx-nav-item--active,
+    [aria-current='page'],
+    [aria-pressed='true'],
+    [aria-selected='true'],
+    [aria-expanded='true']
+  )
+  .cbx-icon--brand,
+:where(button, a, [role='button'], [data-icon-trigger]):focus-visible .cbx-icon--brand {
+  --icon-gradient-a: var(--cbx-icon-grad-a);
+  --icon-gradient-b: var(--cbx-icon-grad-b);
+  color: var(--cbx-brand);
+}
+@media (hover: hover) and (pointer: fine) {
+  :where(button, a, [role='button'], [data-icon-trigger]):hover:not(:disabled):not(
+      [aria-disabled='true']
+    )
+    .cbx-icon--brand {
+    --icon-gradient-a: var(--cbx-icon-grad-a);
+    --icon-gradient-b: var(--cbx-icon-grad-b);
+    color: var(--cbx-brand);
+  }
+  .cbx-icon-btn:hover:not(:disabled) .cbx-icon:not(.cbx-icon--semantic) {
+    color: var(--cbx-brand);
+  }
+}
+.cbx-icon-btn:is(:focus-visible, :active, [aria-pressed='true'])
+  .cbx-icon:not(.cbx-icon--semantic) {
+  color: var(--cbx-brand);
+}
+:where(:disabled, [aria-disabled='true']) .cbx-icon {
+  --icon-gradient-a: var(--cbx-text-disabled) !important;
+  --icon-gradient-b: var(--cbx-text-disabled) !important;
+  color: var(--cbx-text-disabled) !important;
+}
+@keyframes cbx-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cbx-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--cbx-radius-lg);
+  background: var(--cbx-brand-subtle);
+  color: var(--cbx-brand);
+  opacity: 1;
+}
+.cbx-empty__icon .cbx-icon {
+  --icon-size: var(--cbx-icon-lg);
+}
+.cbx-avatar__fallback .cbx-icon {
+  --icon-size: var(--cbx-icon-md);
+}
+
+/* Changes of meaning (sun/moon, visible/hidden) dissolve inside a fixed slot. */
+.icon-swap {
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+}
+.icon-swap-enter-active,
+.icon-swap-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 280ms var(--cbx-icon-ease);
+}
+.icon-swap-leave-active {
+  position: absolute;
+  inset: 0;
+}
+.icon-swap-enter-from {
+  opacity: 0;
+  transform: rotate(-25deg) scale(0.8);
+}
+.icon-swap-leave-to {
+  opacity: 0;
+  transform: rotate(25deg) scale(0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cbx-icon,
+  .cbx-icon *,
+  .icon-swap-enter-active,
+  .icon-swap-leave-active {
+    animation: none !important;
+    transition: none !important;
+  }
+  .cbx-icon__body,
+  .cbx-icon__press {
+    transform: none !important;
+  }
+}

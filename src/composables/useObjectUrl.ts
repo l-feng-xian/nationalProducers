@@ -30,7 +30,13 @@ const pending = new Map<string, Promise<string | null>>()
  * 快速滚长列表时攒下一大把待回收的 Blob。
  */
 const GRACE_MS = 1000
-const MAX_GRACE = 16
+/**
+ * 上限从 16 提到 64：原来的取值假设「卸载后立刻重新获取」是罕见情况，
+ * 而**虚拟滚动把它变成了常态** —— 滚出视口即卸载、滚回来又要。滚过 16 张图就
+ * 溢出上限、真回收掉，滚回去就得重走一次 IDB 异步读，那一帧头像退回文字兜底、
+ * 配图退回占位块，于是每次回滚都闪一下。64 张缩略图的 objectURL 仍是可忽略的开销。
+ */
+const MAX_GRACE = 64
 const graceTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function cancelGrace(id: string) {

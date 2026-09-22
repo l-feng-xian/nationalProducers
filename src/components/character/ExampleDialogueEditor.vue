@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, ref, watch } from 'vue'
 import { confirmDialog } from '@/composables/useConfirm'
 import {
@@ -93,7 +94,7 @@ function applySource() {
         <span v-if="hasRaw" class="cbx-badge cbx-badge--warning">有无法解析的组，已保留源码</span>
       </p>
       <button class="cbx-btn cbx-btn--ghost" @click="sourceMode ? applySource() : enterSource()">
-        {{ sourceMode ? '✓ 应用源码' : '源码模式' }}
+        <AppIcon v-if="sourceMode" name="Check" active />{{ sourceMode ? '应用源码' : '源码模式' }}
       </button>
     </div>
 
@@ -109,7 +110,9 @@ function applySource() {
       <div v-for="(b, bi) in blocks" :key="bi" class="block">
         <div class="block__head">
           <span class="block__idx">第 {{ bi + 1 }} 组</span>
-          <button class="cbx-icon-btn" title="删除这组" @click="removeBlock(bi)">✕</button>
+          <button class="cbx-icon-btn" title="删除这组" @click="removeBlock(bi)">
+            <AppIcon name="X" tone="danger" />
+          </button>
         </div>
 
         <textarea
@@ -136,16 +139,24 @@ function applySource() {
               :value="t.text"
               @input="setTurn(bi, ti, ($event.target as HTMLTextAreaElement).value)"
             />
-            <button class="cbx-icon-btn" title="删除这句" @click="removeTurn(bi, ti)">✕</button>
+            <button class="cbx-icon-btn" title="删除这句" @click="removeTurn(bi, ti)">
+              <AppIcon name="X" tone="danger" />
+            </button>
           </div>
           <div class="block__ops">
-            <button class="cbx-btn cbx-btn--ghost sm" @click="addTurn(bi, 'user')">＋ 用户</button>
-            <button class="cbx-btn cbx-btn--ghost sm" @click="addTurn(bi, 'char')">＋ 角色</button>
+            <button class="cbx-btn cbx-btn--ghost sm" @click="addTurn(bi, 'user')">
+              <AppIcon name="Plus" /> 用户
+            </button>
+            <button class="cbx-btn cbx-btn--ghost sm" @click="addTurn(bi, 'char')">
+              <AppIcon name="Plus" /> 角色
+            </button>
           </div>
         </template>
       </div>
 
-      <button class="cbx-btn cbx-btn--soft" @click="addBlock">＋ 添加一组示例</button>
+      <button class="cbx-btn cbx-btn--soft" @click="addBlock">
+        <AppIcon name="Plus" /> 添加一组示例
+      </button>
     </template>
   </div>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useGenerationStore } from '@/stores/generation'
 import { formatTokens } from '@/services/tokens'
@@ -74,9 +75,13 @@ function copyJson() {
           <div class="head-ops">
             <button class="cbx-btn cbx-btn--ghost sm" @click="refresh">刷新</button>
             <button class="cbx-btn cbx-btn--ghost sm" @click="copyJson">
-              {{ copied ? '✓ 已复制' : '复制 JSON' }}
+              <AppIcon :name="copied ? 'Check' : 'Copy'" :active="copied" />{{
+                copied ? '已复制' : '复制 JSON'
+              }}
             </button>
-            <button class="cbx-icon-btn" aria-label="关闭" @click="emit('close')">✕</button>
+            <button class="cbx-icon-btn" aria-label="关闭" @click="emit('close')">
+              <AppIcon name="X" />
+            </button>
           </div>
         </header>
 

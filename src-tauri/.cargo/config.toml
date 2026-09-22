@@ -1,0 +1,7 @@
+# 这台机器 16GB 内存，Tauri 的 443 个 crate 依赖树在默认并行度（= CPU 核数）下
+# 把 rustc 跑到 OOM 过：日志里是 `rustc-LLVM ERROR: out of memory`，
+# 而且它会在 target/debug/deps 里留下**被截断的 .rmeta**，
+# 之后报成一堆看着毫不相干的 E0462 "found staticlib std" / E0786 "invalid metadata"，
+# 极易误判成 crate-type 配错。限并行度是治本的那一刀。
+[build]
+jobs = 2

@@ -65,7 +65,7 @@ try {
   })
 
   await page.goto(`${origin}characters`)
-  await page.getByRole('button', { name: '＋ 新建角色', exact: true }).click()
+  await page.getByRole('button', { name: '新建角色', exact: true }).click()
   await page.getByRole('button', { name: 'AI 创建角色', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'AI 创建角色', exact: true })
   const description = dialog.getByLabel('描述你想创建的角色', { exact: true })

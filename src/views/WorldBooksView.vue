@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -8,6 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { world_info_position, type WorldInfoEntry } from '@/types/worldinfo'
 import { confirmDialog } from '@/composables/useConfirm'
+import { downloadBlob, safeFileName } from '@/utils/download'
 
 const route = useRoute()
 const router = useRouter()
@@ -144,17 +146,15 @@ async function onImport(ev: Event) {
   ;(ev.target as HTMLInputElement).value = ''
 }
 
-function exportBook() {
+async function exportBook() {
   const b = book.value
   if (!b) return
   const blob = new Blob([JSON.stringify({ name: b.name, entries: b.entries }, null, 2)], {
     type: 'application/json',
   })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${b.name}.json`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  // 走统一的 downloadBlob：这里原本自建 anchor，在安卓 WebView 上点了毫无反应
+  const at = await downloadBlob(blob, safeFileName(b.name, 'json'))
+  if (at) toast.success(`已导出到 ${at}`)
 }
 
 // 切书时若停留在不存在的条目上，回退到列表
@@ -169,7 +169,9 @@ watch([bookId, uid], () => {
   <AppTopbar title="世界书">
     <template #actions>
       <button class="cbx-btn cbx-btn--ghost" @click="fileInput?.click()">导入</button>
-      <button class="cbx-btn cbx-btn--primary" @click="createBook">＋ 新建</button>
+      <button class="cbx-btn cbx-btn--primary" @click="createBook">
+        <AppIcon name="Plus" /> 新建
+      </button>
       <input ref="fileInput" type="file" accept=".json" hidden @change="onImport" />
     </template>
   </AppTopbar>
@@ -178,7 +180,7 @@ watch([bookId, uid], () => {
     <!-- 书列表 -->
     <div class="pane pane--books cbx-scroll" :class="{ 'pane--hide': mobilePane !== 'books' }">
       <div v-if="!worlds.items.length" class="cbx-empty">
-        <span class="cbx-empty__icon">📚</span>
+        <span class="cbx-empty__icon"><AppIcon name="BookOpen" tone="brand" /></span>
         <span class="cbx-empty__desc">还没有世界书</span>
       </div>
       <div
@@ -213,7 +215,9 @@ watch([bookId, uid], () => {
           />
         </div>
         <div class="head-ops">
-          <button class="cbx-btn cbx-btn--soft sm" @click="addEntry">＋ 新建条目</button>
+          <button class="cbx-btn cbx-btn--soft sm" @click="addEntry">
+            <AppIcon name="Plus" /> 新建条目
+          </button>
           <button class="cbx-btn cbx-btn--ghost sm" @click="exportBook">导出</button>
           <button class="cbx-btn cbx-btn--ghost sm del" @click="removeBook">删除本书</button>
         </div>
@@ -230,7 +234,9 @@ watch([bookId, uid], () => {
         >
           <span class="row__title">{{ e.comment || e.key.join(', ') || '（未命名条目）' }}</span>
           <span class="row__meta">{{ summary(e) }}</span>
-          <button class="cbx-icon-btn tiny" title="删除" @click.stop="removeEntry(e.uid)">✕</button>
+          <button class="cbx-icon-btn tiny" title="删除" @click.stop="removeEntry(e.uid)">
+            <AppIcon name="X" tone="danger" />
+          </button>
         </div>
       </template>
       <div v-else class="cbx-empty">

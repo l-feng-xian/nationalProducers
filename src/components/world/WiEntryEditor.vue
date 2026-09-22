@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, ref } from 'vue'
 import {
   GENERATION_TYPE_TRIGGERS,
@@ -201,9 +202,9 @@ const modified = computed(() => {
 
     <!-- ═══ 匹配与扫描 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('match')">
+      <button class="cbx-collapse__head" :aria-expanded="!!open['match']" @click="toggle('match')">
         <span>匹配与扫描 <i v-if="modified.match" class="dot" /></span>
-        <span>{{ open['match'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['match']" />
       </button>
       <div v-show="open['match']" class="cbx-collapse__body">
         <label class="cbx-field">
@@ -307,9 +308,13 @@ const modified = computed(() => {
 
     <!-- ═══ 递归 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('recursion')">
+      <button
+        class="cbx-collapse__head"
+        :aria-expanded="!!open['recursion']"
+        @click="toggle('recursion')"
+      >
         <span>递归 <i v-if="modified.recursion" class="dot" /></span>
-        <span>{{ open['recursion'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['recursion']" />
       </button>
       <div v-show="open['recursion']" class="cbx-collapse__body">
         <div class="switches">
@@ -337,9 +342,13 @@ const modified = computed(() => {
 
     <!-- ═══ 概率与预算 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('budget')">
+      <button
+        class="cbx-collapse__head"
+        :aria-expanded="!!open['budget']"
+        @click="toggle('budget')"
+      >
         <span>概率与预算 <i v-if="modified.budget" class="dot" /></span>
-        <span>{{ open['budget'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['budget']" />
       </button>
       <div v-show="open['budget']" class="cbx-collapse__body">
         <label class="cbx-field">
@@ -368,9 +377,9 @@ const modified = computed(() => {
 
     <!-- ═══ 包含组 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('group')">
+      <button class="cbx-collapse__head" :aria-expanded="!!open['group']" @click="toggle('group')">
         <span>包含组 <i v-if="modified.group" class="dot" /></span>
-        <span>{{ open['group'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['group']" />
       </button>
       <div v-show="open['group']" class="cbx-collapse__body">
         <p class="tip">同组条目互相竞争，每轮只有一个胜出。可填多组，用逗号分隔。</p>
@@ -411,9 +420,9 @@ const modified = computed(() => {
 
     <!-- ═══ 定时效果 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('timed')">
+      <button class="cbx-collapse__head" :aria-expanded="!!open['timed']" @click="toggle('timed')">
         <span>定时效果 <i v-if="modified.timed" class="dot" /></span>
-        <span>{{ open['timed'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['timed']" />
       </button>
       <div v-show="open['timed']" class="cbx-collapse__body">
         <p class="tip">
@@ -438,9 +447,13 @@ const modified = computed(() => {
 
     <!-- ═══ 触发条件 ═══ -->
     <div class="cbx-collapse">
-      <button class="cbx-collapse__head" @click="toggle('filter')">
+      <button
+        class="cbx-collapse__head"
+        :aria-expanded="!!open['filter']"
+        @click="toggle('filter')"
+      >
         <span>触发条件 <i v-if="modified.filter" class="dot" /></span>
-        <span>{{ open['filter'] ? '▾' : '▸' }}</span>
+        <AppIcon name="ChevronRight" :active="open['filter']" />
       </button>
       <div v-show="open['filter']" class="cbx-collapse__body">
         <div class="cbx-field__label">限定生成类型（不选 = 不限）</div>
