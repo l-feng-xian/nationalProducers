@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
 /**
- * 「其他数据表」可视化浏览：角色 / 群聊 / 世界书 / 无限世界 / 图片 / 密钥。
+ * 「其他数据表」可视化浏览：角色 / 群聊 / 世界书 / 图片 / 密钥。
  *
  * 约定：只浏览与删除（不做行内编辑）；删除一律走各表仓储的级联删除，
  * 不裸删 IDB 行，防止留下孤儿消息 / 图片。分页与轻量化见 browse.ts。
@@ -13,7 +13,6 @@ import {
   blobsRepo,
   browseRepo,
   charactersRepo,
-  gameworldsRepo,
   groupsRepo,
   secretsRepo,
   worldbooksRepo,
@@ -31,7 +30,6 @@ const STORES: { id: BrowseStore; label: string }[] = [
   { id: 'characters', label: '角色' },
   { id: 'groups', label: '群聊' },
   { id: 'worldbooks', label: '世界书' },
-  { id: 'gameworlds', label: '无限世界' },
   { id: 'blobs', label: '图片' },
   { id: 'secrets', label: '密钥' },
 ]
@@ -145,7 +143,6 @@ const REMOVE_TEXT: Record<BrowseStore, (row: BrowseRow) => string> = {
   characters: (r) => `删除角色「${r.title}」？其全部会话与消息会一并删除，此操作不可撤销。`,
   groups: (r) => `删除群聊「${r.title}」？其全部会话与消息会一并删除，此操作不可撤销。`,
   worldbooks: (r) => `删除世界书「${r.title}」？绑定它的角色与会话会被解绑，此操作不可撤销。`,
-  gameworlds: (r) => `删除无限世界「${r.title}」？其存档与 NPC 状态会一并删除，此操作不可撤销。`,
   blobs: (r) =>
     refSet.value?.has(r.key)
       ? `该图片仍被引用，删除后对应头像 / 配图会显示异常。确定删除？`
@@ -166,9 +163,6 @@ async function removeRow(row: BrowseRow) {
       break
     case 'worldbooks':
       await worldbooksRepo.remove(row.key)
-      break
-    case 'gameworlds':
-      await gameworldsRepo.remove(row.key)
       break
     case 'blobs':
       await blobsRepo.remove(row.key)
@@ -295,7 +289,11 @@ onBeforeUnmount(() => {
     <div class="dpager">
       <span class="dpager__info" />
       <div class="dpager__acts">
-        <button class="cbx-btn cbx-btn--ghost sm" :disabled="stack.length <= 1 || loading" @click="prev">
+        <button
+          class="cbx-btn cbx-btn--ghost sm"
+          :disabled="stack.length <= 1 || loading"
+          @click="prev"
+        >
           <AppIcon name="ArrowLeft" /> 上一页
         </button>
         <button class="cbx-btn cbx-btn--ghost sm" :disabled="!hasMore || loading" @click="next">

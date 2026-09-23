@@ -10,6 +10,7 @@ import ChatComposer from '@/components/chat/ChatComposer.vue'
 import PromptPreview from '@/components/chat/PromptPreview.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
 import { dialogueImagePrompt } from '@/services/image/prompts'
+import { dialogueImagePromptViaLLM } from '@/services/image/promptFromLLM'
 import type { CharacterImageReference, GeneratedImage } from '@/types/image'
 import type { ChatMessage } from '@/types/chat'
 import { useChatsStore } from '@/stores/chats'
@@ -36,6 +37,7 @@ const imageTarget = ref<{
   messageId: string
   prompt: string
   references: CharacterImageReference[]
+  message: ChatMessage
 } | null>(null)
 const canGenerateImage = computed(() =>
   chats.messages.some((m) => !m.is_system && !m.exclude && m.mes.trim()),
@@ -56,11 +58,17 @@ function openImage(messageId?: string) {
     name: character.data.name,
     blobId: character.avatarBlobId,
   }))
+  // 角色外貌（角色简介）写进提示词，和参考图一起双重锚定人物，避免图生图服饰漂移
+  const characters = members.map((character) => ({
+    name: character.data.name,
+    description: character.data.description,
+  }))
   imageTarget.value = {
     chatId: chats.current.id,
     messageId: target.id,
-    prompt: dialogueImagePrompt(target, references),
+    prompt: dialogueImagePrompt(target, characters),
     references,
+    message: target,
   }
 }
 
@@ -69,6 +77,28 @@ async function applyImage(image: GeneratedImage) {
   if (!target) throw new Error('对话已切换，请重新生成配图')
   await chats.attachImage(target.chatId, target.messageId, image)
   toast.success('配图已保存到对话')
+}
+
+/** 用已配置的 LLM 依据最近对话生成图生图提示词（失败回退模板）。 */
+async function dialoguePromptGen(signal: AbortSignal): Promise<string> {
+  const target = imageTarget.value
+  if (!target) return ''
+  const p = settings.settings.provider
+  const apiKey = await settings.getApiKey(p.secretRef)
+  const history = chats.messages.filter((m) => m.seq <= target.message.seq)
+  // 从参考角色取外貌设定（角色简介），随提示词一起下发以锁定人物
+  const characters = target.references.map((r) => ({
+    name: r.name,
+    description: chars.byId(r.characterId)?.data.description ?? '',
+  }))
+  return dialogueImagePromptViaLLM({
+    message: target.message,
+    history,
+    characters,
+    provider: p,
+    apiKey,
+    signal,
+  })
 }
 
 watch(
@@ -327,34 +357,34 @@ async function newChat() {
        天然避开点名条与 composer，不用去量它们的高度 -->
   <div class="stage">
     <div ref="scroller" class="cbx-scroll body" :class="{ 'body--empty': !chats.messages.length }">
-    <div v-if="!chats.messages.length" class="welcome">
-      <div class="welcome-icon">
-        <MessageCircle :size="32" aria-hidden="true" />
+      <div v-if="!chats.messages.length" class="welcome">
+        <div class="welcome-icon">
+          <MessageCircle :size="32" aria-hidden="true" />
+        </div>
+        <h2>从一句话，开始新的故事</h2>
+        <p>分享一个想法，或向你的角色打个招呼。<br />每一段对话，都从这里开始。</p>
+        <RouterLink to="/characters" class="welcome-link"
+          ><UsersRound :size="16" aria-hidden="true" />选择一个角色</RouterLink
+        >
       </div>
-      <h2>从一句话，开始新的故事</h2>
-      <p>分享一个想法，或向你的角色打个招呼。<br />每一段对话，都从这里开始。</p>
-      <RouterLink to="/characters" class="welcome-link"
-        ><UsersRound :size="16" aria-hidden="true" />选择一个角色</RouterLink
+
+      <!-- 两个分支共用 bubbleProps()，避免十几行绑定抄两遍之后改一处漏一处 -->
+      <Virtualizer
+        v-else-if="virtualized"
+        ref="vlist"
+        class="stream"
+        :class="{ 'stream--positioning': positioning }"
+        :data="chats.messages"
+        :start-margin="startMargin"
+        :keep-mounted="pinned"
+        v-slot="{ item: m }"
       >
-    </div>
+        <MessageBubble :key="m.id" v-bind="bubbleProps(m)" />
+      </Virtualizer>
 
-    <!-- 两个分支共用 bubbleProps()，避免十几行绑定抄两遍之后改一处漏一处 -->
-    <Virtualizer
-      v-else-if="virtualized"
-      ref="vlist"
-      class="stream"
-      :class="{ 'stream--positioning': positioning }"
-      :data="chats.messages"
-      :start-margin="startMargin"
-      :keep-mounted="pinned"
-      v-slot="{ item: m }"
-    >
-      <MessageBubble :key="m.id" v-bind="bubbleProps(m)" />
-    </Virtualizer>
-
-    <div v-else class="stream" :class="{ 'stream--positioning': positioning }">
-      <MessageBubble v-for="m in chats.messages" :key="m.id" v-bind="bubbleProps(m)" />
-    </div>
+      <div v-else class="stream" :class="{ 'stream--positioning': positioning }">
+        <MessageBubble v-for="m in chats.messages" :key="m.id" v-bind="bubbleProps(m)" />
+      </div>
     </div>
 
     <Transition name="jump">
@@ -390,6 +420,7 @@ async function newChat() {
     v-if="imageTarget"
     title="生成对话配图"
     :initial-prompt="imageTarget.prompt"
+    :generate-prompt="dialoguePromptGen"
     :references="imageTarget.references"
     require-references
     apply-label="保存到对话"

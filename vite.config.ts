@@ -80,6 +80,7 @@ function dropUnusedOrtAsyncifyWasm(): Plugin {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const llmOrigin = env['VITE_LLM_ORIGIN'] || 'https://api.openai.com'
+  const hfOrigin = env['VITE_HF_ORIGIN'] || 'https://hf-mirror.com'
 
   /**
    * `npm run dev:lan` 专用：自签证书 + 监听 0.0.0.0，好让手机能连过来联调扫码同步。
@@ -109,6 +110,47 @@ export default defineConfig(({ mode }) => {
           target: llmOrigin,
           changeOrigin: true,
           rewrite: (p: string) => p.replace(/^\/llm/, ''),
+        },
+        /**
+         * 本地模型下载代理：绕开镜像站缺失的 CORS 头。
+         *
+         * transformers.js 在浏览器里逐文件 fetch 权重（嵌入模型 / 深度模型都走它），
+         * 默认下载源 hf-mirror.com **不返回 Access-Control-Allow-Origin**，于是
+         * localhost:5173 直连被 CORS 拦死（huggingface.co 反而带 CORS，只是国内基本
+         * 连不上才要用镜像）。让下载走同源的 /hf、由 vite 在服务端转发到镜像，跨源那一
+         * 跳就发生在浏览器看不见的地方。
+         *
+         * 与之配对的是 services/ml/downloadHost.ts：开发期它把 hf-mirror 下载源改写成
+         * `location.origin + /hf/`，正好落到这条代理上。目标可用 VITE_HF_ORIGIN 覆盖。
+         *
+         * followRedirects：镜像对大权重文件可能 302 到别处，让代理在服务端跟完重定向，
+         * 浏览器始终只见同源响应，不会又被甩回一个跨源 URL 触发 CORS。
+         */
+        '/hf': {
+          target: hfOrigin,
+          changeOrigin: true,
+          followRedirects: true,
+          /**
+           * ⚠️ **必须覆盖 Referer/Origin，否则这条代理形同虚设**。
+           *
+           * hf-mirror 有**防盗链**：带着外站 Referer 请求权重，它不返回文件，而是回一个
+           * 「警告：未授权访问」的 HTML 页 —— 且状态码是 **200**。浏览器 fetch 一律带
+           * Referer，curl 默认不带 —— 所以命令行测一切正常、页面里必炸，两边对不上，
+           * 这条极难靠猜想复现（是 curl 逐个加 -H 二分头部才抓到的）。
+           *
+           * 而 transformers.js 写缓存只认状态码（见 services/ml/tfEnv.ts 的 guardHtml），
+           * 于是这页 HTML 会被当成权重存进 Cache Storage，此后缓存命中短路网络，
+           * 报错永远是 `Unexpected token '<', "<!DOCTYPE "`，且修好代理也不会自行恢复。
+           *
+           * ⚠️ 只能用 headers 覆盖，**不能**在 configure 里 proxyReq.removeHeader()：
+           * followRedirects 下 proxyReq 是 follow-redirects 的 RedirectableRequest，
+           * 事件触发时请求头**已经发出**，removeHeader 抛 ERR_HTTP_HEADERS_SENT —— 且是在
+           * 事件回调里抛，**整个 dev server 当场崩掉**（实测踩过，不是推断）。
+           *
+           * 伪装成镜像站自引用：同站 Referer 天然通过防盗链，比留空更稳。
+           */
+          headers: { referer: hfOrigin + '/', origin: hfOrigin },
+          rewrite: (p: string) => p.replace(/^\/hf/, ''),
         },
         /**
          * 扫码同步的信令服务器（默认 ws://149.30.222.97/ws，那台机器上由

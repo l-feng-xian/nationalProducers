@@ -24,9 +24,15 @@ import type { ModelSpec } from './presets'
 // 没有这行，TS 会把 self 推断成 Window，postMessage 的 transfer 参数重载对不上
 declare const self: DedicatedWorkerGlobalScope
 
+/**
+ * host = transformers.js 的 remoteHost（下载源，见 services/ml/downloadHost.ts）。
+ * 由主线程宿主带进来；缺省则用库默认(HF)。⚠️ 缓存键含 host，
+ * 故 init/check/download 必须带上同一个 host，否则「下载用镜像、推理查 HF」会永远判定未下载。
+ */
 export interface InitMsg {
   type: 'init'
   model: ModelSpec
+  host?: string
 }
 export interface EmbedMsg {
   type: 'embed'
@@ -40,16 +46,19 @@ export interface CheckMsg {
   type: 'check'
   ids: string[]
   task?: ManagedTask
+  host?: string
 }
 export interface DownloadMsg {
   type: 'download'
   model: ModelSpec
   task?: ManagedTask
+  host?: string
 }
 export interface RemoveMsg {
   type: 'remove'
   id: string
   task?: ManagedTask
+  host?: string
 }
 export type InMsg = InitMsg | EmbedMsg | CheckMsg | DownloadMsg | RemoveMsg
 
@@ -80,8 +89,8 @@ let dim = 0
  * 那里记着 allowLocalModels 必须恒为 false 的完整原因（SPA 回落会永久毒化缓存）。
  * 别在这里复制一份，两份注释迟早漂移。
  */
-function setup(): Promise<Tf> {
-  return setupTf('cache')
+function setup(host?: string): Promise<Tf> {
+  return setupTf('cache', host)
 }
 
 function onProgress(p: unknown): void {
@@ -92,7 +101,7 @@ function onProgress(p: unknown): void {
 }
 
 async function init(msg: InitMsg): Promise<void> {
-  const tf = await setup()
+  const tf = await setup(msg.host)
   pooling = msg.model.pooling
 
   // 前置检查是「没下载就绝不联网」这条承诺的**唯一**执行点 ——
@@ -127,7 +136,7 @@ async function init(msg: InitMsg): Promise<void> {
  * 让它自己下、自己存，键天然一致。
  */
 async function download(msg: DownloadMsg): Promise<void> {
-  const tf = await setup()
+  const tf = await setup(msg.host)
   // 全项目**唯一**不做前置缓存检查就调 pipeline 的地方 ——
   // 也就是唯一允许产生网络流量的地方。其它入口都先过 is_pipeline_cached。
   const pipe = await tf.pipeline(msg.task ?? TASK, msg.model.id, {
@@ -150,7 +159,7 @@ async function download(msg: DownloadMsg): Promise<void> {
 }
 
 async function check(msg: CheckMsg): Promise<void> {
-  const tf = await setup()
+  const tf = await setup(msg.host)
   const cached: Record<string, boolean> = {}
   for (const id of msg.ids) {
     try {
@@ -167,7 +176,7 @@ async function check(msg: CheckMsg): Promise<void> {
 }
 
 async function remove(msg: RemoveMsg): Promise<void> {
-  const tf = await setup()
+  const tf = await setup(msg.host)
   await tf.ModelRegistry.clear_cache(msg.id, { dtype: DTYPE })
   post({ type: 'removed', id: msg.id })
 }

@@ -20,9 +20,7 @@ export async function get(id: string): Promise<Blob | undefined> {
 }
 
 /** 单事务批量取多条记录（含元数据与 Blob 本体），数据管理页图片子表用 */
-export async function getMany(
-  ids: string[],
-): Promise<Record<string, BlobRecord | undefined>> {
+export async function getMany(ids: string[]): Promise<Record<string, BlobRecord | undefined>> {
   const out: Record<string, BlobRecord | undefined> = {}
   if (!ids.length) return out
   const db = await getDb()
@@ -43,7 +41,6 @@ export interface BlobRefSource {
   messages?: { images?: { blobId: string }[]; force_avatar?: string }[]
   characters?: { avatarBlobId?: string | undefined; depthBlobId?: string | undefined }[]
   groups?: { avatarBlobId?: string | undefined }[]
-  gameworlds?: { npcs: { avatarBlobId?: string | undefined }[] }[]
   persona?: { avatarBlobId?: string | undefined } | undefined
 }
 
@@ -70,8 +67,6 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
     if (g.avatarBlobId) out.add(g.avatarBlobId)
   }
   if (src.persona?.avatarBlobId) out.add(src.persona.avatarBlobId)
-  for (const world of src.gameworlds ?? [])
-    for (const npc of world.npcs) if (npc.avatarBlobId) out.add(npc.avatarBlobId)
   return out
 }
 
@@ -85,7 +80,6 @@ export async function reachableBlobIds(): Promise<Set<string>> {
     characters: await db.getAll('characters'),
     messages: await db.getAll('messages'),
     groups: await db.getAll('groups'),
-    gameworlds: await db.getAll('gameworlds'),
     persona: (await db.get('settings', 'app'))?.persona,
   })
 }

@@ -5,11 +5,29 @@ import AppTopbar from '@/components/layout/AppTopbar.vue'
 import ModelServices from '@/components/models/ModelServices.vue'
 import ImageModelServices from '@/components/models/ImageModelServices.vue'
 import { useModelsStore } from '@/stores/models'
+import { useSettingsStore } from '@/stores/settings'
+import { DOWNLOAD_HOST_PRESETS, normalizeHost } from '@/services/ml/downloadHost'
 import { formatBytes, storageEstimate } from '@/services/io/backup'
 import { confirmDialog } from '@/composables/useConfirm'
 
 const models = useModelsStore()
+const settings = useSettingsStore()
 const usage = ref<{ usage: number; quota: number } | null>(null)
+
+const hostPresets = DOWNLOAD_HOST_PRESETS
+const downloadHost = computed(() => normalizeHost(settings.settings.modelDownloadHost))
+
+/**
+ * 切换下载源。transformers.js 的缓存键含 host，换源后要重新核对已下载状态
+ * （旧源下的模型会按新键判定为「未下载」）。所以改完立刻 refresh。
+ */
+async function onHostChange(e: Event) {
+  const host = normalizeHost((e.target as HTMLSelectElement).value)
+  if (host === downloadHost.value) return
+  settings.patch({ modelDownloadHost: host })
+  await models.refresh()
+  await refreshUsage()
+}
 
 async function refreshUsage() {
   usage.value = await storageEstimate()
@@ -72,13 +90,38 @@ async function remove(id: string) {
       <div class="cbx-form-col col">
         <ModelServices />
         <ImageModelServices />
+
+        <section class="cbx-card intro">
+          <h3>本地模型下载源</h3>
+          <p class="note">
+            下面的<strong>嵌入模型</strong>与<strong>深度模型</strong>都从这里下载。国内直连
+            HuggingFace 基本下不动，默认走 <strong>hf-mirror 镜像</strong>；能直连官方、或镜像出问题时可切回
+            huggingface.co。
+          </p>
+          <label class="src">
+            <span class="src__label">下载源</span>
+            <select
+              class="cbx-input src__sel"
+              :value="downloadHost"
+              aria-label="模型下载源"
+              @change="onHostChange"
+            >
+              <option v-for="o in hostPresets" :key="o.host" :value="o.host">{{ o.label }}</option>
+            </select>
+          </label>
+          <p class="note note--warn">
+            <AppIcon name="TriangleAlert" tone="warning" />
+            切换下载源后，用另一个源下过的模型会显示为「未下载」、需重新下载 —— 浏览器缓存按下载地址区分，属正常现象。
+          </p>
+        </section>
+
         <section class="cbx-card intro">
           <h3>嵌入模型</h3>
           <p class="note">
             会话记忆的「向量召回」需要一个嵌入模型。模型不随应用发布，要在这里
             <strong>手动下载一次</strong>，下载完再勾选启用才会真正生效 ——
-            没有勾选的模型不会产生任何流量。 下载来自
-            HuggingFace；<strong>下载之后推理全程离线</strong>， 对话内容不会离开这台设备。
+            没有勾选的模型不会产生任何流量。 下载走上面选择的<strong>下载源</strong>；<strong>下载之后推理全程离线</strong>，
+            对话内容不会离开这台设备。
           </p>
           <p class="note">
             换模型会让已建立的记忆索引全部作废，并在后续对话里自动重建 ——
@@ -353,6 +396,21 @@ async function remove(id: string) {
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-3);
+}
+.src {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-3);
+  flex-wrap: wrap;
+}
+.src__label {
+  font-size: var(--cbx-fs-sm);
+  font-weight: var(--cbx-fw-medium);
+  color: var(--cbx-text-secondary);
+}
+.src__sel {
+  flex: 1;
+  min-width: 220px;
 }
 
 /* auto-fill + minmax：宽屏自动排成 2~3 列，窄屏退回单列，不用写断点 */

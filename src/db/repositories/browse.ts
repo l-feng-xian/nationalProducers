@@ -2,7 +2,7 @@
  * 数据管理页「其他数据表」的浏览层。
  *
  * 这个页面面对的是「可能已经很大的库」：消息几万条、向量块几 MB、
- * 世界书 / 无限世界单行可能几 MB。所以这里的一切查询都必须：
+ * 世界书单行可能几 MB。所以这里的一切查询都必须：
  *   1. 走游标分页（keyset，主键升序），绝不 getAll 全表；
  *   2. 行数据轻量化 —— 剥离正文、条目、NPC 蓝图、二进制，只留列表要展示的字段；
  *   3. JSON 详情按主键单行取（getStoreRow），列表不拖着全量数据。
@@ -10,18 +10,14 @@
 import { getDb, chatRange } from '../schema'
 import { collectBlobRefs } from './blobs'
 
-/** 数据管理页允许浏览的六张表。messages / memchunks 走会话级，settings 有专门页面 */
-export type BrowseStore = 'characters' | 'groups' | 'worldbooks' | 'gameworlds' | 'blobs' | 'secrets'
+/** 数据管理页允许浏览的表。messages / memchunks 走会话级，settings 有专门页面 */
+export type BrowseStore = 'characters' | 'groups' | 'worldbooks' | 'blobs' | 'secrets'
 
 /** 各表数据列的标签与格式；顺序与 BrowseRow.cols 一一对应 */
 export const BROWSE_COLUMNS: Record<BrowseStore, { label: string; kind?: 'bytes' }[]> = {
-  characters: [
-    { label: '世界书' },
-    { label: '图片' },
-  ],
+  characters: [{ label: '世界书' }, { label: '图片' }],
   groups: [{ label: '成员' }, { label: '关系' }, { label: '头像', kind: undefined }],
   worldbooks: [{ label: '条目' }],
-  gameworlds: [{ label: 'NPC' }],
   blobs: [{ label: '类型' }, { label: '大小', kind: 'bytes' }],
   secrets: [{ label: '值' }, { label: '长度' }],
 }
@@ -95,15 +91,6 @@ function lighten(store: BrowseStore, value: unknown): BrowseRow {
         at: w.updatedAt,
       }
     }
-    case 'gameworlds': {
-      const w = value as { id: string; name: string; npcs?: unknown[]; updatedAt: number }
-      return {
-        key: w.id,
-        title: w.name || '（未命名）',
-        cols: [w.npcs?.length ?? 0],
-        at: w.updatedAt,
-      }
-    }
     case 'blobs': {
       // 绝不把 data Blob 带进列表 —— 只留元数据，预览走 blobsRepo.get 单取
       const b = value as { id: string; mime: string; size: number; createdAt: number }
@@ -172,7 +159,6 @@ export async function referencedBlobIds(): Promise<Set<string>> {
     characters: await db.getAll('characters'),
     messages: await db.getAll('messages'),
     groups: await db.getAll('groups'),
-    gameworlds: await db.getAll('gameworlds'),
     persona: (await db.get('settings', 'app'))?.persona,
   })
 }

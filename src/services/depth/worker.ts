@@ -21,6 +21,8 @@ export interface EstimateMsg {
   modelId: string
   /** 已经缩放好的图片。缩放放在主线程做 —— Worker 里没有 DOM canvas */
   bitmap: ImageBitmap
+  /** transformers.js 下载源（remoteHost）。缓存键含 host，必须与下载时一致，见 downloadHost.ts */
+  host?: string
 }
 export type DepthInMsg = EstimateMsg
 
@@ -38,7 +40,7 @@ let pipe: DepthPipe | null = null
 let loadedModelId = ''
 
 async function estimate(msg: EstimateMsg): Promise<void> {
-  const tf = await setupTf('cache')
+  const tf = await setupTf('cache', msg.host)
 
   if (!pipe || loadedModelId !== msg.modelId) {
     // 前置检查是「没下载就绝不联网」的唯一执行点 —— allowRemoteModels 恒为 true

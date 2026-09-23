@@ -9,6 +9,7 @@
 
 import { DEPTH_MAX_EDGE } from './presets'
 import type { DepthInMsg, DepthOutMsg } from './worker'
+import { getRemoteHost } from '../ml/downloadHost'
 
 /** 无进展就判死。3 秒的活给到 90 秒，弱机器也够 */
 const STALL_MS = 90_000
@@ -127,7 +128,7 @@ export function generateDepth(
     void (async () => {
       try {
         const bmp = await downscale(source)
-        const msg: DepthInMsg = { type: 'estimate', modelId, bitmap: bmp }
+        const msg: DepthInMsg = { type: 'estimate', modelId, bitmap: bmp, host: getRemoteHost() }
         // ImageBitmap 必须转移，结构化克隆一张大图会很慢
         w.postMessage(msg, [bmp])
       } catch (e) {

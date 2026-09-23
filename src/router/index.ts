@@ -37,26 +37,6 @@ const router = createRouter({
       component: () => import('@/views/WorldBooksView.vue'),
     },
     {
-      path: '/game-worlds',
-      name: 'game-worlds',
-      component: () => import('@/views/InfiniteWorldsView.vue'),
-    },
-    {
-      path: '/game-worlds/new',
-      name: 'game-world-create',
-      component: () => import('@/views/InfiniteWorldCreateView.vue'),
-    },
-    {
-      path: '/game-worlds/:id',
-      name: 'game-world-play',
-      component: () => import('@/views/InfiniteWorldPlayView.vue'),
-    },
-    {
-      path: '/game-worlds/:id/edit',
-      name: 'game-world-edit',
-      component: () => import('@/views/InfiniteWorldCreateView.vue'),
-    },
-    {
       path: '/models',
       name: 'models',
       component: () => import('@/views/ModelsView.vue'),

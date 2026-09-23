@@ -15,6 +15,7 @@
 
 import type { InMsg, ManagedTask, OutMsg } from './embedder.worker'
 import type { ModelSpec } from './presets'
+import { getRemoteHost } from '../ml/downloadHost'
 
 const CHECK_TIMEOUT = 30_000
 const REMOVE_TIMEOUT = 60_000
@@ -105,7 +106,7 @@ export async function checkCached(
 ): Promise<Record<string, boolean>> {
   if (!ids.length) return {}
   const { promise } = once<Record<string, boolean>>(
-    { type: 'check', ids, ...(task ? { task } : {}) },
+    { type: 'check', ids, host: getRemoteHost(), ...(task ? { task } : {}) },
     (m) => (m.type === 'checked' ? m.cached : undefined),
     { timeout: CHECK_TIMEOUT },
   )
@@ -129,7 +130,7 @@ export function downloadModel(
   task?: ManagedTask,
 ): DownloadHandle {
   const h = once<string>(
-    { type: 'download', model, ...(task ? { task } : {}) },
+    { type: 'download', model, host: getRemoteHost(), ...(task ? { task } : {}) },
     (m) => (m.type === 'downloaded' ? m.id : undefined),
     { timeout: STALL_TIMEOUT, ...(onProgress ? { onProgress } : {}) },
   )
@@ -138,7 +139,7 @@ export function downloadModel(
 
 export async function removeModel(id: string, task?: ManagedTask): Promise<void> {
   const { promise } = once<true>(
-    { type: 'remove', id, ...(task ? { task } : {}) },
+    { type: 'remove', id, host: getRemoteHost(), ...(task ? { task } : {}) },
     (m) => (m.type === 'removed' ? true : undefined),
     { timeout: REMOVE_TIMEOUT },
   )

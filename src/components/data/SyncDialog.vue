@@ -11,7 +11,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useSyncStore } from '@/stores/sync'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
-import { useInfiniteWorldStore } from '@/stores/infiniteWorld'
 import { useToast } from '@/composables/useToast'
 import { formatBytes } from '@/services/io/backup'
 import { describeCounts, describeScope } from '@/services/sync/protocol'
@@ -24,10 +23,6 @@ const emit = defineEmits<{ close: [] }>()
 const sync = useSyncStore()
 const chats = useChatsStore()
 const chars = useCharactersStore()
-const gameworlds = useInfiniteWorldStore()
-onMounted(() => {
-  void gameworlds.load().catch((e) => toast.error(String(e)))
-})
 const toast = useToast()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -41,7 +36,6 @@ let scanner: ScanHandle | null = null
 const secure = typeof isSecureContext === 'boolean' ? isSecureContext : true
 
 const SCOPE_ITEMS = [
-  { key: 'gameworlds', label: '无限世界', hint: '含世界设定、居民、存档和区块改动' },
   { key: 'characters', label: '角色', hint: '含头像与视差深度图' },
   { key: 'worldbooks', label: '世界书', hint: '' },
   { key: 'groups', label: '群聊', hint: '含成员关系与用户身份' },
@@ -54,11 +48,10 @@ const nothingPicked = computed(() => !SCOPE_ITEMS.some((i) => sync.scope[i.key])
 /** 对方清单里有多少条会覆盖本机已有记录 —— 单向推送下唯一的冲突提示 */
 const overlap = computed(() => {
   const m = sync.incoming
-  if (!m) return { chats: 0, characters: 0, gameworlds: 0 }
+  if (!m) return { chats: 0, characters: 0 }
   const localChats = new Set(chats.list.map((c) => c.id))
   const localChars = new Set(chars.items.map((c) => c.id))
   return {
-    gameworlds: (m.worldIds ?? []).filter((id) => gameworlds.items.some((w) => w.id === id)).length,
     chats: m.chatIds.filter((id) => localChats.has(id)).length,
     characters: m.charIds.filter((id) => localChars.has(id)).length,
   }
@@ -73,7 +66,6 @@ const overlap = computed(() => {
 const overlapWarning = computed(() => {
   const parts: string[] = []
   if (overlap.value.characters) parts.push(`${overlap.value.characters} 个角色`)
-  if (overlap.value.gameworlds) parts.push(`${overlap.value.gameworlds} 个无限世界（含全部存档）`)
   if (overlap.value.chats) parts.push(`${overlap.value.chats} 个会话`)
   if (!parts.length) return ''
   return `其中 ${parts.join('、')}已存在于本机，将被对方的版本覆盖，此操作不可撤销。`
@@ -209,8 +201,9 @@ onBeforeUnmount(stopCamera)
 
         <div class="cbx-modal__body cbx-scroll">
           <p v-if="!secure" class="note note--warn">
-            <AppIcon name="TriangleAlert" tone="warning" /> 当前不是安全上下文，摄像头与 WebRTC 都会被浏览器禁用。
-            请用 <code>npm run dev:lan</code> 启动，或把应用部署到 https 站点后再试。
+            <AppIcon name="TriangleAlert" tone="warning" /> 当前不是安全上下文，摄像头与 WebRTC
+            都会被浏览器禁用。 请用 <code>npm run dev:lan</code> 启动，或把应用部署到 https
+            站点后再试。
           </p>
 
           <!-- 1 选角色 -->
@@ -302,9 +295,8 @@ onBeforeUnmount(stopCamera)
               <template v-else>第 2 步：让发起方扫下面这个应答码，扫完就连上了。</template>
             </p>
             <p v-if="!sync.relayed && sync.fallbackReason" class="note note--warn">
-              <AppIcon name="TriangleAlert" tone="warning" /> 没连上信令服务器，已退回手动模式（要扫两次码）：{{
-                sync.fallbackReason
-              }}
+              <AppIcon name="TriangleAlert" tone="warning" />
+              没连上信令服务器，已退回手动模式（要扫两次码）：{{ sync.fallbackReason }}
             </p>
             <div class="qr">
               <canvas ref="canvas" />
@@ -368,7 +360,9 @@ onBeforeUnmount(stopCamera)
 
           <!-- 5 已连通：选方向与范围 -->
           <template v-else-if="sync.step === 'ready'">
-            <p class="note"><AppIcon name="Check" tone="success" /> 已连接。选择要同步的内容，然后决定方向。</p>
+            <p class="note">
+              <AppIcon name="Check" tone="success" /> 已连接。选择要同步的内容，然后决定方向。
+            </p>
             <div class="opts">
               <label v-for="it in SCOPE_ITEMS" :key="it.key" class="opt">
                 <input v-model="sync.scope[it.key]" type="checkbox" />
@@ -423,7 +417,8 @@ onBeforeUnmount(stopCamera)
             <p class="note">对方想<b>从这台设备取走</b>这些数据：</p>
             <p class="big">{{ describeScope(sync.pullRequest) }}</p>
             <p v-if="sync.pullRequest.settings" class="note note--warn">
-              <AppIcon name="TriangleAlert" tone="warning" /> 含「设置」——你的接口地址、模型与人设会一并送出去。
+              <AppIcon name="TriangleAlert" tone="warning" />
+              含「设置」——你的接口地址、模型与人设会一并送出去。
             </p>
             <p class="cbx-field__hint">
               只会发送上面列出的类别；你在上一页没勾的项目已经排除在外。不确定就拒绝。
@@ -463,7 +458,9 @@ onBeforeUnmount(stopCamera)
 
           <!-- 9 出错 -->
           <template v-else-if="sync.step === 'error'">
-            <p class="note note--warn"><AppIcon name="TriangleAlert" tone="warning" /> {{ sync.error }}</p>
+            <p class="note note--warn">
+              <AppIcon name="TriangleAlert" tone="warning" /> {{ sync.error }}
+            </p>
             <div class="acts">
               <button class="cbx-btn cbx-btn--soft" @click="sync.reset()">重新开始</button>
               <button class="cbx-btn cbx-btn--ghost" @click="close">关闭</button>

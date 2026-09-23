@@ -8,11 +8,6 @@
 import { chatRange, getDb } from '@/db/schema'
 import { toPlain } from '@/utils/plain'
 import { collectBlobRefs } from '@/db/repositories/blobs'
-import {
-  readWorldBackups,
-  restoreWorldBackup,
-  type WorldBackup,
-} from '@/services/infinite-world/persistence/backup'
 
 /**
  * ⚠️ `format` 是**数据格式标识，不是应用名**。应用改名（国货优选 → 幕间）时
@@ -27,7 +22,6 @@ export interface BackupFile {
   settings: unknown
   characters: unknown[]
   worldbooks: unknown[]
-  gameworlds?: WorldBackup[]
   groups: unknown[]
   chats: unknown[]
   messages: unknown[]
@@ -76,7 +70,6 @@ function stripMemIndex(row: unknown): unknown {
  * 所以扫码同步默认不勾它；整库导出则默认全都要。
  */
 export interface SyncScope {
-  gameworlds: boolean
   characters: boolean
   worldbooks: boolean
   groups: boolean
@@ -85,7 +78,6 @@ export interface SyncScope {
 }
 
 export const FULL_SCOPE: SyncScope = {
-  gameworlds: true,
   characters: true,
   worldbooks: true,
   groups: true,
@@ -105,7 +97,6 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
   const db = await getDb()
 
   const characters = s.characters ? await db.getAll('characters') : []
-  const worldData = s.gameworlds ? await readWorldBackups() : { bundles: [], blobs: [] }
   const groups = s.groups ? await db.getAll('groups') : []
   const messages = s.chats ? await db.getAll('messages') : []
   const settings = s.settings ? ((await db.get('settings', 'app')) ?? null) : null
@@ -121,9 +112,6 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     if (!wanted.has(b.id)) continue
     blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
   }
-  for (const b of worldData.blobs)
-    if (!blobs.some((image) => image.id === b.id))
-      blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
 
   return {
     format: 'nationalproducers-backup',
@@ -131,7 +119,6 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     exportedAt: Date.now(),
     settings,
     characters,
-    gameworlds: worldData.bundles,
     worldbooks: s.worldbooks ? await db.getAll('worldbooks') : [],
     groups,
     chats: s.chats ? await db.getAll('chats') : [],
@@ -147,7 +134,6 @@ export async function exportAll(): Promise<Blob> {
 }
 
 export interface ImportResult {
-  gameworlds: number
   characters: number
   worldbooks: number
   groups: number
@@ -173,7 +159,6 @@ export interface ImportResult {
 }
 
 type BackupStore =
-  | 'gameworlds'
   | 'characters'
   | 'worldbooks'
   | 'groups'
@@ -250,7 +235,6 @@ export async function applyBackup(
     throw new Error('不支持此备份版本，请更新应用。')
   const db = await getDb()
   const out: ImportResult = {
-    gameworlds: 0,
     characters: 0,
     worldbooks: 0,
     groups: 0,
@@ -277,13 +261,7 @@ export async function applyBackup(
   // Blob 先还原，角色记录才有头像可指。
   // 图片依附于角色、群、人设或聊天附件；只同步聊天时也需要恢复配图。
   const wantBlobs = allow.characters || allow.groups || allow.settings || allow.chats
-  const worldBlobIds = new Set(
-    (Array.isArray(file.gameworlds) ? file.gameworlds : [])
-      .flatMap((b) => b?.world?.npcs?.map((n) => n.avatarBlobId) ?? [])
-      .filter(Boolean),
-  )
   for (const b of wantBlobs ? (file.blobs ?? []) : []) {
-    if (worldBlobIds.has(b.id)) continue
     try {
       // ⚠️ dataUrlToBlob 走的是 fetch()，一个被手改坏的 data URL 会直接 reject。
       // 不接住的话，一张坏头像就能让整次导入前功尽弃
@@ -323,14 +301,6 @@ export async function applyBackup(
   // messages 跟着 chats 走：光有消息没有会话是一堆挂不上的孤儿（见 SyncScope 的说明）
   await bulk('chats', allow.chats ? (file.chats ?? []).map(stripMemIndex) : [])
   await bulk('messages', allow.chats ? (file.messages ?? []) : [])
-  for (const bundle of allow.gameworlds && Array.isArray(file.gameworlds) ? file.gameworlds : []) {
-    try {
-      out.blobs += await restoreWorldBackup(bundle, file.blobs ?? [])
-      out.gameworlds++
-    } catch (e) {
-      skip('gameworlds', e)
-    }
-  }
 
   /**
    * 导入是「同 id 覆盖」，被覆盖的会话元数据整包换成了对方那份，而**本机原有的

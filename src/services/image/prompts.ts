@@ -1,6 +1,11 @@
 import type { Character } from '@/types/character'
 import type { ChatMessage } from '@/types/chat'
-import type { CharacterImageReference } from '@/types/image'
+
+/** 出场人物的外貌锚点：名字 + 角色简介（外貌来源）。用于图生图保持人物一致。 */
+export interface DialogueCharacter {
+  name: string
+  description?: string
+}
 
 export function characterImagePrompt(
   data: Pick<Character['data'], 'name' | 'description' | 'personality' | 'scenario'>,
@@ -16,13 +21,15 @@ export function characterImagePrompt(
     .join('\n\n')
 }
 
-export function dialogueImagePrompt(
-  message: ChatMessage,
-  references: CharacterImageReference[],
-): string {
+export function dialogueImagePrompt(message: ChatMessage, characters: DialogueCharacter[]): string {
+  // 把角色外貌写进提示词，和参考图一起双重锚定人物；否则模型只靠参考latent，服饰易漂移。
+  const who = characters.map((c, index) => {
+    const look = c.description?.trim() ? `：${c.description.trim().slice(0, 600)}` : ''
+    return `参考图 ${index + 1} ${c.name}${look}`
+  })
   return [
-    '请根据当前对话生成画面。人物外貌、发型、服饰与对应参考图保持一致，动作和场景以对话为准。不要绘制文字、聊天气泡或水印。',
-    ...references.map((reference, index) => `参考图 ${index + 1}：${reference.name}`),
+    '请根据当前对话生成一张插画。务必保持每个人物的外貌、发型、发色、瞳色、脸型与服饰与其参考图及下方设定一致、保持不变，只改变人物的动作、表情与所处场景。不要绘制文字、聊天气泡或水印。',
+    ...who,
     `当前对话：\n${message.name}：${message.mes.trim()}`,
   ].join('\n\n')
 }

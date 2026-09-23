@@ -11,16 +11,9 @@ import type { WorldBook } from '@/types/worldinfo'
 import type { Group } from '@/types/group'
 import type { ChatMeta, ChatMessage } from '@/types/chat'
 import type { Settings } from '@/types/settings'
-import type {
-  GameWorld,
-  WorldChunkDelta,
-  WorldEvent,
-  WorldNpcState,
-  WorldSave,
-} from '@/types/infiniteWorld'
 
 export const DB_NAME = 'np-chat'
-export const DB_VERSION = 6
+export const DB_VERSION = 7
 
 export interface BlobRecord {
   id: string
@@ -76,31 +69,6 @@ export interface NpDB extends DBSchema {
    * 常比主记录写入还慢，而这里的查询模式（按会话整取）主键已经全覆盖。
    */
   memchunks: { key: [string, number, number]; value: MemChunk }
-  gameworlds: {
-    key: string
-    value: GameWorld
-    indexes: { by_updatedAt: number }
-  }
-  world_saves: {
-    key: string
-    value: WorldSave
-    indexes: { by_worldId: string; by_updatedAt: number }
-  }
-  world_chunks: {
-    key: [string, number, number]
-    value: WorldChunkDelta
-    indexes: { by_saveId: string }
-  }
-  world_npcs: {
-    key: [string, string]
-    value: WorldNpcState
-    indexes: { by_saveId: string }
-  }
-  world_events: {
-    key: [string, number]
-    value: WorldEvent
-    indexes: { by_saveId: string }
-  }
 }
 
 /** 一块可检索的记忆。向量写入前已 L2 归一化，检索时余弦退化成纯点积 */
@@ -172,33 +140,23 @@ export function getDb(): Promise<IDBPDatabase<NpDB>> {
       if (!db.objectStoreNames.contains('memchunks')) {
         db.createObjectStore('memchunks', { keyPath: ['chatId', 'kindRank', 'ord'] })
       }
-      // v5：移除旧世界存档。旧名称只用于升级清理，不属于当前 schema。
+      // 已移除的仓库用未类型化的句柄删除（它们已不在 NpDB schema 里）。
       const legacyDb = db as IDBPDatabase
+      // v5：移除更早的世界存档。
       if (oldVersion < 5 && legacyDb.objectStoreNames.contains('rpgworlds')) {
         legacyDb.deleteObjectStore('rpgworlds')
       }
-      // v6：独立检查每个 store，兼容升级事务中已有部分开发期 store 的情况。
-      // 同版本不会触发 upgrade；已到 v6 的缺表库需要另加版本迁移。
-      if (!db.objectStoreNames.contains('gameworlds')) {
-        const worlds = db.createObjectStore('gameworlds', { keyPath: 'id' })
-        worlds.createIndex('by_updatedAt', 'updatedAt')
-      }
-      if (!db.objectStoreNames.contains('world_saves')) {
-        const saves = db.createObjectStore('world_saves', { keyPath: 'id' })
-        saves.createIndex('by_worldId', 'worldId')
-        saves.createIndex('by_updatedAt', 'updatedAt')
-      }
-      if (!db.objectStoreNames.contains('world_chunks')) {
-        const chunks = db.createObjectStore('world_chunks', { keyPath: ['saveId', 'cx', 'cy'] })
-        chunks.createIndex('by_saveId', 'saveId')
-      }
-      if (!db.objectStoreNames.contains('world_npcs')) {
-        const npcs = db.createObjectStore('world_npcs', { keyPath: ['saveId', 'npcId'] })
-        npcs.createIndex('by_saveId', 'saveId')
-      }
-      if (!db.objectStoreNames.contains('world_events')) {
-        const events = db.createObjectStore('world_events', { keyPath: ['saveId', 'seq'] })
-        events.createIndex('by_saveId', 'saveId')
+      // v7：彻底移除「无限世界」模块的全部存储。
+      if (oldVersion < 7) {
+        for (const name of [
+          'gameworlds',
+          'world_saves',
+          'world_chunks',
+          'world_npcs',
+          'world_events',
+        ]) {
+          if (legacyDb.objectStoreNames.contains(name)) legacyDb.deleteObjectStore(name)
+        }
       }
     },
     blocked() {

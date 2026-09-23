@@ -83,7 +83,7 @@ export interface SessionHooks {
   onApplied?: (r: ImportResult) => void
 }
 
-const SCOPE_KEYS = ['gameworlds', 'characters', 'worldbooks', 'groups', 'chats', 'settings'] as const
+const SCOPE_KEYS = ['characters', 'worldbooks', 'groups', 'chats', 'settings'] as const
 
 /** 两份范围取交集：只有双方都要的才留下 */
 function intersectScope(a: SyncScope, b: SyncScope): SyncScope {
@@ -401,7 +401,6 @@ export class SyncSession {
   #sanitizeScope(raw: unknown): SyncScope {
     const s = (raw ?? {}) as Partial<Record<keyof SyncScope, unknown>>
     return {
-      gameworlds: s.gameworlds === true,
       characters: s.characters === true,
       worldbooks: s.worldbooks === true,
       groups: s.groups === true,
@@ -544,7 +543,6 @@ export class SyncSession {
       scope: resolved,
       bytes: payload.length,
       counts: {
-        gameworlds: file.gameworlds?.length ?? 0,
         characters: file.characters.length,
         worldbooks: file.worldbooks.length,
         groups: file.groups.length,
@@ -554,7 +552,6 @@ export class SyncSession {
       },
       chatIds: file.chats.map((c) => idOf(c)),
       charIds: file.characters.map((c) => idOf(c)),
-      worldIds: (file.gameworlds ?? []).map((b) => b.world.id),
     }
 
     const accepted = await new Promise<boolean>((res, rej) => {

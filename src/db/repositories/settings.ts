@@ -97,8 +97,30 @@ export async function load(): Promise<Settings> {
     service.name = service.name.trim() || '未命名文生图配置'
     // 文生图密钥使用独立命名空间，不接受导入数据中的共享引用。
     service.secretRef = `image-service:${service.id}`
+    if (!['openai', 'comfyui'].includes(service.backend)) service.backend = 'openai'
     if (!['', 'b64_json', 'url'].includes(service.responseFormat)) service.responseFormat = ''
     if (!['', 'multipart', 'json'].includes(service.referenceMode)) service.referenceMode = ''
+    // ComfyUI(Qwen) 数值字段夹取到安全范围（coalesce 已保证是 number）
+    service.steps = Number.isFinite(service.steps)
+      ? Math.min(100, Math.max(1, Math.round(service.steps)))
+      : 12
+    service.cfg = Number.isFinite(service.cfg) ? Math.min(30, Math.max(0, service.cfg)) : 1
+    // Qwen 只出方图：分辨率单值(32 的倍数)。老记录若存过 width/height（SDXL 时期），取其一回填。
+    const rawObj = raw as Record<string, unknown>
+    const clampRes = (n: number) => Math.min(2048, Math.max(256, Math.round(n / 32) * 32))
+    const legacyWH = Number(rawObj.width) || Number(rawObj.height)
+    service.resolution =
+      Number.isFinite(service.resolution) && service.resolution >= 256
+        ? clampRes(service.resolution)
+        : Number.isFinite(legacyWH) && legacyWH >= 256
+          ? clampRes(legacyWH)
+          : 1024
+    // 清掉已废弃的 width/height（coalesce 的 {...src} 会把它们原样带进来）
+    delete (service as unknown as Record<string, unknown>).width
+    delete (service as unknown as Record<string, unknown>).height
+    service.denoise = Number.isFinite(service.denoise)
+      ? Math.min(1, Math.max(0.1, service.denoise))
+      : 1
     return [service]
   })
   if (!s.imageModelServices.some((service) => service.id === s.activeImageModelServiceId)) {

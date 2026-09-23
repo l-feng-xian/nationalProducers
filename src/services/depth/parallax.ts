@@ -249,8 +249,19 @@ export async function attach(args: AttachArgs): Promise<boolean> {
     for (const t of [color, depth]) {
       t.wrapS = s.THREE.ClampToEdgeWrapping
       t.wrapT = s.THREE.ClampToEdgeWrapping
-      t.minFilter = s.THREE.LinearFilter
     }
+    // ⚠️ 摩尔纹/锯齿的根因：卡片(~300px)远小于立绘原图(常 1024px+)，是重度**缩小**采样。
+    // MSAA(antialias) 只抗几何边缘，管不了纹理缩小；只用 LinearFilter(无 mipmap) 会在
+    // 发丝、格纹这类高频细节上欠采样 → 摩尔纹 + 闪烁锯齿。静态 <img> 不糊是因为浏览器
+    // 缩放本身带类 mipmap 滤波。所以颜色贴图必须开三线性 mipmap + 各向异性
+    // （位移后近断崖处是斜着采样，各向异性能进一步压住拉丝锯齿）。
+    color.minFilter = s.THREE.LinearMipmapLinearFilter
+    color.magFilter = s.THREE.LinearFilter
+    color.generateMipmaps = true
+    color.anisotropy = s.renderer.capabilities.getMaxAnisotropy()
+    // 深度图：着色器里已做 9 点模糊，且 uTexel 假设的是原始分辨率，保持线性、不生成 mipmap。
+    depth.minFilter = s.THREE.LinearFilter
+    depth.generateMipmaps = false
 
     disposeTextures()
     s.material.uniforms['uColor']!.value = color

@@ -8,7 +8,6 @@ import MonitorIcon from '@/components/icons/MonitorIcon.vue'
 import CharactersIcon from '@/components/icons/CharactersIcon.vue'
 import GroupsIcon from '@/components/icons/GroupsIcon.vue'
 import WorldsIcon from '@/components/icons/WorldsIcon.vue'
-import GameWorldsIcon from '@/components/icons/GameWorldsIcon.vue'
 import ModelsIcon from '@/components/icons/ModelsIcon.vue'
 import DataIcon from '@/components/icons/DataIcon.vue'
 import SettingsIcon from '@/components/icons/SettingsIcon.vue'
@@ -153,15 +152,6 @@ function newChat() {
       >
         <span class="nav-ico"><WorldsIcon /></span>
         <span>世界书</span>
-      </RouterLink>
-      <RouterLink
-        to="/game-worlds"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/game-worlds') }"
-      >
-        <span class="nav-ico"><GameWorldsIcon /></span>
-        <span>无限世界</span>
       </RouterLink>
       <RouterLink
         to="/models"

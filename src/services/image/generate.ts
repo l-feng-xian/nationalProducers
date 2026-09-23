@@ -3,6 +3,7 @@ import { buildHeaders, resolveUrl, send as httpSend } from '@/services/provider/
 import { armStall } from '@/services/provider/timeout'
 import { toProviderError } from '@/services/provider/stream'
 import { ProviderError } from '@/types/provider'
+import { generateViaComfyUI } from './comfyui'
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
@@ -42,7 +43,7 @@ export function validateImageService(service: ImageModelService) {
 }
 
 /** 根据文件签名识别图片，避免将错误页或不可信的 SVG 当作图片保存。 */
-async function imageBlob(blob: Blob): Promise<Blob> {
+export async function imageBlob(blob: Blob): Promise<Blob> {
   if (!blob.size || blob.size > MAX_IMAGE_BYTES) throw new Error('图片为空或超过 25 MB')
   const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer())
   const ascii = new TextDecoder().decode(bytes)
@@ -70,6 +71,9 @@ export async function generateImage(args: {
   signal: AbortSignal
 }): Promise<GeneratedImage> {
   const { service, signal } = args
+  // 本地 ComfyUI 与 OpenAI Images 的请求形态完全不同，分流到专用后端。
+  if (service.backend === 'comfyui')
+    return generateViaComfyUI({ service, prompt: args.prompt, references: args.references, signal })
   validateImageService(service)
   const prompt = args.prompt.trim()
   if (!prompt) throw new Error('请填写画面描述')
@@ -134,7 +138,13 @@ export async function generateImage(args: {
         requestBody = form
       }
       guard.signal.throwIfAborted()
-      return httpSend({ url: target, method: 'POST', headers, body: requestBody, signal: guard.signal })
+      return httpSend({
+        url: target,
+        method: 'POST',
+        headers,
+        body: requestBody,
+        signal: guard.signal,
+      })
     }
     let response: Response
     let usedMode: 'multipart' | 'json' | undefined
@@ -204,7 +214,13 @@ export async function generateImage(args: {
     } else throw new Error('服务没有返回图片，请检查模型是否支持文生图接口')
     blob = await imageBlob(blob)
     guard.signal.throwIfAborted()
-    return { blob, prompt, model: service.model, serviceName: service.name, referenceMode: usedMode }
+    return {
+      blob,
+      prompt,
+      model: service.model,
+      serviceName: service.name,
+      referenceMode: usedMode,
+    }
   } catch (error) {
     if (guard.stalled) throw new ProviderError('timeout', '图片生成超时，请稍后重试')
     if (signal.aborted) throw new ProviderError('aborted', '已取消生成')

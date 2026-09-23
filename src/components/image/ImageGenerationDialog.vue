@@ -16,6 +16,8 @@ const props = defineProps<{
   apply: (image: GeneratedImage) => Promise<void>
   references?: CharacterImageReference[]
   requireReferences?: boolean
+  /** 提供时：用已配置的 LLM 生成画面提示词。打开即自动跑一次，也可点按钮重生成。 */
+  generatePrompt?: (signal: AbortSignal) => Promise<string>
 }>()
 const emit = defineEmits<{ close: [] }>()
 const settings = useSettingsStore()
@@ -41,15 +43,48 @@ const error = ref('')
 const status = ref('')
 const result = shallowRef<GeneratedImage | null>(null)
 const preview = ref('')
+const promptBusy = ref(false)
 let controller: AbortController | null = null
+let promptController: AbortController | null = null
 let disposed = false
-onMounted(() => dialog.value?.showModal())
+onMounted(() => {
+  dialog.value?.showModal()
+  // 打开即用 LLM 生成一版提示词（可编辑、可重生成）；未提供则沿用传入的初始提示词
+  if (props.generatePrompt) void runGeneratePrompt()
+})
 onBeforeUnmount(() => {
   disposed = true
   controller?.abort()
+  promptController?.abort()
   if (preview.value) URL.revokeObjectURL(preview.value)
   dialog.value?.close()
 })
+
+/** 调用外部提供的 LLM 提示词生成器，填入「画面描述」。失败静默保留原提示词。 */
+async function runGeneratePrompt() {
+  if (!props.generatePrompt || promptBusy.value || busy.value || saving.value) return
+  promptController?.abort()
+  const ctl = new AbortController()
+  promptController = ctl
+  promptBusy.value = true
+  error.value = ''
+  status.value = 'AI 正在根据内容生成提示词…'
+  try {
+    const text = await props.generatePrompt(ctl.signal)
+    if (disposed || ctl.signal.aborted) return
+    if (text.trim()) prompt.value = text.trim()
+    status.value = '提示词已生成，可调整后再出图。'
+  } catch (cause) {
+    if (disposed || ctl.signal.aborted) return
+    error.value = cause instanceof Error ? cause.message : String(cause)
+    status.value = ''
+  } finally {
+    if (promptController === ctl) {
+      promptController = null
+      promptBusy.value = false
+    }
+  }
+}
 function cancel() {
   controller?.abort()
   controller = null
@@ -204,7 +239,18 @@ async function apply() {
             </p>
           </section>
           <label class="cbx-field">
-            <span class="cbx-field__label">画面描述</span>
+            <span class="cbx-field__label prompt-label">
+              画面描述
+              <button
+                v-if="generatePrompt"
+                type="button"
+                class="cbx-btn cbx-btn--soft prompt-gen"
+                :disabled="busy || saving || promptBusy"
+                @click.stop="runGeneratePrompt"
+              >
+                <ImagePlus :size="14" />{{ promptBusy ? '生成中…' : 'AI 生成提示词' }}
+              </button>
+            </span>
             <textarea
               v-model="prompt"
               class="cbx-textarea"
@@ -212,12 +258,14 @@ async function apply() {
               rows="8"
               maxlength="16000"
               required
-              :disabled="busy || saving"
+              :disabled="busy || saving || promptBusy"
             />
             <span class="cbx-field__hint">{{
-              requireReferences
-                ? '已填入当前消息内容，可调整场景和动作后生成。'
-                : '已根据当前内容填入，可调整画风、构图或细节后生成。'
+              generatePrompt
+                ? '已由 AI 根据内容生成，可手动调整或点上方按钮重新生成。'
+                : requireReferences
+                  ? '已填入当前消息内容，可调整场景和动作后生成。'
+                  : '已根据当前内容填入，可调整画风、构图或细节后生成。'
             }}</span>
           </label>
           <figure v-if="preview" class="preview">
@@ -266,6 +314,17 @@ async function apply() {
 
 <style scoped src="@/assets/styles/image-dialog.css"></style>
 <style scoped>
+.prompt-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.prompt-gen {
+  padding: 2px 10px;
+  min-height: 0;
+  font-size: var(--cbx-fs-xs);
+}
 .reference-section {
   margin-bottom: 20px;
 }

@@ -263,9 +263,10 @@ try {
   await page.getByRole('button', { name: '生成对话配图', exact: true }).click()
   dialog = page.getByRole('dialog')
   await expect(dialog.getByLabel('画面描述', { exact: true })).toHaveValue(/热茶/)
-  await expect(dialog.getByLabel('画面描述', { exact: true })).not.toHaveValue(
-    /银色长发|海边|旧场景/,
-  )
+  // 图生图会把角色外貌写进提示词（与参考图双重锚定人物，防服饰漂移）——应包含外貌设定。
+  await expect(dialog.getByLabel('画面描述', { exact: true })).toHaveValue(/银色长发/)
+  // 对话配图只取「当前这一句」，不应带入更早的历史消息（旧场景 / 海边）。
+  await expect(dialog.getByLabel('画面描述', { exact: true })).not.toHaveValue(/海边|旧场景/)
   await expect(dialog.getByRole('img', { name: '时雨的参考图' })).toBeVisible()
   const beforeUnsupported = requests.length
   mode = 'unsupported'
@@ -290,7 +291,7 @@ try {
   assert.equal(requests.at(-2).images.length, 1)
   assert.match(requests.at(-1).headers['content-type'], /^application\/json/)
   assert.equal(requests.at(-1).body.model, 'scene-image')
-  assert.match(requests.at(-1).body.prompt, /参考图 1：时雨/)
+  assert.match(requests.at(-1).body.prompt, /参考图 1 时雨：/)
   assert.deepEqual(requests.at(-1).body.image_urls, [`data:image/png;base64,${png}`])
   // 用户显式配置的返回格式优先于降级默认值。
   assert.equal(requests.at(-1).body.response_format, 'url')
@@ -369,9 +370,10 @@ try {
   const cdnRequest = requests[beforeUrl + 1]
   assert.equal(urlRequest.url, 'https://image-proxy.example.test/v1/images/edits')
   assert.equal(urlRequest.body.model, 'scene-image')
-  assert.match(urlRequest.body.prompt, /参考图 1：时雨/)
+  assert.match(urlRequest.body.prompt, /参考图 1 时雨：/)
   assert.match(urlRequest.body.prompt, /热茶/)
-  assert.doesNotMatch(urlRequest.body.prompt, /银色长发|海边|旧场景/)
+  assert.match(urlRequest.body.prompt, /银色长发/) // 外貌锚点写进提示词
+  assert.doesNotMatch(urlRequest.body.prompt, /海边|旧场景/) // 只取当前这一句，不带历史
   assert.match(urlRequest.headers['content-type'], /^multipart\/form-data; boundary=/)
   assert.deepEqual(urlRequest.images, [
     { field: 'image', name: 'reference-1.png', type: 'image/png', base64: png },
@@ -412,11 +414,12 @@ try {
   assert.deepEqual(requests.at(-1).body.image_urls, [`data:image/png;base64,${png}`])
   await dialog.getByRole('button', { name: '关闭', exact: true }).first().click()
 
-  // 点某条消息时，只使用该条消息，既不带前文，也不带后续消息和角色简介。
+  // 点某条消息时，画面内容只取该条消息（不带前文和后续消息）；角色外貌会作为锚点写进提示词。
   await page.getByRole('button', { name: '根据此处对话生成配图', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await expect(dialog.getByLabel('画面描述', { exact: true })).toHaveValue(/海边/)
-  await expect(dialog.getByLabel('画面描述', { exact: true })).not.toHaveValue(/热茶|银色长发/)
+  await expect(dialog.getByLabel('画面描述', { exact: true })).toHaveValue(/银色长发/) // 外貌锚点
+  await expect(dialog.getByLabel('画面描述', { exact: true })).not.toHaveValue(/热茶/) // 不带其它消息
   await dialog.getByRole('button', { name: '关闭', exact: true }).first().click()
 
   // 手机上的消息操作、弹窗和图片均保持在视口内。
@@ -592,7 +595,7 @@ try {
     const groups = useGroupsStore()
     const chats = useChatsStore()
     const second = await chars.create('望月')
-    second.data.description = '不应发送的角色背景资料'
+    second.data.description = '沉默寡言的青年剑客，黑色短发，赤红色瞳孔'
     const canvas = document.createElement('canvas')
     canvas.width = 32
     canvas.height = 48
@@ -624,8 +627,12 @@ try {
   mode = 'base64'
   await dialog.getByRole('button', { name: '生成图片', exact: true }).click()
   await expect(dialog.getByRole('img', { name: '生成图片预览' })).toBeVisible()
-  assert.match(requests.at(-1).body.prompt, /参考图 1：望月[\s\S]*参考图 2：时雨/)
-  assert.doesNotMatch(requests.at(-1).body.prompt, /不应发送的角色背景资料|银色长发/)
+  // 群聊按参考图顺序锚定每个成员的外貌（望月=参考图1、时雨=参考图2），与各自参考图对应。
+  assert.match(
+    requests.at(-1).body.prompt,
+    /参考图 1 望月：[\s\S]*黑色短发[\s\S]*参考图 2 时雨：[\s\S]*银色长发/,
+  )
+  assert.match(requests.at(-1).body.prompt, /递过一本旧书/) // 画面内容取自当前这一句
   assert.deepEqual(requests.at(-1).images, [
     {
       field: 'image[]',

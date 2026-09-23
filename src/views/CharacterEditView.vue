@@ -10,6 +10,7 @@ import ExampleDialogueEditor from '@/components/character/ExampleDialogueEditor.
 import AiCharacterDialog from '@/components/character/AiCharacterDialog.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
 import { characterImagePrompt } from '@/services/image/prompts'
+import { characterImagePromptViaLLM } from '@/services/image/promptFromLLM'
 import type { GeneratedImage } from '@/types/image'
 import type { GeneratedCharacterData } from '@/services/character/generate'
 import { useCharactersStore } from '@/stores/characters'
@@ -86,6 +87,14 @@ function openCover() {
 
 async function applyCover(image: GeneratedImage) {
   await replaceAvatar(image.blob)
+}
+
+/** 用已配置的 LLM 把角色资料转成封面提示词（失败回退模板）。 */
+async function coverPromptGen(signal: AbortSignal): Promise<string> {
+  if (!model.value) return coverPrompt.value
+  const p = settings.settings.provider
+  const apiKey = await settings.getApiKey(p.secretRef)
+  return characterImagePromptViaLLM({ data: model.value.data, provider: p, apiKey, signal })
 }
 
 function applyAiCharacter(data: GeneratedCharacterData) {
@@ -672,6 +681,7 @@ async function remove() {
     v-if="model && coverOpen"
     title="生成角色封面"
     :initial-prompt="coverPrompt"
+    :generate-prompt="coverPromptGen"
     apply-label="设为角色封面"
     :apply="applyCover"
     @close="coverOpen = false"

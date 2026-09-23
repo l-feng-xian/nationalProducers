@@ -159,6 +159,12 @@ export interface Settings {
   id: 'app'
   schemaVersion: number
   theme: 'light' | 'dark' | 'system'
+  /**
+   * 本地模型（嵌入 / 深度）的下载源，即 transformers.js 的 remoteHost（带结尾斜杠）。
+   * 默认 hf-mirror（国内可直连）；可在「模型管理」切回 huggingface.co。
+   * 取值/规范化见 services/ml/downloadHost.ts；⚠️ 切换会让已下载模型按新键判定为未下载。
+   */
+  modelDownloadHost: string
   /** 当前服务的配置，供生成与提示词组装使用。 */
   provider: ProviderSettings
   modelServices: ModelService[]
@@ -198,6 +204,8 @@ export function defaultSettings(): Settings {
     id: 'app',
     schemaVersion: 2,
     theme: 'system',
+    // 默认镜像；与 services/ml/downloadHost.ts 的 DEFAULT_REMOTE_HOST 保持一致
+    modelDownloadHost: 'https://hf-mirror.com/',
     provider: {
       baseUrl: '',
       model: '',

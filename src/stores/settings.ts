@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { settingsRepo, secretsRepo } from '@/db/repositories'
 import { defaultSettings, type ModelService, type Settings } from '@/types/settings'
 import { toPlain } from '@/utils/plain'
+import { setRemoteHost } from '@/services/ml/downloadHost'
 import type { ImageModelService } from '@/types/image'
 
 /**
@@ -13,6 +14,10 @@ export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<Settings>(defaultSettings())
   const loaded = ref(false)
   let timer: ReturnType<typeof setTimeout> | null = null
+
+  // 下载源是纯 service 模块里的一份状态（Worker 宿主要读它塞进消息，而它们不能 import pinia）。
+  // 这里把设置同步过去：immediate 覆盖初始默认，load() 换掉 settings.value 后也会再同步一次。
+  watch(() => settings.value.modelDownloadHost, (h) => setRemoteHost(h), { immediate: true })
 
   const isConfigured = computed(
     () => !!settings.value.provider.baseUrl && !!settings.value.provider.model,

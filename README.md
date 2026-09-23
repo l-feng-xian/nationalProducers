@@ -30,17 +30,37 @@ Yoshub 的 API 根地址填写 `https://api.yoshub.com/v1`。两个模型配置�
   ```
   开发期走 `vite.config.ts` 的 dev proxy；生产环境需自备反向代理。
 
-**装成安卓 App 就没有这个问题了**：原生壳里请求由 Rust 发出，不受同源策略约束，
-「代理地址」留空直连即可（局域网里的 Ollama / LM Studio 也能直接连）。
+**装成原生客户端（桌面 / 安卓）就没有这个问题了**：原生壳里请求由 Rust 发出，不受同源
+策略约束，「代理地址」留空直连即可（局域网里的 Ollama / LM Studio 也能直接连）。
 
-## 打包成安卓 App
+## 打包客户端
+
+桌面（Windows）与安卓的原生壳都基于 **Tauri v2**：请求由 Rust 发出、不受浏览器同源
+策略约束，本地 / 局域网的 ComfyUI、Ollama、LM Studio 都能直连（「代理地址」留空即可）。
+两者都要先装好 Node 依赖与 Rust 工具链（`npm install` + `rustup`）。
+
+### 桌面客户端（Windows EXE）
+
+一次性准备：Rust 工具链 + MSVC 生成工具（Visual Studio Build Tools 勾选「使用 C++ 的桌面开发」）。
+
+```bash
+npm run tauri build -- --bundles nsis   # 推荐：只出 NSIS 安装器，最快、无需 WiX
+npm run tauri build                      # tauri.conf 的 targets 为 all，会同时出 NSIS + MSI(需 WiX)
+```
+
+产物：
+- 安装器（推荐分发）：`src-tauri/target/release/bundle/nsis/幕间_0.1.0_x64-setup.exe`
+- 免安装可执行文件：`src-tauri/target/release/nationalproducers.exe`
+- MSI（装了 WiX 时）：`src-tauri/target/release/bundle/msi/` 下
+
+### 安卓客户端（APK）
 
 ```bash
 # 一次性：装 Rust、JDK 17、Android SDK/NDK，并设好 ANDROID_HOME / NDK_HOME / JAVA_HOME
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 
-npx tauri android build --apk --target aarch64     # 单 ABI，体积小、构建快
-npx tauri android build --apk                      # 四个 ABI 的 universal 包
+npm run tauri android build -- --apk --target aarch64   # 单 ABI，体积小、构建快
+npm run tauri android build -- --apk                    # 四个 ABI 的 universal 包
 ```
 
 产物在 `src-tauri/gen/android/app/build/outputs/apk/`。
@@ -49,8 +69,9 @@ npx tauri android build --apk                      # 四个 ABI 的 universal �
 不存在也能构建，只是产出未签名包。字段见 `app/build.gradle.kts` 顶部注释。
 **keystore 一旦丢失就再也无法给同一应用发更新**，请自行备份。
 
-⚠️ 两个本机踩过的坑：
-- **rustc 会 OOM**。Tauri 的依赖树 443 个 crate，默认并行度 = CPU 核数（本机 20），
+### ⚠️ 原生构建两个本机踩过的坑（桌面 / 安卓通用）
+
+- **rustc 会 OOM**。Tauri 的依赖树很大，默认并行度 = CPU 核数（本机 20），
   16GB 内存扛不住，而它崩溃后会留下**被截断的 `.rmeta`**，报成一堆看着毫不相干的
   `E0462 found staticlib std` / `E0786 invalid metadata`，极易误判成 crate-type 配错。
   已在 `src-tauri/.cargo/config.toml` 里把 `jobs` 限到 2。

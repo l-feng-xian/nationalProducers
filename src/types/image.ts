@@ -2,6 +2,12 @@
 export interface ImageModelService {
   id: string
   name: string
+  /**
+   * 后端类型。'openai' 走 OpenAI Images 兼容接口（一次 POST 返图）；
+   * 'comfyui' 走本地 ComfyUI（/prompt→轮询 /history→/view）。
+   * 旧记录缺省，load() 里 coalesce 会补成 'openai'。
+   */
+  backend: 'openai' | 'comfyui'
   baseUrl: string
   model: string
   secretRef: string
@@ -15,12 +21,39 @@ export interface ImageModelService {
    * 命中后只发一次请求。换用后端不同的服务时会自愈（失败即重试另一种并改写）。
    */
   referenceMode: '' | 'multipart' | 'json'
+  // ── 以下仅 backend==='comfyui' 时生效（本地 Qwen-Image-2.1 工作流参数） ──
+  // Qwen 由三份文件组成，分别用 UnetLoaderGGUF / CLIPLoader(qwen_image) / VAELoader 加载：
+  //   model     = DiT（扩散主干）GGUF 文件名（如 Qwen-Image-2.1-Q4.gguf）
+  //   clipName  = 文本编码器（如 qwen3vl_8b_w4a8.safetensors）
+  //   vaeName   = VAE（如 qwen_image_2.1_vae_bf16.safetensors）
+  /** 文本编码器文件名（CLIPLoader，type=qwen_image） */
+  clipName: string
+  /** VAE 文件名（VAELoader） */
+  vaeName: string
+  /** 负面提示词（CFG=1 时不生效，保留供高级用途） */
+  negativePrompt: string
+  /** 采样步数（Qwen-2.1 是引导蒸馏模型，12 步已足够；越多越慢） */
+  steps: number
+  /** CFG（Qwen-2.1 引导蒸馏，固定 1；改高会明显变慢且未必更好） */
+  cfg: number
+  /** 采样器 */
+  sampler: string
+  /** 调度器 */
+  scheduler: string
+  /**
+   * 分辨率（方图边长，32 的倍数；Qwen-2.1 原生 1024）。Qwen 原生管线只出方图，
+   * 尺寸由这一个值决定；图生图时参考图按它等比缩放。越大越慢。
+   */
+  resolution: number
+  /** 图生图去噪强度：Qwen 编辑靠 reference_latents，用 1.0；降低会更贴近参考但改动更弱 */
+  denoise: number
 }
 
 export function newImageModelService(id: string = crypto.randomUUID()): ImageModelService {
   return {
     id,
     name: '',
+    backend: 'openai',
     baseUrl: '',
     model: '',
     secretRef: `image-service:${id}`,
@@ -29,6 +62,16 @@ export function newImageModelService(id: string = crypto.randomUUID()): ImageMod
     quality: '',
     responseFormat: '',
     referenceMode: '',
+    // ComfyUI(Qwen-Image-2.1) 默认值：切到 comfyui 即带出一套本机已部署、实测可用的参数
+    clipName: 'qwen3vl_8b_w4a8.safetensors',
+    vaeName: 'qwen_image_2.1_vae_bf16.safetensors',
+    negativePrompt: 'blurry, low quality, distorted, watermark, text',
+    steps: 12,
+    cfg: 1,
+    sampler: 'euler',
+    scheduler: 'simple',
+    resolution: 1024,
+    denoise: 1,
   }
 }
 

@@ -88,7 +88,12 @@ async function remove(service: ImageModelService) {
         <p class="endpoint">{{ service.baseUrl }}</p>
         <footer>
           <span
-            >{{ service.size || '默认尺寸' }} ·
+            >{{
+              service.backend === 'comfyui'
+                ? `本地 ComfyUI · ${service.resolution}px`
+                : service.size || '默认尺寸'
+            }}
+            ·
             {{
               service.id === settings.settings.activeImageModelServiceId ? '默认配置' : '文生图'
             }}</span

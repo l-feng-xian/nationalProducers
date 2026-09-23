@@ -18,6 +18,7 @@
 
 import type { InMsg, OutMsg } from './embedder.worker'
 import type { ModelSpec } from './presets'
+import { getRemoteHost } from '../ml/downloadHost'
 
 const INIT_TIMEOUT = 90_000
 const EMBED_TIMEOUT = 30_000
@@ -73,7 +74,9 @@ export class Embedder {
       new Promise<number>((resolve, reject) => {
         this.#bootResolve = resolve
         this.#bootReject = reject
-        this.#post({ type: 'init', model: this.opts.model })
+        // 带上当前下载源：init 会 is_pipeline_cached 查缓存，缓存键含 host，
+        // 必须与下载时用的 host 一致，否则永远判定「未下载」。
+        this.#post({ type: 'init', model: this.opts.model, host: getRemoteHost() })
       }),
       INIT_TIMEOUT,
       '模型加载超时',

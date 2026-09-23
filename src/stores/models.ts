@@ -17,6 +17,7 @@ import {
   type DownloadHandle,
 } from '@/services/vector/manager'
 import { EMBED_PRESETS, findPreset, toSpec } from '@/services/vector/presets'
+import { purgeHtmlPoison } from '@/services/ml/cacheRepair'
 import { DEPTH_PRESETS, DEPTH_TASK, findDepthPreset } from '@/services/depth/presets'
 import { useSettingsStore } from './settings'
 import * as memRuntime from '@/services/memory/runtime'
@@ -55,6 +56,10 @@ export const useModelsStore = defineStore('models', () => {
   async function refresh() {
     checking.value = true
     try {
+      // ⚠️ 先自愈再判断：SPA 回落的 index.html 可能被当成权重缓存下来（见 cacheRepair.ts），
+      // 那条毒条目会让「已下载」判定和后续加载全部命中 HTML，且缓存命中短路网络、修好代理也不恢复。
+      // 放在 checkCached 之前，进一次模型管理页就把中毒的浏览器修好。
+      await purgeHtmlPoison()
       // 两类模型要分别按各自的 task 去查，不能合成一次调用
       const [emb, dep] = await Promise.all([
         checkCached(presets.map((p) => p.id)),
