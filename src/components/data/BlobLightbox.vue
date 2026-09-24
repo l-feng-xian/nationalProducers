@@ -12,6 +12,7 @@
 import { computed, onBeforeUnmount, ref, watch, type StyleValue } from 'vue'
 import AppIcon from '@/components/icons/AppIcon.vue'
 import { useObjectUrl } from '@/composables/useObjectUrl'
+import { useBackClose } from '@/composables/useBackClose'
 
 /** morphStyle 由 useBlobPreview 交接过来：轮到大图持名时才是有值的 */
 const props = defineProps<{
@@ -155,6 +156,8 @@ function onPointerUp(e: PointerEvent) {
 function close() {
   emit('close')
 }
+// 手机返回键 = 关预览
+useBackClose(close, () => !!props.blobId)
 
 /** 只有点在背景（dialog 自身或舞台空白处）才关闭；点图片、工具条不关 */
 function onBackdrop(e: MouseEvent) {

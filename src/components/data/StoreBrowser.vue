@@ -22,6 +22,8 @@ import { formatBytes } from '@/services/io/backup'
 import { useBlobPreview } from '@/composables/useBlobPreview'
 import BlobThumb from './BlobThumb.vue'
 import BlobLightbox from './BlobLightbox.vue'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
+import { useBackClose } from '@/composables/useBackClose'
 
 const emit = defineEmits<{ changed: [] }>()
 const toast = useToast()
@@ -129,6 +131,8 @@ function closeDetail() {
   detail.open = false
   dlg.value?.close()
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(closeDetail, () => detail.open)
 
 // ── 图片放大预览（点缩略图，带 View Transitions 形变）──
 const preview = useBlobPreview()
@@ -310,14 +314,13 @@ onBeforeUnmount(() => {
     />
 
     <Teleport to="body">
-      <dialog v-if="detail.open" ref="dlg" class="rowdetail" @cancel.prevent="closeDetail">
-        <div class="rowdetail__body cbx-scroll">
-          <header class="rowdetail__head">
-            <h4>{{ detail.title }}</h4>
-            <button type="button" class="cbx-icon-btn" aria-label="关闭" @click="closeDetail">
-              <AppIcon name="X" />
-            </button>
-          </header>
+      <dialog v-if="detail.open" ref="dlg" class="rowdetail cbx-page" @cancel.prevent="closeDetail">
+        <!-- 标题栏放在滚动区外面：整页时它要钉在顶上，不能跟着 JSON 一起滚走 -->
+        <header class="rowdetail__head cbx-page-head">
+          <h4>{{ detail.title }}</h4>
+          <CbxDialogClose @click="closeDetail" />
+        </header>
+        <div class="rowdetail__body cbx-scroll cbx-page-body">
           <pre v-if="detail.json" class="rowdetail__json">{{ detail.json }}</pre>
         </div>
       </dialog>
@@ -413,12 +416,16 @@ onBeforeUnmount(() => {
 .rowdetail::backdrop {
   background: rgba(0, 0, 0, 0.45);
 }
+.rowdetail[open] {
+  display: flex;
+  flex-direction: column;
+}
 .rowdetail__body {
-  padding: var(--cbx-space-4);
+  padding: 0 var(--cbx-space-4) var(--cbx-space-4);
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-3);
-  max-height: min(80vh, 720px);
+  min-height: 0;
   overflow: auto;
 }
 .rowdetail__head {
@@ -426,6 +433,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--cbx-space-2);
+  flex-shrink: 0;
+  padding: var(--cbx-space-4) var(--cbx-space-4) var(--cbx-space-3);
 }
 .rowdetail__head h4 {
   margin: 0;

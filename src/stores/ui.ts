@@ -9,6 +9,11 @@ const THEME_KEY = 'cbx-theme'
 export const useUiStore = defineStore('ui', () => {
   const theme = ref<ThemeMode>('system')
   const drawerOpen = ref(false)
+  /**
+   * 手指拖动抽屉时的展开进度 0..1（null = 没在拖）。
+   * 拖动期间侧栏与遮罩跟手，松手后清回 null，交给 CSS 过渡落到开 / 关。
+   */
+  const drawerDrag = ref<number | null>(null)
   const newChatOpen = ref(false)
 
   function applyTheme(t: ThemeMode) {
@@ -54,6 +59,7 @@ export const useUiStore = defineStore('ui', () => {
   return {
     theme,
     drawerOpen,
+    drawerDrag,
     newChatOpen,
     applyTheme,
     initTheme,

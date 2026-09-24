@@ -1,13 +1,18 @@
 /**
  * 基于深度图的真视差渲染器（three.js）。
  *
- * ## 为什么是**一个**全局渲染器
- * 浏览器的 WebGL 上下文上限在 8~16 个。一张卡一个 canvas，角色一多就会开始
- * 丢上下文，表现是**卡片随机变黑**且不报错。而同一时刻只有一张卡被 hover ——
- * 所以全局只建一个渲染器，用 attach() 把它的 canvas 挪到当前那张卡里去。
+ * ## 一个离屏渲染器 + 每张卡一块 2D canvas（多视图）
+ * 浏览器的 WebGL 上下文上限在 8~16 个。一张卡一个 WebGL canvas，角色一多就会开始
+ * 丢上下文，表现是**卡片随机变黑**且不报错。所以全局只建**一个**渲染器，它的 canvas 离屏不进 DOM。
  *
- * canvas 是**挂进画框元素内部**（absolute inset:0）而不是 fixed 定位：
- * 这样滚动、布局变化都由浏览器自己管，不需要同步坐标。
+ * 手机上要求「可视区内的卡全都跟着倾斜动」，于是每个视图（画框）里放一块**普通 2D canvas**，
+ * 每帧对每个视图：写该卡的纹理 / 取景 uniform → 在离屏 canvas 上渲染 → `drawImage` 拷进该卡的
+ * 2D canvas（three.js 手册「多 canvas 共用一个渲染器」的做法）。2D canvas 不占 WebGL 上下文额度；
+ * 拷贝紧跟渲染、在同一任务内完成，所以不需要 preserveDrawingBuffer。
+ *
+ * 2D canvas 是**挂进画框元素内部**（absolute inset:0）而不是 fixed 定位：
+ * 这样滚动、裁切、圆角都由浏览器自己管，不需要同步坐标。
+ * 桌面（鼠标悬停单卡）与编辑页（单个大立绘）只是「视图数 = 1」的特例。
  *
  * ## 为什么是顶点位移而不是 UV 偏移
  * UV 偏移（`uv += (depth-0.5)*k`）便宜、无需几何，但深度突变处会拉出涂抹感，
@@ -117,20 +122,51 @@ interface State {
   camera: THREE_NS.OrthographicCamera
   mesh: THREE_NS.Mesh
   material: THREE_NS.ShaderMaterial
+  /** 离屏的 WebGL canvas，从不进 DOM */
   canvas: HTMLCanvasElement
+  pixelRatio: number
+}
+
+/** 一对纹理（彩色 + 深度）。按「图片 + 目标尺寸档位」缓存，卡片滚出去再滚回来不用重新解码上传 */
+interface TexPair {
+  color: THREE_NS.Texture
+  depth: THREE_NS.Texture
+  /** 彩色图宽高比，用于 cover 取景 */
+  imgAspect: number
+  texel: [number, number]
+  refs: number
+}
+
+interface View {
+  el: HTMLElement
+  tex: TexPair
+  aspect: number
+  canvas: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  /** 画框的 CSS 尺寸（ResizeObserver 维护） */
+  cssW: number
+  cssH: number
 }
 
 let state: State | null = null
 let booting: Promise<State> | null = null
 
-/** 当前附着的宿主元素。为空表示渲染器空闲 */
-let host: HTMLElement | null = null
+const views = new Map<HTMLElement, View>()
+/** 正在 mount（等纹理）的画框 → 令牌；期间 unmount 会作废它 */
+const pending = new Map<HTMLElement, number>()
+let pendingSeq = 0
+/** 纹理缓存（LRU：Map 的插入顺序即新旧顺序） */
+const texCache = new Map<string, TexPair>()
+/** 缓存上限（对）。refs > 0 的在用纹理永不淘汰 */
+const TEX_CACHE_MAX = 12
+/** 同时活跃视图上限。网格一屏通常 6~8 张，超出的卡保持静态图 */
+const MAX_VIEWS = 10
+
 let raf = 0
 /** 目标与当前的归一化指针位置，各分量 -1..1 */
 let target = { x: 0, y: 0 }
 let current = { x: 0, y: 0 }
-/** attach 是异步的，用世代号作废掉过期的那次 */
-let generation = 0
+let resizeObs: ResizeObserver | null = null
 
 async function boot(): Promise<State> {
   if (state) return state
@@ -138,10 +174,8 @@ async function boot(): Promise<State> {
   booting = (async () => {
     const THREE = await import('three')
     const canvas = document.createElement('canvas')
-    canvas.style.cssText =
-      'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none'
-    // preserveDrawingBuffer 刻意不开：它有真实的性能代价，而唯一的用处是让
-    // drawImage/readPixels 能读回画面 —— 那只在调参测量时需要，临时开一下即可
+    // 离屏：preserveDrawingBuffer 仍然不开 —— 每个视图渲染完立刻在同一任务里 drawImage 拷走，
+    // 缓冲区在合成前一直有效，用不着它（开了有真实的性能代价）
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
     // ⚠️ 刻意**不设 outputColorSpace**，也不给纹理标色彩空间 —— 走纯直通。
     //
@@ -156,13 +190,14 @@ async function boot(): Promise<State> {
     //  2. 想「关掉转换」而写 `outputColorSpace = NoColorSpace` → **直接抛异常**：
     //     NoColorSpace 的值是空串，three 的 setter 去查
     //     `ColorManagement.spaces[''].outputColorSpaceConfig` 拿到 undefined。
-    //     而 attach() 的静默 catch 会把它吞掉，表现成「hover 毫无反应」。
+    //     而 mount() 的静默 catch 会把它吞掉，表现成「视差毫无反应」。
     // DPR 封到 2：立绘卡最大也就 300px 宽，3x 屏上再往上加纯属浪费显存
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+    const pixelRatio = Math.min(devicePixelRatio, 2)
+    renderer.setPixelRatio(pixelRatio)
 
     const scene = new THREE.Scene()
     // 正交：视口高度恒为 2，位移幅度就等于「占画面高度的比例」，
-    // 不受相机距离影响。left/right 在 attach 时按图片比例设定。
+    // 不受相机距离影响。left/right 按每个视图的比例设定。
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -4, 4)
     camera.position.set(0, 0, 2)
 
@@ -182,28 +217,189 @@ async function boot(): Promise<State> {
     const mesh = new THREE.Mesh(geo, material)
     scene.add(mesh)
 
-    state = { THREE, renderer, scene, camera, mesh, material, canvas }
+    // 上下文丢失（GPU 重置、后台太久被回收）：全部退回静态图，下次 mount 重新建
+    canvas.addEventListener('webglcontextlost', () => {
+      unmountAll()
+      texCache.clear()
+      state = null
+      booting = null
+    })
+
+    state = { THREE, renderer, scene, camera, mesh, material, canvas, pixelRatio }
     return state
   })()
-  return booting
+  try {
+    return await booting
+  } catch (e) {
+    booting = null
+    throw e
+  }
 }
 
-function loadTexture(THREE: typeof THREE_NS, url: string): Promise<THREE_NS.Texture> {
-  return new Promise((resolve, reject) => {
-    new THREE.TextureLoader().load(url, resolve, undefined, () => reject(new Error('纹理加载失败')))
-  })
+/** 档位化的目标高度（像素），让尺寸相近的画框共用同一份缓存纹理 */
+function bucket(px: number): number {
+  return Math.max(256, Math.ceil(px / 128) * 128)
+}
+
+/**
+ * Blob → 按显示尺寸降采样、已上下翻转的 ImageBitmap。
+ *
+ * 立绘原图常 1024px+，而卡片只有 ~270 CSS px 高。一屏 6~8 张全尺寸 RGBA + mipmap
+ * 在手机上显存吃紧；降到「显示像素 × 1.25」每张只剩 ~1MB 级，缩小采样的摩尔纹也更轻。
+ * 小于目标的图不放大。
+ *
+ * `imageOrientation: 'flipY'` + 纹理 `flipY = false`：ImageBitmap 上传时 WebGL 不认
+ * UNPACK_FLIP_Y，翻转必须在解码时做（three 文档的推荐写法）。
+ */
+async function bitmapOf(blob: Blob, maxH: number): Promise<ImageBitmap> {
+  const src = await createImageBitmap(blob)
+  try {
+    const opts: ImageBitmapOptions = { imageOrientation: 'flipY' }
+    if (src.height > maxH) {
+      opts.resizeHeight = maxH
+      opts.resizeQuality = 'high'
+    }
+    return await createImageBitmap(src, opts)
+  } finally {
+    src.close()
+  }
+}
+
+async function loadPair(
+  s: State,
+  key: string,
+  color: Blob,
+  depth: Blob,
+  colorH: number,
+): Promise<TexPair> {
+  const hit = texCache.get(key)
+  if (hit) {
+    // 刷新 LRU 次序
+    texCache.delete(key)
+    texCache.set(key, hit)
+    return hit
+  }
+  const [cBmp, dBmp] = await Promise.all([
+    bitmapOf(color, colorH),
+    bitmapOf(depth, Math.min(512, colorH)),
+  ])
+  const { THREE } = s
+  const colorTex = new THREE.Texture(cBmp)
+  const depthTex = new THREE.Texture(dBmp)
+  for (const t of [colorTex, depthTex]) {
+    t.flipY = false
+    // 两张都不转换，理由见 boot() 里 outputColorSpace 那段
+    t.colorSpace = THREE.NoColorSpace
+    t.wrapS = THREE.ClampToEdgeWrapping
+    t.wrapT = THREE.ClampToEdgeWrapping
+    t.needsUpdate = true
+  }
+  // ⚠️ 摩尔纹/锯齿的根因：卡片远小于立绘原图，是重度**缩小**采样。MSAA 只抗几何边缘，
+  // 管不了纹理缩小；只用 LinearFilter(无 mipmap) 会在发丝、格纹这类高频细节上欠采样 →
+  // 摩尔纹 + 闪烁锯齿。所以颜色贴图开三线性 mipmap + 各向异性
+  // （位移后近断崖处是斜着采样，各向异性能进一步压住拉丝锯齿）。
+  colorTex.minFilter = THREE.LinearMipmapLinearFilter
+  colorTex.magFilter = THREE.LinearFilter
+  colorTex.generateMipmaps = true
+  colorTex.anisotropy = s.renderer.capabilities.getMaxAnisotropy()
+  // 深度图：着色器里已做 9 点模糊，uTexel 按它的实际分辨率算，保持线性、不生成 mipmap
+  depthTex.minFilter = THREE.LinearFilter
+  depthTex.generateMipmaps = false
+
+  const pair: TexPair = {
+    color: colorTex,
+    depth: depthTex,
+    imgAspect: cBmp.width / cBmp.height,
+    texel: [1 / dBmp.width, 1 / dBmp.height],
+    refs: 0,
+  }
+  texCache.set(key, pair)
+  return pair
+}
+
+/** 淘汰最久没用、且没有视图在用的纹理，直到回到上限 */
+function trimCache(): void {
+  for (const [key, pair] of texCache) {
+    if (texCache.size <= TEX_CACHE_MAX) return
+    if (pair.refs > 0) continue
+    pair.color.dispose()
+    pair.depth.dispose()
+    ;(pair.color.image as ImageBitmap | undefined)?.close?.()
+    ;(pair.depth.image as ImageBitmap | undefined)?.close?.()
+    texCache.delete(key)
+  }
+}
+
+/** 按画框当前尺寸设置 2D canvas 的像素尺寸 */
+function sizeView(v: View, pr: number): void {
+  v.cssW = v.el.clientWidth
+  v.cssH = v.el.clientHeight
+  const w = Math.max(1, Math.round(v.cssW * pr))
+  const h = Math.max(1, Math.round(v.cssH * pr))
+  if (v.canvas.width !== w) v.canvas.width = w
+  if (v.canvas.height !== h) v.canvas.height = h
+}
+
+/** 离屏 canvas 至少要装得下最大的那个视图；只在变大时重设，避免每帧重分配 */
+function ensureStageSize(s: State): void {
+  let w = 1
+  let h = 1
+  for (const v of views.values()) {
+    w = Math.max(w, v.cssW)
+    h = Math.max(h, v.cssH)
+  }
+  const size = s.renderer.getSize(new s.THREE.Vector2())
+  if (size.x < w || size.y < h) s.renderer.setSize(Math.max(size.x, w), Math.max(size.y, h), false)
+}
+
+function renderView(s: State, v: View): void {
+  if (v.cssW < 1 || v.cssH < 1) return
+  const { renderer, scene, camera, mesh, material } = s
+  const u = material.uniforms
+  u['uColor']!.value = v.tex.color
+  u['uDepth']!.value = v.tex.depth
+  ;(u['uTexel']!.value as THREE_NS.Vector2).set(v.tex.texel[0], v.tex.texel[1])
+
+  // object-fit: cover —— 按短边铺满、长边居中裁切，和那张静态 <img> 的行为一致。
+  // 立绘常见 9:16，卡片是 2:3，不做这一步就会被压扁。
+  let coverX = 1
+  let coverY = 1
+  if (v.tex.imgAspect > v.aspect)
+    coverX = v.aspect / v.tex.imgAspect // 图更宽 → 裁两侧
+  else
+    coverY = v.tex.imgAspect / v.aspect // 图更高 → 裁上下
+  // 再乘 OVERSCAN 抵消平面放大：可见区域正好落回完整取景，与静态图不跳变
+  ;(u['uUvScale']!.value as THREE_NS.Vector2).set(coverX * OVERSCAN, coverY * OVERSCAN)
+
+  // 平面按比例摆正，并略大于视口，位移时四边不会露底
+  mesh.scale.set(2 * v.aspect * OVERSCAN, 2 * OVERSCAN, 1)
+  if (camera.left !== -v.aspect) {
+    camera.left = -v.aspect
+    camera.right = v.aspect
+    camera.updateProjectionMatrix()
+  }
+
+  renderer.setViewport(0, 0, v.cssW, v.cssH)
+  renderer.render(scene, camera)
+  // WebGL 视口原点在左下，drawImage 的源坐标原点在左上：取离屏 canvas 底部那一块
+  const pw = v.canvas.width
+  const ph = v.canvas.height
+  v.ctx.clearRect(0, 0, pw, ph)
+  v.ctx.drawImage(s.canvas, 0, s.canvas.height - ph, pw, ph, 0, 0, pw, ph)
+  // 第一次画好才挂进画框：挂早了会先露出一块空白 canvas 盖住静态图
+  if (!v.canvas.parentNode) v.el.appendChild(v.canvas)
 }
 
 function tick(): void {
   raf = 0
-  if (!state || !host) return
+  const s = state
+  if (!s || !views.size) return
   current.x += (target.x - current.x) * LERP
   current.y += (target.y - current.y) * LERP
-
-  const { camera, renderer, scene, material } = state
   // 反向：指针右移时近景往左走，才是「透过窗口看进去」的方向感
-  ;(material.uniforms['uMouse']!.value as THREE_NS.Vector2).set(-current.x, current.y)
-  renderer.render(scene, camera)
+  ;(s.material.uniforms['uMouse']!.value as THREE_NS.Vector2).set(-current.x, current.y)
+  ensureStageSize(s)
+  for (const v of views.values()) renderView(s, v)
 
   // 还没收敛就继续跑；收敛了就停，空闲时零开销
   if (Math.abs(target.x - current.x) > 0.001 || Math.abs(target.y - current.y) > 0.001) {
@@ -215,128 +411,96 @@ function schedule(): void {
   if (!raf) raf = requestAnimationFrame(tick)
 }
 
-export interface AttachArgs {
-  /** 画框元素，canvas 会挂进它内部 */
+export interface MountArgs {
+  /** 画框元素，2D canvas 会挂进它内部 */
   el: HTMLElement
-  colorUrl: string
-  depthUrl: string
-  /** 图片宽高比（宽/高），用来把平面摆正 */
+  /** 纹理缓存键（立绘与深度图的 blobId 组合） */
+  key: string
+  color: Blob
+  depth: Blob
+  /** 画框宽高比（宽/高），用来把平面摆正 */
   aspect: number
 }
 
 /**
- * 把渲染器附着到某张卡上。重复调用会先摘掉上一张。
- * 任何失败都静默返回 false —— 视差是纯装饰，绝不能让它把列表搞崩。
+ * 给一个画框挂上视差视图。重复挂同一个画框直接返回 true。
+ * 任何失败都静默返回 false —— 视差是纯装饰，绝不能让它把列表搞崩，画框里仍是静态 <img>。
  */
-export async function attach(args: AttachArgs): Promise<boolean> {
-  const gen = ++generation
+export async function mount(args: MountArgs): Promise<boolean> {
+  const { el } = args
+  if (views.has(el)) return true
+  if (views.size + pending.size >= MAX_VIEWS) return false
+  const token = ++pendingSeq
+  pending.set(el, token)
   try {
     const s = await boot()
-    if (gen !== generation) return false // 等待期间鼠标已经移走或换了卡
+    if (pending.get(el) !== token) return false
+    const colorH = bucket(el.clientHeight * s.pixelRatio * 1.25)
+    const tex = await loadPair(s, `${args.key}@${colorH}`, args.color, args.depth, colorH)
+    if (pending.get(el) !== token || state !== s) return false
 
-    const [color, depth] = await Promise.all([
-      loadTexture(s.THREE, args.colorUrl),
-      loadTexture(s.THREE, args.depthUrl),
-    ])
-    if (gen !== generation) {
-      color.dispose()
-      depth.dispose()
-      return false
-    }
-    // 两张都不转换，理由见 boot() 里 outputColorSpace 那段
-    color.colorSpace = s.THREE.NoColorSpace
-    depth.colorSpace = s.THREE.NoColorSpace
-    for (const t of [color, depth]) {
-      t.wrapS = s.THREE.ClampToEdgeWrapping
-      t.wrapT = s.THREE.ClampToEdgeWrapping
-    }
-    // ⚠️ 摩尔纹/锯齿的根因：卡片(~300px)远小于立绘原图(常 1024px+)，是重度**缩小**采样。
-    // MSAA(antialias) 只抗几何边缘，管不了纹理缩小；只用 LinearFilter(无 mipmap) 会在
-    // 发丝、格纹这类高频细节上欠采样 → 摩尔纹 + 闪烁锯齿。静态 <img> 不糊是因为浏览器
-    // 缩放本身带类 mipmap 滤波。所以颜色贴图必须开三线性 mipmap + 各向异性
-    // （位移后近断崖处是斜着采样，各向异性能进一步压住拉丝锯齿）。
-    color.minFilter = s.THREE.LinearMipmapLinearFilter
-    color.magFilter = s.THREE.LinearFilter
-    color.generateMipmaps = true
-    color.anisotropy = s.renderer.capabilities.getMaxAnisotropy()
-    // 深度图：着色器里已做 9 点模糊，且 uTexel 假设的是原始分辨率，保持线性、不生成 mipmap。
-    depth.minFilter = s.THREE.LinearFilter
-    depth.generateMipmaps = false
-
-    disposeTextures()
-    s.material.uniforms['uColor']!.value = color
-    s.material.uniforms['uDepth']!.value = depth
-    // TextureLoader 的 image 类型是 {}，实际是 HTMLImageElement
-    const dImg = depth.image as { width?: number; height?: number } | undefined
-    const dw = dImg?.width || 512
-    const dh = dImg?.height || 512
-    ;(s.material.uniforms['uTexel']!.value as THREE_NS.Vector2).set(1 / dw, 1 / dh)
-
-    // object-fit: cover —— 按短边铺满、长边居中裁切，和那张静态 <img> 的行为一致。
-    // 立绘常见 9:16，卡片是 2:3，不做这一步就会被压扁。
-    const cImg = color.image as { width?: number; height?: number } | undefined
-    const imgAspect = (cImg?.width || 1) / (cImg?.height || 1)
-    let coverX = 1
-    let coverY = 1
-    if (imgAspect > args.aspect)
-      coverX = args.aspect / imgAspect // 图更宽 → 裁两侧
-    else
-      coverY = imgAspect / args.aspect // 图更高 → 裁上下
-    // 再乘 OVERSCAN 抵消平面放大：可见区域正好落回完整取景，hover 时不跳变
-    ;(s.material.uniforms['uUvScale']!.value as THREE_NS.Vector2).set(
-      coverX * OVERSCAN,
-      coverY * OVERSCAN,
-    )
-
-    // 平面按图片比例摆正，并略大于视口，相机偏移时不会露边
-    s.mesh.scale.set(2 * args.aspect * OVERSCAN, 2 * OVERSCAN, 1)
-    s.camera.left = -args.aspect
-    s.camera.right = args.aspect
-    s.camera.updateProjectionMatrix()
-
-    const w = args.el.clientWidth
-    const h = args.el.clientHeight
-    s.renderer.setSize(w, h, false)
-
-    host = args.el
-    args.el.appendChild(s.canvas)
-    current = { ...target }
+    const canvas = document.createElement('canvas')
+    canvas.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none'
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return false
+    tex.refs++
+    const v: View = { el, tex, aspect: args.aspect, canvas, ctx, cssW: 0, cssH: 0 }
+    sizeView(v, s.pixelRatio)
+    views.set(el, v)
+    resizeObs ??= new ResizeObserver((entries) => {
+      const st = state
+      if (!st) return
+      for (const e of entries) {
+        const view = views.get(e.target as HTMLElement)
+        if (view) sizeView(view, st.pixelRatio)
+      }
+      schedule()
+    })
+    resizeObs.observe(el)
+    // 新视图至少画一帧（即使指针 / 倾斜早已收敛）
     schedule()
     return true
   } catch (e) {
-    // 对用户静默降级（视差是纯装饰，绝不能把列表搞崩），但开发期必须看得见 ——
-    // 这里曾经吞掉一个 outputColorSpace 的 TypeError，表现只是「hover 没反应」，
-    // 查了好几轮才定位到。
-    if (import.meta.env.DEV) console.warn('[parallax] attach 失败，已降级为静态图片：', e)
+    // 对用户静默降级，但开发期必须看得见 —— 这里曾经吞掉一个 outputColorSpace 的
+    // TypeError，表现只是「没反应」，查了好几轮才定位到。
+    if (import.meta.env.DEV) console.warn('[parallax] mount 失败，已降级为静态图片：', e)
     return false
+  } finally {
+    if (pending.get(el) === token) pending.delete(el)
   }
 }
 
-/** 指针位置，两个分量都是 -1..1（左上为 -1,-1） */
+/** 摘下一个画框的视图。纹理留在缓存里，滚回来直接复用 */
+export function unmount(el: HTMLElement): void {
+  pending.delete(el)
+  const v = views.get(el)
+  if (!v) return
+  views.delete(el)
+  resizeObs?.unobserve(el)
+  v.canvas.remove()
+  v.tex.refs = Math.max(0, v.tex.refs - 1)
+  trimCache()
+  if (!views.size) {
+    if (raf) cancelAnimationFrame(raf)
+    raf = 0
+    target = { x: 0, y: 0 }
+    current = { x: 0, y: 0 }
+  }
+}
+
+export function unmountAll(): void {
+  pending.clear()
+  for (const el of [...views.keys()]) unmount(el)
+}
+
+/** 指针 / 倾斜位置，两个分量都是 -1..1（左上为 -1,-1）。作用于所有视图 */
 export function move(nx: number, ny: number): void {
   target = { x: nx, y: ny }
-  schedule()
+  if (views.size) schedule()
 }
 
-function disposeTextures(): void {
-  if (!state) return
-  for (const k of ['uColor', 'uDepth'] as const) {
-    const t = state.material.uniforms[k]?.value as THREE_NS.Texture | null
-    t?.dispose()
-    if (state.material.uniforms[k]) state.material.uniforms[k]!.value = null
-  }
-}
-
-/** 摘下渲染器。canvas 留着复用，只把纹理还回去 */
-export function detach(): void {
-  generation++
-  if (raf) {
-    cancelAnimationFrame(raf)
-    raf = 0
-  }
-  if (state && host && state.canvas.parentNode === host) host.removeChild(state.canvas)
-  host = null
-  target = { x: 0, y: 0 }
-  current = { x: 0, y: 0 }
-  disposeTextures()
+/** 当前活跃视图数（调试 / 测试用） */
+export function viewCount(): number {
+  return views.size
 }

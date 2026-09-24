@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- interactive-widget=resizes-content：软键盘弹出时缩小**布局**视口（100dvh 跟着变矮），
+         输入条落在键盘上沿、顶栏不动。默认的 resizes-visual 只缩可视区域，
+         浏览器会把整页往上推去露出输入框 —— 即「一打开键盘页面整体上移」。安卓 Chrome 108+ 生效；
+         安卓 App 壳里由 MainActivity 按键盘 inset 缩 WebView，iOS 由 App.vue 的 syncViewport 兜底。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <!-- 移动端浏览器地址栏跟随主题，避免暗色下顶部露出一条白边。
          值取自 tokens.css 的 --cbx-bg（亮 #ffffff / 暗 #242424）。 -->
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">

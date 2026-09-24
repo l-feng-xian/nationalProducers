@@ -9,7 +9,8 @@
  *  `No 'Access-Control-Allow-Origin' header is present`。解法与 provider 的 /llm 同构：
  *  **开发期让下载走同源的 vite 代理 `/hf`**（见 vite.config.ts），跨源那一跳发生在服务端。
  *  这个改写在 getRemoteHost() 里做，对上层透明——设置里存的仍是镜像地址，无需改预设或迁移。
- *  生产期没有该代理，保持镜像地址直连（需部署侧自备可跨源的下载源或反代）。
+ *  生产期没有该代理：**安卓 / 桌面 App（Tauri）里改由主线程经 plugin-http 代发**（见 fetchRelay.ts，
+ *  Rust reqwest 没有 CORS、也不带触发防盗链的 Referer）；纯 Web 部署仍需自备可跨源的下载源或反代。
  *
  * ⚠️ 为什么用「主线程模块 + 随消息下发」而不是让 Worker 直接读设置：
  *  - Worker 是独立 bundle，import 这个模块会拿到**另一份**实例，读不到主线程设过的值；

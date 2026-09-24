@@ -16,6 +16,7 @@
 import type { InMsg, ManagedTask, OutMsg } from './embedder.worker'
 import type { ModelSpec } from './presets'
 import { getRemoteHost } from '../ml/downloadHost'
+import { attachFetchRelay } from '../ml/fetchRelay'
 
 const CHECK_TIMEOUT = 30_000
 const REMOVE_TIMEOUT = 60_000
@@ -38,6 +39,8 @@ function once<T>(
   },
 ): { promise: Promise<T>; cancel: () => void } {
   const w = new Worker(new URL('./embedder.worker.ts', import.meta.url), { type: 'module' })
+  // 原生壳里模型下载改由主线程代发（Worker 里用不了 plugin-http），必须早于业务消息
+  attachFetchRelay(w)
   let timer: ReturnType<typeof setTimeout> | null = null
   let settled = false
 

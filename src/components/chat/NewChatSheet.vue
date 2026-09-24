@@ -7,6 +7,8 @@ import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useGroupsStore } from '@/stores/groups'
 import { useUiStore } from '@/stores/ui'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 
 const router = useRouter()
 const chars = useCharactersStore()
@@ -33,6 +35,8 @@ function goNewGroup() {
 function close() {
   ui.newChatOpen = false
 }
+// 手机返回键关面板，而不是退出当前页
+useBackClose(close)
 
 /**
  * 注意：不要在模板里写多语句内联 handler。
@@ -53,15 +57,13 @@ async function pick(characterId: string | undefined, title: string) {
 <template>
   <Teleport to="body">
     <div class="cbx-modal__scrim" @click.self="close">
-      <div class="cbx-modal" role="dialog" aria-modal="true">
-        <header class="cbx-modal__head">
+      <div class="cbx-modal cbx-page" role="dialog" aria-modal="true">
+        <header class="cbx-modal__head cbx-page-head">
           <h3>新建对话</h3>
-          <button class="cbx-icon-btn" aria-label="关闭" @click="close">
-            <AppIcon name="X" />
-          </button>
+          <CbxDialogClose @click="close" />
         </header>
 
-        <div class="cbx-modal__body cbx-scroll">
+        <div class="cbx-modal__body cbx-scroll cbx-page-body">
           <div class="cbx-group-label">选择角色</div>
 
           <div v-if="!chars.items.length" class="cbx-empty">

@@ -50,6 +50,16 @@ function isSupported(): boolean {
   return typeof document !== 'undefined' && 'startViewTransition' in document
 }
 
+/**
+ * 正在进行的 View Transition 个数。路由过渡（useRouteTransition）据此让路：
+ * 过渡期间渲染是冻结的，路由那边的 WAAPI 离场动画永远播不完，
+ * 会把 update 回调拖过冻结预算，共享元素形变随之失效。
+ */
+let active = 0
+export function viewTransitionActive(): boolean {
+  return active > 0
+}
+
 function timeout(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
@@ -82,6 +92,7 @@ export function useViewTransition(): ViewTransitionRunner {
       }
     ).startViewTransition
 
+    active++
     const transition = start.call(document, async () => {
       // 整页在这里是冻结的：给一个硬预算，再慢也不许把 UI 冻死。
       // Promise.race 的另一边超时了也无所谓 —— update 仍在继续，
@@ -108,7 +119,11 @@ export function useViewTransition(): ViewTransitionRunner {
     // 调用方通常在 run() 之后清掉 view-transition-name，挂在那个时机等于
     // 在动画进行中把名字摘掉。finished 即使过渡被 skip 也照常 fulfill，
     // 不会把调用方卡住。
-    await transition.finished.catch(() => {})
+    try {
+      await transition.finished.catch(() => {})
+    } finally {
+      active--
+    }
   }
 
   return { supported, run }

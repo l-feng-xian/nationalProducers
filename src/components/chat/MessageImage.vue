@@ -7,7 +7,7 @@ import { downloadBlob, safeFileName } from '@/utils/download'
 import { useToast } from '@/composables/useToast'
 import type { MessageImage } from '@/types/image'
 const props = defineProps<{ image: MessageImage }>()
-const emit = defineEmits<{ loaded: [] }>()
+const emit = defineEmits<{ loaded: []; open: [] }>()
 const { url } = useObjectUrl(computed(() => props.image.blobId))
 const toast = useToast()
 
@@ -42,9 +42,18 @@ const frameStyle = computed(() => {
   <figure class="message-image">
     <!-- 不用 loading="lazy"：虚拟滚动本身已经是窗口化，再叠一层浏览器懒加载
          只会让高度在滚入后又变一次 -->
-    <a v-if="url" class="frame" :style="frameStyle" :href="url" target="_blank" rel="noopener" aria-label="查看对话配图原图"
-      ><img :src="url" alt="根据对话生成的配图" @load="emit('loaded')"
-    /></a>
+    <!-- 原来是 <a target="_blank"> 开新标签：安卓 WebView 里没有标签页，点了没反应。
+         改为在应用内的全屏查看页里看（ChatView 里的 ImageViewer，可缩放、可上下滑切图） -->
+    <button
+      v-if="url"
+      type="button"
+      class="frame"
+      :style="frameStyle"
+      aria-label="查看大图"
+      @click="emit('open')"
+    >
+      <img :src="url" alt="根据对话生成的配图" draggable="false" @load="emit('loaded')" />
+    </button>
     <span v-else class="placeholder frame" :style="frameStyle">正在读取配图…</span>
     <figcaption>
       <span>{{ image.serviceName }} · {{ image.model }}</span
@@ -103,8 +112,16 @@ figcaption {
 figcaption span {
   overflow-wrap: anywhere;
 }
-a {
-  color: inherit;
+button.frame {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  -webkit-touch-callout: none;
+}
+button.frame:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
 }
 .save {
   display: inline-flex;

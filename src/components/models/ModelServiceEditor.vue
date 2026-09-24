@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ChevronDown, LoaderCircle, PlugZap, RefreshCw, Save, X } from '@/components/icons'
+import { ChevronDown, LoaderCircle, PlugZap, RefreshCw, Save } from '@/components/icons'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { chatOnce, listModels } from '@/services/provider/openaiCompatible'
@@ -186,6 +188,8 @@ async function save() {
 function close() {
   if (!saving.value) emit('close')
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(close)
 
 function pickModel(model: string) {
   draft.value.provider.model = model
@@ -218,26 +222,17 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
   <Teleport to="body">
     <dialog
       ref="dialog"
-      class="service-dialog"
+      class="service-dialog cbx-page"
       aria-labelledby="service-editor-title"
       @cancel.prevent="close"
       @pointerdown.self="close"
     >
       <form @submit.prevent="save" @pointerdown="dismissPicker">
-        <header class="editor-head">
+        <header class="editor-head cbx-page-head">
           <h2 id="service-editor-title">{{ service ? '编辑模型服务' : '添加模型服务' }}</h2>
-          <button
-            type="button"
-            class="cbx-icon-btn"
-            title="关闭"
-            aria-label="关闭"
-            :disabled="saving"
-            @click="close"
-          >
-            <X :size="20" />
-          </button>
+          <CbxDialogClose :disabled="saving" @click="close" />
         </header>
-        <fieldset class="editor-fields" :disabled="saving">
+        <fieldset class="editor-fields cbx-page-body" :disabled="saving">
           <label class="cbx-field">
             <span class="cbx-field__label">服务名称</span>
             <input
@@ -403,7 +398,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
             {{ feedback.text }}
           </p>
         </fieldset>
-        <footer class="editor-footer">
+        <footer class="editor-footer cbx-page-foot">
           <button
             type="button"
             class="cbx-btn cbx-btn--soft"

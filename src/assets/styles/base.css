@@ -1019,3 +1019,108 @@ a:hover {
     animation: none !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   弹框在手机上以「新页面」呈现（< 768px）
+
+   桌面仍是居中弹框；手机上所有操作型弹框（表单、编辑器、预览）铺满整屏、
+   从右侧推入，标题栏左侧是「←」返回（CbxDialogClose），返回键同样能关（useBackClose）。
+   用法：弹框根元素加 .cbx-page，标题栏 .cbx-page-head，滚动区 .cbx-page-body，
+   底部按钮条 .cbx-page-foot；原生 <dialog> 与 .cbx-modal 两种写法都适用。
+   刻意不页面化的：确认框（CbxConfirmHost，短提示就该是提示框）、
+   消息长按的底部动作面板（菜单不是页面）、图片查看（本来就是全屏）。
+
+   ⚠️ 选择器特意抬到 (0,3,0)：各弹框在自己的 scoped 样式里写了宽高 / 边框 / 圆角，
+   scoped 选择器带 [data-v-x] 已是 (0,2,0)，普通 .cbx-page 压不过（见 .cbx-switch 那条教训）。
+   ══════════════════════════════════════════════════════════ */
+.cbx-dialog-close .cbx-dialog-close__back {
+  display: none;
+}
+@keyframes cbx-page-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@media (max-width: 767px) {
+  :root .cbx-page.cbx-page {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: none;
+    /* --cbx-app-h 是软键盘兜底（App.vue syncViewport），与外壳同高 */
+    height: var(--cbx-app-h, 100dvh);
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--cbx-bg);
+    overflow: hidden;
+    animation: cbx-page-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* 原生 dialog 的遮罩：整页盖住了，留着只会在推入动画时露一截 */
+  :root .cbx-page.cbx-page::backdrop {
+    background: transparent;
+  }
+  /* 表单包一层的弹框：让表单撑满，页头 / 页脚钉住，中间滚 */
+  :root .cbx-page > form {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+  :root .cbx-page .cbx-page-head {
+    flex-shrink: 0;
+    justify-content: flex-start;
+    gap: var(--cbx-space-2);
+    min-height: var(--cbx-topbar-h);
+    padding: max(var(--cbx-space-2), env(safe-area-inset-top, 0px)) var(--cbx-space-3)
+      var(--cbx-space-2) var(--cbx-space-1);
+  }
+  :root .cbx-page .cbx-page-head > :is(h2, h3, h4) {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--cbx-fs-lg);
+  }
+  :root .cbx-page .cbx-page-head > .cbx-dialog-close {
+    order: -1;
+  }
+  :root .cbx-page .cbx-page-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* 没有页脚的页面，滚动区自己避开底部手势条 */
+  :root .cbx-page .cbx-page-body:last-child {
+    padding-bottom: max(var(--cbx-space-4), var(--cbx-safe-b));
+  }
+  :root .cbx-page .cbx-page-foot {
+    flex-shrink: 0;
+    padding-bottom: max(var(--cbx-space-3), var(--cbx-safe-b));
+  }
+  /* 底部按钮均分整行，拇指好按（与 .cbx-modal__foot 的移动端规则一致） */
+  :root .cbx-page .cbx-page-foot > .cbx-btn {
+    flex: 1;
+  }
+  .cbx-dialog-close .cbx-dialog-close__x {
+    display: none;
+  }
+  .cbx-dialog-close .cbx-dialog-close__back {
+    display: inline-block;
+  }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+  :root .cbx-page.cbx-page {
+    animation: none;
+  }
+}

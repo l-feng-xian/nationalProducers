@@ -1,4 +1,4 @@
-import { onUnmounted } from 'vue'
+import { onUnmounted, ref } from 'vue'
 
 /**
  * 移动端长按。触屏没有 hover，操作条要么常显要么长按呼出。
@@ -10,8 +10,11 @@ export function useLongPress(cb: () => void, ms = 500, moveTolerance = 10) {
   let timer: ReturnType<typeof setTimeout> | null = null
   let startX = 0
   let startY = 0
+  /** 按住未满时长期间为真：给元素一点「正在被按」的收缩反馈，用户知道长按有效 */
+  const pressing = ref(false)
 
   function clear() {
+    pressing.value = false
     if (timer) {
       clearTimeout(timer)
       timer = null
@@ -24,8 +27,12 @@ export function useLongPress(cb: () => void, ms = 500, moveTolerance = 10) {
     startX = ev.clientX
     startY = ev.clientY
     clear()
+    pressing.value = true
     timer = setTimeout(() => {
       timer = null
+      pressing.value = false
+      // 轻震一下确认「菜单出来了」；不支持的设备（iOS Safari）静默跳过
+      navigator.vibrate?.(12)
       cb()
     }, ms)
   }
@@ -38,6 +45,7 @@ export function useLongPress(cb: () => void, ms = 500, moveTolerance = 10) {
   onUnmounted(clear)
 
   return {
+    pressing,
     handlers: {
       onPointerdown: onPointerDown,
       onPointermove: onPointerMove,

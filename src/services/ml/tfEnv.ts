@@ -8,8 +8,69 @@
  */
 
 import wasmPaths from '../vector/wasm'
+import { RELAY_HANDSHAKE, type RelayReply, type RelayRequest } from './fetchRelay'
 
 export type Tf = typeof import('@huggingface/transformers')
+
+// ── 原生壳里的下载代发通道（见 fetchRelay.ts）──
+// 主线程建完 Worker 立刻发来端口，早于任何业务消息；Web 端不会发，relayPort 保持 null。
+// 在模块求值时注册，先于各 Worker 自己的 self.onmessage，收到握手后截住不往下传。
+let relayPort: MessagePort | null = null
+let relaySeq = 0
+const relayPending = new Map<
+  number,
+  { resolve: (r: Response) => void; reject: (e: Error) => void }
+>()
+
+/** 这些状态码的 Response 不许带 body，构造时传流会直接抛 TypeError */
+const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
+
+function onRelayReply(ev: MessageEvent<RelayReply>) {
+  const r = ev.data
+  const p = relayPending.get(r.id)
+  if (!p) return
+  relayPending.delete(r.id)
+  if (!r.ok) {
+    p.reject(new Error(`下载失败：${r.message}`))
+    return
+  }
+  const body = NULL_BODY_STATUS.has(r.status) ? null : (r.body ?? r.buf ?? null)
+  p.resolve(new Response(body, { status: r.status, statusText: r.statusText, headers: r.headers }))
+}
+
+if (typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+  self.addEventListener('message', (ev: MessageEvent) => {
+    const d = ev.data as { type?: string; port?: MessagePort } | null
+    if (d?.type !== RELAY_HANDSHAKE || !d.port) return
+    ev.stopImmediatePropagation()
+    relayPort = d.port
+    relayPort.onmessage = onRelayReply
+  })
+}
+
+/** 与 fetch 同签名的代发版。只取 url / method / headers —— signal 等不可克隆的字段不过线 */
+function relayFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const port = relayPort
+  const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const url = new URL(raw, self.location.href)
+  // ⚠️ 只代发**跨源**请求。onnxruntime 的 .wasm 等应用自身资源走的也是 env.fetch，
+  // 在安卓壳里它们在 `http://tauri.localhost/...` —— 那是 WebView 拦截出来的虚拟主机，
+  // Rust 的 reqwest 根本连不上。实测：不加这道判断，代发清单里会混进 ort-wasm-simd-threaded.wasm。
+  if (!port || url.origin === self.location.origin) return fetch(input, init)
+  const headers: Record<string, string> = {}
+  new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).forEach(
+    (v, k) => (headers[k] = v),
+  )
+  const id = ++relaySeq
+  return new Promise((resolve, reject) => {
+    relayPending.set(id, { resolve, reject })
+    const req: RelayRequest = { id, url: url.href, method: init?.method ?? 'GET', headers }
+    port.postMessage(req)
+  })
+}
+
+/** transformers 原始的 env.fetch。setupTf 每条消息都会调，只能包一次，否则守卫一层层套上去 */
+let baseFetch: Tf['env']['fetch'] | null = null
 
 /**
  * 配好 env 并返回 transformers 模块。
@@ -44,7 +105,9 @@ export async function setupTf(mode: 'cache' | 'download', remoteHost?: string): 
   if (remoteHost) env.remoteHost = remoteHost
 
   // ⚠️ 必须在任何下载/查缓存之前包上：把「HTML 冒充模型文件」挡在缓存之外，见文件末尾 guardHtml。
-  env.fetch = guardHtml(env.fetch)
+  // 原生壳里有代发通道时改走主线程的 send()（Rust reqwest），否则镜像的防盗链 + CORS 会拦死下载。
+  baseFetch ??= env.fetch
+  env.fetch = guardHtml(relayPort ? (relayFetch as Tf['env']['fetch']) : baseFetch)
 
   const wasmEnv = env.backends.onnx.wasm
   if (!wasmEnv) throw new Error('onnxruntime-web 的 wasm 后端不可用')

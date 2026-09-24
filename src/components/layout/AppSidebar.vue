@@ -19,7 +19,22 @@ const BASE_URL = import.meta.env.BASE_URL
 import type { ChatMeta } from '@/types/chat'
 import { confirmDialog } from '@/composables/useConfirm'
 
-defineProps<{ open: boolean }>()
+const props = defineProps<{
+  open: boolean
+  /** 手指拖动中的展开进度 0..1，null = 没在拖 */
+  drag?: number | null
+  /** 窄屏抽屉模式（< 768px） */
+  drawerMode?: boolean
+}>()
+
+/** 拖动时跟手：行内 transform 覆盖类名上的开 / 关位置，并关掉过渡免得「追着手指跑」 */
+const dragStyle = computed(() =>
+  props.drag != null
+    ? { transform: `translateX(${(props.drag - 1) * 100}%)`, transition: 'none' }
+    : undefined,
+)
+/** 收起的抽屉在屏幕外，但里面的链接照样能被 Tab / 读屏摸到 —— 整个设为 inert */
+const hidden = computed(() => !!props.drawerMode && !props.open && props.drag == null)
 
 const ui = useUiStore()
 const route = useRoute()
@@ -63,6 +78,20 @@ const groups = computed(() => {
   return out.filter((g) => g.items.length > 0)
 })
 
+/**
+ * 抽屉里的导航：**先收抽屉、再跳转**。
+ *
+ * 收抽屉会 history.back() 吃掉抽屉那条返回历史（见 useBackClose），这一步是异步的；
+ * 路由在 beforeEach 里等它落地后再 push / replace，历史才是干净的
+ * 「聊天 → 分区」，而不是「聊天 → 抽屉空条目 → 分区」。
+ * 原来点**当前**会话路由不变、抽屉也就不收，手机上只能再去点遮罩。
+ */
+function go(to: string, replace = false) {
+  ui.closeDrawer()
+  if (route.fullPath === to) return
+  void (replace ? router.replace(to) : router.push(to))
+}
+
 async function remove(id: string, title: string) {
   if (!(await confirmDialog({ text: `删除会话「${title}」？其全部消息将一并删除。` }))) return
   await chats.removeChat(id)
@@ -70,12 +99,29 @@ async function remove(id: string, title: string) {
 }
 
 function newChat() {
+  // 抽屉和新建面板叠着开，关面板后还得再关一次抽屉
+  ui.closeDrawer()
   ui.newChatOpen = true
 }
+
+const NAV = [
+  { to: '/characters', label: '角色', icon: CharactersIcon },
+  { to: '/groups', label: '群聊', icon: GroupsIcon },
+  { to: '/worlds', label: '世界书', icon: WorldsIcon },
+  { to: '/models', label: '模型管理', icon: ModelsIcon },
+  { to: '/data', label: '数据管理', icon: DataIcon },
+  { to: '/settings', label: '设置', icon: SettingsIcon },
+]
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ 'sidebar--open': open }">
+  <aside
+    class="sidebar"
+    :class="{ 'sidebar--open': open }"
+    :style="dragStyle"
+    :inert="hidden || undefined"
+    :aria-hidden="hidden || undefined"
+  >
     <div class="brand">
       <!-- public/ 下的资源走 BASE_URL 拼接，部署到子路径时才不会 404 -->
       <img class="brand__logo" :src="`${BASE_URL}logo.jpg`" :alt="APP_NAME" />
@@ -114,7 +160,7 @@ function newChat() {
           :key="c.id"
           class="cbx-nav-item item"
           :class="{ 'cbx-nav-item--active': route.params['id'] === c.id }"
-          @click="router.push(`/chat/${c.id}`)"
+          @click="go(`/chat/${c.id}`)"
         >
           <span class="item__title">{{ c.title }}</span>
           <button class="cbx-icon-btn item__del" title="删除" @click.stop="remove(c.id, c.title)">
@@ -125,60 +171,19 @@ function newChat() {
     </div>
 
     <nav class="foot">
-      <!-- 导航与操作图标共享尺寸网格和三态过渡，内部图层按语义运动 -->
-      <RouterLink
-        to="/characters"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/characters') }"
-      >
-        <span class="nav-ico"><CharactersIcon /></span>
-        <span>角色</span>
-      </RouterLink>
-      <RouterLink
-        to="/groups"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/groups') }"
-      >
-        <span class="nav-ico"><GroupsIcon /></span>
-        <span>群聊</span>
-      </RouterLink>
-      <RouterLink
-        to="/worlds"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/worlds') }"
-      >
-        <span class="nav-ico"><WorldsIcon /></span>
-        <span>世界书</span>
-      </RouterLink>
-      <RouterLink
-        to="/models"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/models') }"
-      >
-        <span class="nav-ico"><ModelsIcon /></span>
-        <span>模型管理</span>
-      </RouterLink>
-      <RouterLink
-        to="/data"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/data') }"
-      >
-        <span class="nav-ico"><DataIcon /></span>
-        <span>数据管理</span>
-      </RouterLink>
-      <RouterLink
-        to="/settings"
-        class="cbx-nav-item"
-        :replace="replaceNav"
-        :class="{ 'cbx-nav-item--active': route.path.startsWith('/settings') }"
-      >
-        <span class="nav-ico"><SettingsIcon /></span>
-        <span>设置</span>
+      <!-- 导航与操作图标共享尺寸网格和三态过渡，内部图层按语义运动。
+           custom 插槽：保留真实 href（长按 / 读屏可用），点击改走 go() 先收抽屉再跳 -->
+      <RouterLink v-for="n in NAV" :key="n.to" v-slot="{ href }" :to="n.to" custom>
+        <a
+          :href="href"
+          class="cbx-nav-item"
+          :class="{ 'cbx-nav-item--active': route.path.startsWith(n.to) }"
+          :aria-current="route.path.startsWith(n.to) ? 'page' : undefined"
+          @click.prevent="go(n.to, replaceNav)"
+        >
+          <span class="nav-ico"><component :is="n.icon" /></span>
+          <span>{{ n.label }}</span>
+        </a>
       </RouterLink>
     </nav>
   </aside>
@@ -186,6 +191,9 @@ function newChat() {
 
 <style scoped>
 .sidebar {
+  /* 盖在内容区之上：路由过渡时内容区会左右平移十几像素，别让它压到侧栏上 */
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-2);
@@ -289,13 +297,30 @@ function newChat() {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 30;
+    /* 桌面 240px 在手机上太窄，会话标题三五个字就截断；留一截遮罩给「点空白关闭」 */
+    width: min(84vw, 320px);
     transform: translateX(-100%);
-    transition: transform var(--cbx-transition);
-    box-shadow: var(--cbx-shadow-lg);
+    /* 抽屉用稍长的减速曲线，150ms 在整屏宽的位移上显得「闪」而不是「滑」 */
+    transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: none;
+    padding-top: max(var(--cbx-space-4), env(safe-area-inset-top, 0px));
     padding-bottom: max(var(--cbx-space-4), var(--cbx-safe-b));
+    /* 抽屉里的会话列表滚到头别带着底下的聊天页一起滚 */
+    overscroll-behavior: contain;
+    touch-action: pan-y;
   }
   .sidebar--open {
     transform: translateX(0);
+    box-shadow: var(--cbx-shadow-lg);
+  }
+  .item:active,
+  .foot .cbx-nav-item:active {
+    background: var(--cbx-bg-active);
+  }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }
 </style>

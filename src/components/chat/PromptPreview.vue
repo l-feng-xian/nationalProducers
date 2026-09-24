@@ -4,6 +4,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useGenerationStore } from '@/stores/generation'
 import { formatTokens } from '@/services/tokens'
 import type { PromptMessage } from '@/types/prompt'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 
 /**
  * 提示词预览（dry run）。
@@ -15,6 +17,8 @@ import type { PromptMessage } from '@/types/prompt'
  * ⚠️ 走 isDryRun，不会推进 sticky/cooldown（否则看几眼预览设定就失效了）。
  */
 const emit = defineEmits<{ close: [] }>()
+// 手机返回键 = 关预览
+useBackClose(() => emit('close'))
 
 const gen = useGenerationStore()
 const built = ref(gen.build({ isDryRun: true }))
@@ -69,8 +73,8 @@ function copyJson() {
 <template>
   <Teleport to="body">
     <div class="cbx-modal__scrim" @click.self="emit('close')">
-      <div class="cbx-modal cbx-modal--wide" role="dialog" aria-modal="true">
-        <header class="cbx-modal__head">
+      <div class="cbx-modal cbx-modal--wide cbx-page" role="dialog" aria-modal="true">
+        <header class="cbx-modal__head cbx-page-head">
           <h3>提示词预览</h3>
           <div class="head-ops">
             <button class="cbx-btn cbx-btn--ghost sm" @click="refresh">刷新</button>
@@ -79,13 +83,12 @@ function copyJson() {
                 copied ? '已复制' : '复制 JSON'
               }}
             </button>
-            <button class="cbx-icon-btn" aria-label="关闭" @click="emit('close')">
-              <AppIcon name="X" />
-            </button>
           </div>
+          <!-- 放在操作组外面：手机上它要被 order 挪到标题左边当返回键 -->
+          <CbxDialogClose @click="emit('close')" />
         </header>
 
-        <div class="cbx-modal__body cbx-scroll">
+        <div class="cbx-modal__body cbx-scroll cbx-page-body">
           <div v-if="!built" class="cbx-empty">
             <span class="cbx-empty__desc">当前没有会话</span>
           </div>

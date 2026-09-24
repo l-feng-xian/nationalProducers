@@ -23,7 +23,7 @@ import { useViewTransition } from '@/composables/useViewTransition'
 import { useMorphTarget } from '@/composables/useMorphTarget'
 import { useSettingsStore } from '@/stores/settings'
 import { generateDepth } from '@/services/depth/generate'
-import { attach, detach, move } from '@/services/depth/parallax'
+import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
 import { downloadBlob, safeFileName } from '@/utils/download'
@@ -131,63 +131,48 @@ const TABS = [
 ] as const
 
 /**
- * 立绘视差（与列表页同一套实现）。
- *
- * 同样的三道闸：只在能 hover 的精确指针设备上、用户没要求减少动效、
- * 且这张图真的有深度图时才挂 —— 触屏没有 hover，移动端连 three.js 都不会下载。
+ * 立绘视差（与列表页同一套实现，见 useDepthParallax）。
+ * - 桌面：鼠标移进画框才挂，跟着鼠标位置走；
+ * - 手机：没有 hover，进页面就挂在大立绘上，跟着手机倾斜（陀螺仪）走。
+ * 深度图正在重算（depthBusy）时不挂：此刻挂上去用的是旧图，算完还得再摘。
  */
-const parallaxAllowed =
-  typeof window !== 'undefined' &&
-  window.matchMedia('(hover: hover) and (pointer: fine)').matches &&
-  !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-let parallaxHost: HTMLElement | null = null
-let hoverRect: DOMRect | null = null
-let liveUrls: string[] = []
+const parallax = useDepthParallax()
+const { needsPermission: tiltNeedsGrant, enableTilt } = parallax
+const frameEl = ref<HTMLElement | null>(null)
 
 async function onAvatarEnter(e: PointerEvent) {
+  if (parallaxMode !== 'pointer' || depthBusy.value) return
   const m = model.value
-  if (!parallaxAllowed || !m || !settings.settings.depth.modelId) return
-  // depthBusy 期间深度图正在重算，此刻挂上去用的是旧图，放完还得再摘
-  if (depthBusy.value || !m.avatarBlobId || !m.depthBlobId) return
-  const el = e.currentTarget as HTMLElement
-  hoverRect = el.getBoundingClientRect()
-  parallaxHost = el
-  const [color, depth] = await Promise.all([
-    blobsRepo.get(m.avatarBlobId),
-    blobsRepo.get(m.depthBlobId),
-  ])
-  if (!color || !depth || parallaxHost !== el) return
-  const colorUrl = URL.createObjectURL(color)
-  const depthUrl = URL.createObjectURL(depth)
-  const ok = await attach({ el, colorUrl, depthUrl, aspect: 2 / 3 })
-  if (!ok || parallaxHost !== el) {
-    URL.revokeObjectURL(colorUrl)
-    URL.revokeObjectURL(depthUrl)
-    return
-  }
-  liveUrls = [colorUrl, depthUrl]
+  await parallax.activate(e.currentTarget as HTMLElement, m?.avatarBlobId, m?.depthBlobId)
 }
-
 function onAvatarMove(e: PointerEvent) {
-  if (!parallaxHost || !hoverRect) return
-  const nx = ((e.clientX - hoverRect.left) / hoverRect.width) * 2 - 1
-  const ny = ((e.clientY - hoverRect.top) / hoverRect.height) * 2 - 1
-  move(nx, ny)
+  parallax.pointer(e)
 }
-
+function onAvatarLeave() {
+  if (parallaxMode === 'pointer') parallax.release()
+}
 function releaseParallax() {
-  if (!parallaxHost) return
-  detach()
-  parallaxHost = null
-  hoverRect = null
-  for (const u of liveUrls) URL.revokeObjectURL(u)
-  liveUrls = []
+  parallax.release()
 }
 
-// 离开本页时 canvas 是全局单例、会被下一个宿主接着用，但 objectURL 是本页造的，
-// 不收回就是纯泄漏
-onBeforeUnmount(releaseParallax)
+// 手机倾斜模式：画框在、停在「基本」页签、图与深度图就绪时挂上；任何一项变化都先摘再按新状态重挂
+watch(
+  () =>
+    [
+      frameEl.value,
+      tab.value,
+      model.value?.avatarBlobId,
+      model.value?.depthBlobId,
+      depthBusy.value,
+    ] as const,
+  ([el, t, avatar, depth, busy]) => {
+    if (parallaxMode !== 'tilt') return
+    parallax.release()
+    // 「基本」页签是 v-show 切的，切走后画框尺寸为 0，挂着只是空跑
+    if (!el || t !== 'basic' || busy || leaving) return
+    void parallax.activate(el, avatar, depth)
+  },
+)
 
 const title = computed(() => model.value?.data.name || '编辑角色')
 const greetingCount = computed(() => {
@@ -467,9 +452,10 @@ async function remove() {
             <div
               class="frame"
               :style="{ viewTransitionName: MORPH_VT_NAME }"
+              ref="frameEl"
               @pointerenter="onAvatarEnter"
               @pointermove="onAvatarMove"
-              @pointerleave="releaseParallax"
+              @pointerleave="onAvatarLeave"
             >
               <CbxAvatar
                 class="frame__img"
@@ -477,6 +463,15 @@ async function remove() {
                 :name="model.data.name"
                 card
               />
+              <!-- 只有 iOS 会出现：方向传感器必须在用户点击里申请授权 -->
+              <button
+                v-if="tiltNeedsGrant && parallax.eligible(model.avatarBlobId, model.depthBlobId)"
+                type="button"
+                class="cbx-chip tilt-grant"
+                @click.stop="enableTilt"
+              >
+                开启重力视差
+              </button>
             </div>
             <button
               class="cbx-btn cbx-btn--ghost full"
@@ -501,7 +496,8 @@ async function remove() {
               </span>
               <template v-else-if="model.depthBlobId">
                 <span class="depth__state depth__state--ok"
-                  ><AppIcon name="Check" /> 已有深度图 · 卡片可视差</span
+                  ><AppIcon name="Check" /> 已有深度图 ·
+                  {{ parallaxMode === 'tilt' ? '倾斜可视差' : '卡片可视差' }}</span
                 >
                 <button class="cbx-btn cbx-btn--ghost tiny" @click="regenDepth">重新生成</button>
               </template>
@@ -726,6 +722,15 @@ async function remove() {
   overflow: hidden;
   border-radius: var(--cbx-radius-md);
   aspect-ratio: 2 / 3;
+}
+.tilt-grant {
+  position: absolute;
+  left: 50%;
+  bottom: var(--cbx-space-3);
+  z-index: 1;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  box-shadow: var(--cbx-shadow-md);
 }
 .frame__img {
   width: 100%;

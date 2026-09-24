@@ -9,6 +9,7 @@ import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatComposer from '@/components/chat/ChatComposer.vue'
 import PromptPreview from '@/components/chat/PromptPreview.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
+import ImageViewer, { type ViewerItem } from '@/components/chat/ImageViewer.vue'
 import { dialogueImagePrompt } from '@/services/image/prompts'
 import { dialogueImagePromptViaLLM } from '@/services/image/promptFromLLM'
 import type { CharacterImageReference, GeneratedImage } from '@/types/image'
@@ -105,6 +106,7 @@ watch(
   () => route.params['id'],
   () => {
     imageTarget.value = null
+    viewerStart.value = null
   },
 )
 
@@ -172,6 +174,7 @@ function bubbleProps(m: ChatMessage) {
     canGenerateImage: !gen.busy && !m.is_system && !m.exclude && !!m.mes.trim(),
     onGenerateImage: () => openImage(m.id),
     onImageLoaded: follow,
+    onOpenImage: openViewer,
     onRegenerate: () => void gen.regenerate(),
     onSwipe: (d: -1 | 1) => void onSwipe(m.id, d),
     onCopy: () => toast.success('已复制'),
@@ -289,6 +292,24 @@ async function onSwipe(msgId: string, dir: -1 | 1) {
 }
 
 const previewOpen = ref(false)
+
+/**
+ * 整段对话的配图按消息顺序拍平成一个相册，查看页里上下滑动就能连着看，
+ * 不用退出来再点下一张。每条消息的多张图保持原顺序。
+ */
+const gallery = computed<ViewerItem[]>(() =>
+  chats.messages.flatMap((m) =>
+    (m.images ?? []).map((img) => ({
+      blobId: img.blobId,
+      caption: [m.name, img.serviceName, img.model].filter(Boolean).join(' · '),
+    })),
+  ),
+)
+const viewerStart = ref<number | null>(null)
+function openViewer(blobId: string) {
+  const i = gallery.value.findIndex((g) => g.blobId === blobId)
+  if (i >= 0) viewerStart.value = i
+}
 
 async function onEdit(id: string, text: string) {
   await chats.editMessage(id, text)
@@ -416,6 +437,12 @@ async function newChat() {
   </div>
 
   <PromptPreview v-if="previewOpen" @close="previewOpen = false" />
+  <ImageViewer
+    v-if="viewerStart !== null"
+    :items="gallery"
+    :start="viewerStart"
+    @close="viewerStart = null"
+  />
   <ImageGenerationDialog
     v-if="imageTarget"
     title="生成对话配图"

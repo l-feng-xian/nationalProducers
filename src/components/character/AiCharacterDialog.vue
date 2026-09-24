@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { LoaderCircle, Sparkles, X } from '@/components/icons'
+import { LoaderCircle, Sparkles } from '@/components/icons'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { generateCharacter, type GeneratedCharacterData } from '@/services/character/generate'
 import { toPlain } from '@/utils/plain'
@@ -40,6 +42,8 @@ function close() {
   cancel()
   emit('close')
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(close)
 
 async function generate() {
   if (busy.value || !description.value.trim() || !settings.isConfigured) return
@@ -79,18 +83,16 @@ async function generate() {
   <Teleport to="body">
     <dialog
       ref="dialog"
-      class="ai-dialog"
+      class="ai-dialog cbx-page"
       aria-labelledby="ai-character-title"
       @cancel.prevent="close"
     >
       <form class="ai-form" @submit.prevent="generate">
-        <header class="ai-head">
+        <header class="ai-head cbx-page-head">
           <h2 id="ai-character-title"><Sparkles :size="20" aria-hidden="true" />AI 创建角色</h2>
-          <button type="button" class="cbx-icon-btn" aria-label="关闭" @click="close">
-            <X :size="20" />
-          </button>
+          <CbxDialogClose @click="close" />
         </header>
-        <div class="ai-body cbx-scroll">
+        <div class="ai-body cbx-scroll cbx-page-body">
           <p v-if="settings.isConfigured" class="service-name">
             {{ serviceName }} · {{ settings.settings.provider.model }}
           </p>
@@ -120,7 +122,7 @@ async function generate() {
           <p v-if="error" class="error" role="alert">{{ error }}</p>
           <p v-else-if="status" class="status" role="status">{{ status }}</p>
         </div>
-        <footer class="ai-footer">
+        <footer class="ai-footer cbx-page-foot">
           <button v-if="busy" type="button" class="cbx-btn cbx-btn--soft" @click="cancel">
             取消生成
           </button>

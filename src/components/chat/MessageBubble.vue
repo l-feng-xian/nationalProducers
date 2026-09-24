@@ -12,6 +12,7 @@ import {
 } from '@/components/icons'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useLongPress } from '@/composables/useLongPress'
+import { useBackClose } from '@/composables/useBackClose'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import MessageImage from './MessageImage.vue'
 import type { ChatMessage } from '@/types/chat'
@@ -38,6 +39,8 @@ const emit = defineEmits<{
   branch: []
   generateImage: []
   imageLoaded: []
+  /** 点了某张配图：交给 ChatView 打开整段对话的多图查看页 */
+  openImage: [blobId: string]
   /**
    * 进入/退出内联编辑。给虚拟滚动用：`editing`/`draft` 是组件内状态，
    * 这一行一旦滚出窗口被卸载，用户正在改的草稿就无声没了（全量渲染时不会）。
@@ -86,7 +89,22 @@ watch(editing, v => emit('editingChange', v))
 
 // ── 移动端长按动作面板 ──
 const sheetOpen = ref(false)
-const { handlers } = useLongPress(() => (sheetOpen.value = true))
+const { handlers, pressing } = useLongPress(() => (sheetOpen.value = true))
+// 手机上关菜单的第一反应是按返回，不接住就会把整个聊天页退掉
+useBackClose(() => (sheetOpen.value = false), sheetOpen)
+
+/**
+ * 触屏长按文字时，系统会同时弹出「选择文本」的原生菜单，和我们的动作面板叠在一起。
+ * 触屏上把原生长按菜单拦掉（复制整条在面板里）；编辑态放行，文本框里要能正常选字粘贴。
+ */
+function onContextMenu(e: Event) {
+  if (!editing.value && window.matchMedia('(hover: none)').matches) e.preventDefault()
+}
+
+/** 面板里切换回复版本：触屏没有 hover 操作条，原先手机上根本切不了 */
+function swipeFromSheet(dir: -1 | 1) {
+  emit('swipe', dir)
+}
 
 function copy() {
   void navigator.clipboard?.writeText(props.msg.mes)
@@ -117,13 +135,17 @@ function act(fn: () => void) {
 
       <div
         class="cbx-bubble"
-        :class="isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai'"
+        :class="[
+          isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai',
+          { 'cbx-bubble--pressing': pressing, 'cbx-bubble--held': sheetOpen },
+        ]"
         :style="
           accent
             ? { borderLeft: `3px solid var(--cbx-char-${accent})` }
             : undefined
         "
         v-bind="handlers"
+        @contextmenu="onContextMenu"
       >
         <template v-if="editing">
           <textarea
@@ -154,6 +176,7 @@ function act(fn: () => void) {
             :key="image.blobId"
             :image="image"
             @loaded="emit('imageLoaded')"
+            @open="emit('openImage', image.blobId)"
           />
         </template>
       </div>
@@ -237,12 +260,31 @@ function act(fn: () => void) {
 
     <!-- 移动端长按面板 -->
     <Teleport to="body">
+      <Transition name="sheet">
       <div
         v-if="sheetOpen"
         class="cbx-modal__scrim sheet-scrim"
         @click.self="sheetOpen = false"
       >
-        <div class="sheet cbx-safe-b">
+        <div class="sheet cbx-safe-b" role="menu" aria-label="消息操作">
+          <span class="sheet__grip" aria-hidden="true" />
+          <div v-if="!isUser && hasSwipes" class="sheet__swipes">
+            <button
+              class="cbx-icon-btn"
+              aria-label="上一个回复版本"
+              @click="swipeFromSheet(-1)"
+            >
+              <ChevronLeft :size="20" aria-hidden="true" />
+            </button>
+            <span class="sheet__swipe-n">回复版本 {{ swipeLabel }}</span>
+            <button
+              class="cbx-icon-btn"
+              aria-label="下一个回复版本"
+              @click="swipeFromSheet(1)"
+            >
+              <ChevronRight :size="20" aria-hidden="true" />
+            </button>
+          </div>
           <button class="sheet__item" @click="copy">复制</button>
           <button class="sheet__item" @click="startEdit">编辑</button>
           <button
@@ -279,6 +321,7 @@ function act(fn: () => void) {
           </button>
         </div>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -462,7 +505,12 @@ function act(fn: () => void) {
   .caret {
     animation: none;
   }
-  .tools {
+  .tools,
+  .cbx-bubble,
+  .sheet-enter-active,
+  .sheet-leave-active,
+  .sheet-enter-active .sheet,
+  .sheet-leave-active .sheet {
     transition: none;
   }
 }
@@ -480,12 +528,39 @@ function act(fn: () => void) {
 }
 .sheet {
   width: 100%;
+  /* 平板竖屏也是 hover:none，满宽 1000px 的一排按钮太散 */
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--cbx-bg);
   border-radius: var(--cbx-radius-lg) var(--cbx-radius-lg) 0 0;
   padding: var(--cbx-space-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.sheet__grip {
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin: 2px 0 var(--cbx-space-2);
+  border-radius: 2px;
+  background: var(--cbx-border-strong, var(--cbx-border));
+}
+.sheet__swipes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cbx-space-2);
+  padding-bottom: var(--cbx-space-2);
+  margin-bottom: var(--cbx-space-1);
+  border-bottom: 1px solid var(--cbx-border);
+}
+.sheet__swipe-n {
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 .sheet__item {
   min-height: var(--cbx-tap-min);
@@ -509,10 +584,46 @@ function act(fn: () => void) {
   color: var(--cbx-text-secondary);
 }
 
+/* 面板进出场：遮罩淡入、面板从底部滑上来 */
+.sheet-enter-active,
+.sheet-leave-active {
+  transition: opacity 220ms ease;
+}
+.sheet-enter-active .sheet,
+.sheet-leave-active .sheet {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sheet-enter-from,
+.sheet-leave-to {
+  opacity: 0;
+}
+.sheet-enter-from .sheet,
+.sheet-leave-to .sheet {
+  transform: translateY(100%);
+}
+
 /* 触屏没有 hover：桌面操作条隐藏，改用长按面板 */
 @media (hover: none) {
   .tools {
     display: none;
+  }
+  /* 长按要呼出面板，不能同时触发系统的选字 / 图片菜单 */
+  .cbx-bubble {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    transition: transform 160ms ease;
+  }
+  .cbx-bubble .edit {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .cbx-bubble--pressing {
+    transform: scale(0.98);
+  }
+  .cbx-bubble--held {
+    outline: 2px solid var(--cbx-brand-light-hover);
+    outline-offset: 2px;
   }
 }
 /* 桌面不需要长按面板 */

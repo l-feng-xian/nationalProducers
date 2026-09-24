@@ -19,6 +19,7 @@
 import type { InMsg, OutMsg } from './embedder.worker'
 import type { ModelSpec } from './presets'
 import { getRemoteHost } from '../ml/downloadHost'
+import { attachFetchRelay } from '../ml/fetchRelay'
 
 const INIT_TIMEOUT = 90_000
 const EMBED_TIMEOUT = 30_000
@@ -68,6 +69,8 @@ export class Embedder {
     const w = new Worker(new URL('./embedder.worker.ts', import.meta.url), { type: 'module' })
     this.#worker = w
     w.onmessage = (ev: MessageEvent<OutMsg>) => this.#onMessage(ev.data)
+    // 原生壳里模型文件改由主线程代发（Worker 里用不了 plugin-http），必须早于 init 消息
+    attachFetchRelay(w)
     w.onerror = (e) => this.#fail(new Error(`Worker 出错：${e.message || '未知'}`))
 
     const dim = await this.#withTimeout(

@@ -10,6 +10,9 @@ import {
   type Pt,
 } from '@/utils/graphGeometry'
 import type { GraphEdge, GraphEdgePatch, GraphLayoutMap, GraphNode } from '@/types/relationGraph'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
+import { useBackClose } from '@/composables/useBackClose'
+import { DRAWER_MQ, useMediaQuery } from '@/composables/useDrawerSwipe'
 
 /**
  * 通用关系图谱画布。
@@ -330,9 +333,23 @@ function onEdgeClick(e: GraphEdge, at: Pt) {
 }
 
 function closeEditor() {
+  // 先落盘：原来只靠输入框的 change（失焦）提交，手机上按返回键关页面时
+  // 输入框不会先失焦，最后一次改动就只停在内存里
+  onDraftCommit()
   draftEdge.value = null
   emit('update:selectedEdgeId', null)
 }
+
+/**
+ * 手机上编辑气泡改为整页（Teleport 到 body，脱离 350px 宽的画布），
+ * 与其它弹框一致：左上角返回、返回键关闭。桌面仍是贴着边的小气泡。
+ */
+const pageMode = useMediaQuery(DRAWER_MQ)
+useBackClose(
+  closeEditor,
+  () => !!draftEdge.value,
+  () => pageMode.value,
+)
 
 function onDraftInput() {
   const d = draftEdge.value
@@ -510,44 +527,53 @@ function edgeIsOn(e: GraphEdge): boolean {
     </svg>
 
     <!-- 就地编辑气泡：贴在被点的那条边旁边，不再跳到画布下方去找 -->
-    <div v-if="draftEdge" class="pop" :style="popStyle">
-      <div class="pop__head">
-        <span class="pop__title">
-          {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.from ?? '') }}
-          <AppIcon name="ArrowRight" />
-          {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.to ?? '') }}
-        </span>
-        <button class="cbx-icon-btn pop__x" title="关闭" @click="closeEditor">
-          <AppIcon name="X" tone="danger" />
-        </button>
+    <Teleport to="body" :disabled="!pageMode">
+      <div
+        v-if="draftEdge"
+        class="pop"
+        :class="{ 'cbx-page': pageMode }"
+        :style="pageMode ? undefined : popStyle"
+        :role="pageMode ? 'dialog' : undefined"
+        :aria-modal="pageMode || undefined"
+      >
+        <div class="pop__head cbx-page-head">
+          <span class="pop__title">
+            {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.from ?? '') }}
+            <AppIcon name="ArrowRight" />
+            {{ nameOf.get(edges.find((e) => e.id === draftEdge!.id)?.to ?? '') }}
+          </span>
+          <CbxDialogClose class="pop__x" @click="closeEditor" />
+        </div>
+        <div class="pop__body cbx-page-body">
+          <input
+            v-model="draftEdge.label"
+            class="cbx-input"
+            placeholder="关系，如：青梅竹马"
+            @input="onDraftInput"
+            @change="onDraftCommit"
+          />
+          <textarea
+            v-model="draftEdge.desc"
+            class="cbx-textarea pop__desc"
+            rows="2"
+            placeholder="补充描述（可选）"
+            @input="onDraftInput"
+            @change="onDraftCommit"
+          />
+          <div class="pop__ops">
+            <button class="cbx-btn cbx-btn--ghost sm" @click="emit('swap-edge', draftEdge.id)">
+              <AppIcon name="ArrowLeftRight" /> 交换方向
+            </button>
+            <button
+              class="cbx-btn cbx-btn--ghost sm pop__del"
+              @click="emit('remove-edge', draftEdge.id)"
+            >
+              删除
+            </button>
+          </div>
+        </div>
       </div>
-      <input
-        v-model="draftEdge.label"
-        class="cbx-input"
-        placeholder="关系，如：青梅竹马"
-        @input="onDraftInput"
-        @change="onDraftCommit"
-      />
-      <textarea
-        v-model="draftEdge.desc"
-        class="cbx-textarea pop__desc"
-        rows="2"
-        placeholder="补充描述（可选）"
-        @input="onDraftInput"
-        @change="onDraftCommit"
-      />
-      <div class="pop__ops">
-        <button class="cbx-btn cbx-btn--ghost sm" @click="emit('swap-edge', draftEdge.id)">
-          <AppIcon name="ArrowLeftRight" /> 交换方向
-        </button>
-        <button
-          class="cbx-btn cbx-btn--ghost sm pop__del"
-          @click="emit('remove-edge', draftEdge.id)"
-        >
-          删除
-        </button>
-      </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -749,8 +775,31 @@ function edgeIsOn(e: GraphEdge): boolean {
   height: 28px;
   flex-shrink: 0;
 }
+.pop__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cbx-space-2);
+}
 .pop__desc {
   min-height: 0;
+}
+/* 整页模式（手机）：内容区留白、描述框给足高度、关闭键恢复触控尺寸 */
+.pop.cbx-page .pop__body {
+  padding: var(--cbx-space-4);
+  gap: var(--cbx-space-3);
+}
+.pop.cbx-page .pop__desc {
+  min-height: 120px;
+}
+.pop.cbx-page .pop__x {
+  width: var(--cbx-tap-min);
+  height: var(--cbx-tap-min);
+}
+.pop.cbx-page .pop__head {
+  border-bottom: 1px solid var(--cbx-border);
+}
+.pop.cbx-page .pop__title {
+  font-size: var(--cbx-fs-lg);
 }
 .pop__ops {
   display: flex;
@@ -768,14 +817,6 @@ function edgeIsOn(e: GraphEdge): boolean {
      viewBox 跟着实际像素走，所以随便设高度都不会产生留白死区。 */
   .graph__svg {
     height: var(--graph-h-mobile, 62vh);
-  }
-  .pop {
-    /* 窄屏下气泡固定贴底，别在 350px 宽的画布里挤来挤去 */
-    left: 8px !important;
-    right: 8px;
-    top: auto !important;
-    bottom: 8px;
-    width: auto !important;
   }
   .graph__hint {
     display: none;

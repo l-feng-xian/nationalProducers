@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ImagePlus, X } from '@/components/icons'
+import { ImagePlus } from '@/components/icons'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 import { useSettingsStore } from '@/stores/settings'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import { blobsRepo } from '@/db/repositories'
@@ -97,6 +99,8 @@ function close() {
     emit('close')
   }
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(close)
 async function generate() {
   if (
     busy.value ||
@@ -169,24 +173,16 @@ async function apply() {
   <Teleport to="body">
     <dialog
       ref="dialog"
-      class="image-dialog"
+      class="image-dialog cbx-page"
       aria-labelledby="generate-image-title"
       @cancel.prevent="close"
     >
       <form class="image-form" @submit.prevent="generate">
-        <header class="image-head">
+        <header class="image-head cbx-page-head">
           <h2 id="generate-image-title">{{ title }}</h2>
-          <button
-            type="button"
-            class="cbx-icon-btn"
-            aria-label="关闭"
-            :disabled="saving"
-            @click="close"
-          >
-            <X :size="20" />
-          </button>
+          <CbxDialogClose :disabled="saving" @click="close" />
         </header>
-        <div class="image-body cbx-scroll">
+        <div class="image-body cbx-scroll cbx-page-body">
           <p v-if="!settings.settings.imageModelServices.length" class="image-note">
             请先到<RouterLink to="/models" @click="close">模型管理添加文生图配置</RouterLink>。
           </p>
@@ -275,7 +271,7 @@ async function apply() {
           <p v-if="error" class="image-error" role="alert">{{ error }}</p>
           <p v-if="status" class="image-note" role="status">{{ status }}</p>
         </div>
-        <footer class="image-footer">
+        <footer class="image-footer cbx-page-foot">
           <button v-if="busy" type="button" class="cbx-btn cbx-btn--soft" @click="cancel">
             取消生成
           </button>

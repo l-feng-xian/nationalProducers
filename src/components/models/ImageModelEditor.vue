@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { X } from '@/components/icons'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { newImageModelService, type ImageModelService } from '@/types/image'
@@ -78,6 +79,8 @@ watch(
 function close() {
   if (!saving.value) emit('close')
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(close)
 
 async function fetchModels() {
   if (fetching.value || loadingKey.value || keyError.value) return
@@ -176,24 +179,16 @@ async function save() {
   <Teleport to="body">
     <dialog
       ref="dialog"
-      class="image-dialog"
+      class="image-dialog cbx-page"
       aria-labelledby="image-model-title"
       @cancel.prevent="close"
     >
       <form class="image-form" @submit.prevent="save">
-        <header class="image-head">
+        <header class="image-head cbx-page-head">
           <h2 id="image-model-title">{{ service ? '编辑文生图配置' : '添加文生图配置' }}</h2>
-          <button
-            type="button"
-            class="cbx-icon-btn"
-            aria-label="关闭"
-            :disabled="saving"
-            @click="close"
-          >
-            <X :size="20" />
-          </button>
+          <CbxDialogClose :disabled="saving" @click="close" />
         </header>
-        <div class="image-body cbx-scroll">
+        <div class="image-body cbx-scroll cbx-page-body">
           <p class="image-note">
             {{
               draft.backend === 'comfyui'
@@ -367,7 +362,9 @@ async function save() {
                 <datalist id="comfy-unet-list">
                   <option v-for="id in comfyModels.unets" :key="id" :value="id" />
                 </datalist>
-                <span class="cbx-field__hint">放在 models/unet/ 下的 Qwen-Image-2.1 GGUF 文件。</span>
+                <span class="cbx-field__hint"
+                  >放在 models/unet/ 下的 Qwen-Image-2.1 GGUF 文件。</span
+                >
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">文本编码器</span>
@@ -381,7 +378,9 @@ async function save() {
                 <datalist id="comfy-clip-list">
                   <option v-for="id in comfyModels.clips" :key="id" :value="id" />
                 </datalist>
-                <span class="cbx-field__hint">放在 models/text_encoders/ 下的 Qwen 文本编码器。</span>
+                <span class="cbx-field__hint"
+                  >放在 models/text_encoders/ 下的 Qwen 文本编码器。</span
+                >
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">VAE</span>
@@ -492,8 +491,8 @@ async function save() {
                   placeholder="blurry, low quality, distorted, watermark, text"
                 />
                 <span class="cbx-field__hint"
-                  >CFG=1 时负面提示词不生效（保留供高级用途）。图生图强度：Qwen 编辑默认 1.0（靠参考图
-                  reference_latents 保人物）；降低会更贴近原图但改动更弱。</span
+                  >CFG=1 时负面提示词不生效（保留供高级用途）。图生图强度：Qwen 编辑默认
+                  1.0（靠参考图 reference_latents 保人物）；降低会更贴近原图但改动更弱。</span
                 >
               </label>
             </template>
@@ -513,7 +512,7 @@ async function save() {
           <p v-if="keyError || error" class="image-error" role="alert">{{ keyError || error }}</p>
           <p v-if="status" class="image-note" role="status">{{ status }}</p>
         </div>
-        <footer class="image-footer">
+        <footer class="image-footer cbx-page-foot">
           <button type="button" class="cbx-btn cbx-btn--ghost" :disabled="saving" @click="close">
             取消
           </button>

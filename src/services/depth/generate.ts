@@ -10,6 +10,7 @@
 import { DEPTH_MAX_EDGE } from './presets'
 import type { DepthInMsg, DepthOutMsg } from './worker'
 import { getRemoteHost } from '../ml/downloadHost'
+import { attachFetchRelay } from '../ml/fetchRelay'
 
 /** 无进展就判死。3 秒的活给到 90 秒，弱机器也够 */
 const STALL_MS = 90_000
@@ -75,6 +76,8 @@ export function generateDepth(
   onProgress?: (loaded: number, total: number) => void,
 ): { promise: Promise<DepthResult>; cancel: () => void } {
   const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+  // 原生壳里模型下载改由主线程代发（Worker 里用不了 plugin-http），必须早于业务消息
+  attachFetchRelay(w)
   let settled = false
   let timer: ReturnType<typeof setTimeout> | null = null
 

@@ -17,6 +17,8 @@ import { describeCounts, describeScope } from '@/services/sync/protocol'
 import { MAX_DEVICE_NAME } from '@/services/sync/signaling'
 import { renderQr } from '@/services/qr/render'
 import { decodeImageFile, startCameraScan, type ScanHandle } from '@/services/qr/scan'
+import { useBackClose } from '@/composables/useBackClose'
+import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -169,6 +171,8 @@ function close() {
   sync.reset()
   emit('close')
 }
+// 手机上是整页：返回键 = 关闭
+useBackClose(close)
 
 /**
  * 弹窗一打开就连上信令并待机。
@@ -191,15 +195,13 @@ onBeforeUnmount(stopCamera)
 <template>
   <Teleport to="body">
     <div class="cbx-modal__scrim" @click.self="close">
-      <div class="cbx-modal" role="dialog" aria-modal="true">
-        <header class="cbx-modal__head">
+      <div class="cbx-modal cbx-page" role="dialog" aria-modal="true">
+        <header class="cbx-modal__head cbx-page-head">
           <h3>二维码同步</h3>
-          <button class="cbx-icon-btn" aria-label="关闭" @click="close">
-            <AppIcon name="X" />
-          </button>
+          <CbxDialogClose @click="close" />
         </header>
 
-        <div class="cbx-modal__body cbx-scroll">
+        <div class="cbx-modal__body cbx-scroll cbx-page-body">
           <p v-if="!secure" class="note note--warn">
             <AppIcon name="TriangleAlert" tone="warning" /> 当前不是安全上下文，摄像头与 WebRTC
             都会被浏览器禁用。 请用 <code>npm run dev:lan</code> 启动，或把应用部署到 https

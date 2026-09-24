@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
-import { nextTick, onMounted, ref } from 'vue'
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  ref,
+  watch,
+} from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -13,8 +22,7 @@ import { MORPH_VT_NAME } from '@/constants/app'
 import { readCharaFromPng } from '@/services/io/pngCard'
 import { normalizeCard } from '@/services/io/characterCard'
 import { blobsRepo } from '@/db/repositories'
-import { useSettingsStore } from '@/stores/settings'
-import { attach, detach, move } from '@/services/depth/parallax'
+import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
 import type { Character } from '@/types/character'
 
 // name 是 App.vue 里 KeepAlive :include 白名单的匹配依据。
@@ -43,73 +51,81 @@ const morphingId = ref<string | null>(null)
 let morphing = false
 
 const morph = useMorphTarget()
-const settings = useSettingsStore()
 
 /**
- * 视差只在「桌面指针 + 未要求减少动效」时启用。
- *
- * 触屏上 pointermove 要么不触发要么语义错乱；而视差是典型的前庭刺激来源，
- * 开了「减少动效」就该彻底不做，而不是把幅度调小。
- * 只算一次：这两项在会话中途不会变。
+ * 立绘视差（见 useDepthParallax）。渲染器全局只有一个，但能同时驱动多张卡：
+ * - 桌面：鼠标移到哪张卡上，哪张卡跟着鼠标动；
+ * - 手机：**可视区内所有有深度图的卡**一起跟着手机倾斜动。IntersectionObserver 盯着每个画框，
+ *   进入可视区（含上下 100px 预备带，滚进来之前纹理已就绪）就挂、滚出去就摘；
+ *   纹理留在渲染器的缓存里，滚回来不用重新解码。
+ * 没有深度图的卡永远是静态图。
  */
-const parallaxAllowed =
-  typeof window !== 'undefined' &&
-  window.matchMedia('(hover: hover) and (pointer: fine)').matches &&
-  !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-/** 当前挂着视差的画框，点击进编辑页前要先摘掉 */
-let parallaxHost: HTMLElement | null = null
-let hoverRect: DOMRect | null = null
-
-/** 有深度图才做视差；没有就还是一张普通静态图 */
-function canParallax(c: { avatarBlobId?: string; depthBlobId?: string }) {
-  return parallaxAllowed && !!settings.settings.depth.modelId && !!c.avatarBlobId && !!c.depthBlobId
-}
+const parallax = useDepthParallax()
+const { needsPermission: tiltNeedsGrant, enableTilt } = parallax
+const scroller = ref<HTMLElement | null>(null)
+/** KeepAlive：页面被缓存（停用）期间不观察，也不许占着渲染器 */
+let pageActive = false
+let io: IntersectionObserver | null = null
 
 async function onCardEnter(c: Character, e: PointerEvent) {
-  if (!canParallax(c)) return
-  const el = e.currentTarget as HTMLElement
-  hoverRect = el.getBoundingClientRect()
-  parallaxHost = el
-  const [color, depth] = await Promise.all([
-    blobsRepo.get(c.avatarBlobId!),
-    blobsRepo.get(c.depthBlobId!),
-  ])
-  if (!color || !depth || parallaxHost !== el) return
-  // 这两个 URL 的生命周期跟着 attach 走，detach 时回收
-  const colorUrl = URL.createObjectURL(color)
-  const depthUrl = URL.createObjectURL(depth)
-  const ok = await attach({ el, colorUrl, depthUrl, aspect: 2 / 3 })
-  if (!ok || parallaxHost !== el) {
-    URL.revokeObjectURL(colorUrl)
-    URL.revokeObjectURL(depthUrl)
-    return
-  }
-  liveUrls = [colorUrl, depthUrl]
+  if (parallaxMode !== 'pointer') return
+  await parallax.activate(e.currentTarget as HTMLElement, c.avatarBlobId, c.depthBlobId)
 }
-
-let liveUrls: string[] = []
-
 function onCardMove(e: PointerEvent) {
-  if (!parallaxHost || !hoverRect) return
-  // 归一化到 -1..1，原点在画框中心
-  const nx = ((e.clientX - hoverRect.left) / hoverRect.width) * 2 - 1
-  const ny = ((e.clientY - hoverRect.top) / hoverRect.height) * 2 - 1
-  move(nx, ny)
+  parallax.pointer(e)
 }
-
 function onCardLeave() {
-  releaseParallax()
+  if (parallaxMode === 'pointer') parallax.release()
+}
+function releaseParallax() {
+  parallax.release()
 }
 
-function releaseParallax() {
-  if (!parallaxHost) return
-  detach()
-  parallaxHost = null
-  hoverRect = null
-  for (const u of liveUrls) URL.revokeObjectURL(u)
-  liveUrls = []
+function onIntersect(entries: IntersectionObserverEntry[]) {
+  for (const en of entries) {
+    const el = en.target as HTMLElement
+    const c = chars.byId(el.dataset['id'])
+    if (en.isIntersecting && c) void parallax.activate(el, c.avatarBlobId, c.depthBlobId)
+    else parallax.deactivate(el)
+  }
 }
+
+/**
+ * （重新）观察所有画框。重建而不是增量 observe：角色增删、换图、生成深度图都会走到这里，
+ * 重建后观察器会对每个画框各回调一次当前可见性，已挂的卡按新数据重挂（纹理多半命中缓存）。
+ */
+function observeCards() {
+  io?.disconnect()
+  io = null
+  releaseParallax()
+  if (parallaxMode !== 'tilt' || !pageActive || !scroller.value) return
+  io = new IntersectionObserver(onIntersect, {
+    root: scroller.value,
+    rootMargin: '100px 0px',
+    threshold: 0,
+  })
+  for (const el of scroller.value.querySelectorAll<HTMLElement>('.card__frame[data-id]')) {
+    io.observe(el)
+  }
+}
+const hasDepthCards = computed(() =>
+  chars.items.some((c) => parallax.eligible(c.avatarBlobId, c.depthBlobId)),
+)
+watch(
+  () => chars.items.map((c) => `${c.id}:${c.avatarBlobId}:${c.depthBlobId}`).join('|'),
+  () => void nextTick(observeCards),
+)
+onActivated(() => {
+  pageActive = true
+  void nextTick(observeCards)
+})
+onDeactivated(() => {
+  pageActive = false
+  io?.disconnect()
+  io = null
+  releaseParallax()
+})
+onBeforeUnmount(() => io?.disconnect())
 
 /**
  * 该不该给这张卡挂 view-transition-name。两个方向各一个来源：
@@ -221,7 +237,16 @@ async function onImport(e: Event) {
     </template>
   </AppTopbar>
 
-  <div class="cbx-scroll body">
+  <div ref="scroller" class="cbx-scroll body">
+    <!-- 只有 iOS 会出现：方向传感器必须在用户点击里申请授权 -->
+    <button
+      v-if="tiltNeedsGrant && hasDepthCards"
+      type="button"
+      class="cbx-chip tilt-grant"
+      @click="enableTilt"
+    >
+      开启重力视差
+    </button>
     <div v-if="!chars.items.length" class="cbx-empty">
       <span class="cbx-empty__icon"><AppIcon name="Characters" tone="brand" /></span>
       <span class="cbx-empty__title">还没有角色</span>
@@ -242,6 +267,7 @@ async function onImport(e: Event) {
              这样滚动和布局变化都由浏览器自己管，不需要同步坐标 -->
         <div
           class="card__frame"
+          :data-id="c.id"
           :style="morphStyle(c.id)"
           @pointerenter="onCardEnter(c, $event)"
           @pointermove="onCardMove"
@@ -277,6 +303,9 @@ async function onImport(e: Event) {
   display: flex;
   flex-direction: column;
   gap: var(--cbx-space-1);
+}
+.tilt-grant {
+  margin-bottom: var(--cbx-space-3);
 }
 .card__frame {
   position: relative;
