@@ -161,6 +161,15 @@ const texCache = new Map<string, TexPair>()
 const TEX_CACHE_MAX = 12
 /** 同时活跃视图上限。网格一屏通常 6~8 张，超出的卡保持静态图 */
 const MAX_VIEWS = 10
+/**
+ * 纹理相对显示尺寸的**超采样倍率**。
+ *
+ * 只把纹理降到「刚好显示尺寸」时，GPU 的双线性(近 1:1)采样比浏览器 `<img>` 的高质量直缩要软一档,
+ * hover 时肉眼可见变糊。超采样到 2×，GPU 双线性缩小相当于做了一次 2×2 盒式平均 → 锐利且无摩尔纹，
+ * 观感与静态 `<img>` 基本一致。桌面 hover 只有一张卡、手机可视区也就几张，2× 的显存开销可接受
+ * （单卡 ~2048×1365 上限封顶）。
+ */
+const SUPERSAMPLE = 2
 
 let raf = 0
 /** 目标与当前的归一化指针位置，各分量 -1..1 */
@@ -191,8 +200,12 @@ async function boot(): Promise<State> {
     //     NoColorSpace 的值是空串，three 的 setter 去查
     //     `ColorManagement.spaces[''].outputColorSpaceConfig` 拿到 undefined。
     //     而 mount() 的静默 catch 会把它吞掉，表现成「视差毫无反应」。
-    // DPR 封到 2：立绘卡最大也就 300px 宽，3x 屏上再往上加纯属浪费显存
-    const pixelRatio = Math.min(devicePixelRatio, 2)
+    // ⚠️ DPR 必须跟到设备真实像素（上限 3），不能封 2。
+    // 2D canvas 的位图尺寸 = cssW × pixelRatio（sizeView），封 2 的话在 DPR3 手机
+    // （或 Windows 缩放 ≥250%）上，canvas 只按 2× 出图却要铺满元素的 3× 设备像素，
+    // 被浏览器放大 ~1.5× → 发糊，而旁边静态 <img> 是原生 3× 清晰，一对比就是「加视差后变模糊」。
+    // 离屏缓冲只按当前最大的**一个**视图尺寸（ensureStageSize 取 max 非求和），提到 3 成本极小。
+    const pixelRatio = Math.min(devicePixelRatio, 3)
     renderer.setPixelRatio(pixelRatio)
 
     const scene = new THREE.Scene()
@@ -234,11 +247,6 @@ async function boot(): Promise<State> {
     booting = null
     throw e
   }
-}
-
-/** 档位化的目标高度（像素），让尺寸相近的画框共用同一份缓存纹理 */
-function bucket(px: number): number {
-  return Math.max(256, Math.ceil(px / 128) * 128)
 }
 
 /**
@@ -294,14 +302,15 @@ async function loadPair(
     t.wrapT = THREE.ClampToEdgeWrapping
     t.needsUpdate = true
   }
-  // ⚠️ 摩尔纹/锯齿的根因：卡片远小于立绘原图，是重度**缩小**采样。MSAA 只抗几何边缘，
-  // 管不了纹理缩小；只用 LinearFilter(无 mipmap) 会在发丝、格纹这类高频细节上欠采样 →
-  // 摩尔纹 + 闪烁锯齿。所以颜色贴图开三线性 mipmap + 各向异性
-  // （位移后近断崖处是斜着采样，各向异性能进一步压住拉丝锯齿）。
-  colorTex.minFilter = THREE.LinearMipmapLinearFilter
+  // ⚠️ 颜色贴图用**纯双线性、不生成 mipmap**。
+  // 曾经用三线性 mipmap 是因为纹理还是 1024+ 原图、显示只有 ~300px，是重度缩小采样，
+  // mipmap 能压摩尔纹。但现在纹理在 loadPair 前已按**显示设备像素**降采样（见 mount 的 colorH），
+  // 纹理 ≈ 显示尺寸、几乎 1:1，此时三线性 mipmap 会在 mip0/mip1 之间混合，把画面糊掉一档 ——
+  // 这正是「鼠标 hover 后明显变模糊」的直接原因（静态 <img> 是浏览器把原图高质量直缩，更锐）。
+  // 近 1:1 的双线性最接近浏览器 <img> 的观感；降采样交给 createImageBitmap 的 high 质量档做。
+  colorTex.minFilter = THREE.LinearFilter
   colorTex.magFilter = THREE.LinearFilter
-  colorTex.generateMipmaps = true
-  colorTex.anisotropy = s.renderer.capabilities.getMaxAnisotropy()
+  colorTex.generateMipmaps = false
   // 深度图：着色器里已做 9 点模糊，uTexel 按它的实际分辨率算，保持线性、不生成 mipmap
   depthTex.minFilter = THREE.LinearFilter
   depthTex.generateMipmaps = false
@@ -435,7 +444,17 @@ export async function mount(args: MountArgs): Promise<boolean> {
   try {
     const s = await boot()
     if (pending.get(el) !== token) return false
-    const colorH = bucket(el.clientHeight * s.pixelRatio * 1.25)
+    // 纹理高度按**显示设备像素**取（含 OVERSCAN 的一点点余量），不再乘 1.25 再 128-向上取整 ——
+    // 纹理高度 = 显示设备像素 × OVERSCAN × 2 倍超采样（见 SUPERSAMPLE），配双线性无 mipmap = 锐利无糊。
+    // 仍按 64 档缓存（同尺寸卡共用一份）。上限 1280：桌面单卡 hover 约 900px 用不到，主要给手机
+    // 可视区最多 10 张卡的显存兜底（手机 ~800px 显示 ×2 ≈ 1600，夹到 1280 = ~1.6× 超采样，仍锐利）。
+    const colorH = Math.min(
+      1280,
+      Math.max(
+        256,
+        Math.round((el.clientHeight * s.pixelRatio * OVERSCAN * SUPERSAMPLE) / 64) * 64,
+      ),
+    )
     const tex = await loadPair(s, `${args.key}@${colorH}`, args.color, args.depth, colorH)
     if (pending.get(el) !== token || state !== s) return false
 
