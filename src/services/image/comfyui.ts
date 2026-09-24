@@ -140,7 +140,11 @@ function buildGraph(
       },
     },
     '9': { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['3', 0] } },
-    '10': { class_type: 'SaveImage', inputs: { images: ['9', 0], filename_prefix: '幕间_生成' } },
+    // ⚠️ 前缀必须是纯 ASCII：ComfyUI 的 /view 会把文件名原样写进 Content-Disposition 响应头，
+    // 打包后的 App 走 plugin-http，它用 `new Headers()` 重建响应头，而 Headers 只收 ≤U+00FF 的
+    // ByteString —— 「幕间_生成」会让它抛 TypeError，图其实已经生成、却下载不回来
+    // （实测：exe 里报「无法连接 ComfyUI」，ComfyUI 输出目录里却有图）。浏览器原生 fetch 不受影响。
+    '10': { class_type: 'SaveImage', inputs: { images: ['9', 0], filename_prefix: 'mujian_gen' } },
   }
   if (uploadedNames.length > 0) {
     // 参考图编辑：每张参考图一个 LoadImage，接进编码器的 images.image_N；vae 也接进去编码 reference_latents
@@ -315,7 +319,9 @@ export async function generateViaComfyUI(args: {
     if (guard.stalled)
       throw new ProviderError('timeout', '图片生成超时，请确认 ComfyUI 正在运行且未卡住')
     if (signal.aborted) throw new ProviderError('aborted', '已取消生成')
-    if (error instanceof TypeError)
+    // 浏览器 fetch 连不上时抛的是 TypeError（Failed to fetch）。但其它 TypeError 不能一概翻译成
+    // 「无法连接」—— 那会把真正的原因藏掉（曾把响应头 ByteString 错误误报成连不上）
+    if (error instanceof TypeError && !/ByteString|Headers|header/i.test(error.message))
       throw new Error(
         '无法连接 ComfyUI，请检查服务器地址、是否已启动，以及跨域（--enable-cors-header）设置',
       )
