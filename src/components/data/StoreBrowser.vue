@@ -234,7 +234,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div class="dtblwrap cbx-scroll">
+    <div class="dtblwrap">
       <table class="dtbl">
         <thead>
           <tr>
@@ -259,19 +259,20 @@ onBeforeUnmount(() => {
                 <BlobThumb :blob-id="r.key" />
               </button>
             </td>
-            <td class="dtbl__clip" :title="r.key">{{ r.title }}</td>
+            <td class="dtbl__clip dcell--title" :title="r.key">{{ r.title }}</td>
             <td
               v-for="(c, i) in columns[active]"
               :key="c.label"
+              :data-label="c.label"
               :class="{ dnum: typeof r.cols[i] === 'number' }"
             >
               {{ fmtCol(active, i, r.cols[i]) }}
             </td>
-            <td v-if="active === 'blobs'">
+            <td v-if="active === 'blobs'" data-label="引用">
               <span v-if="refSet?.has(r.key)" class="tag">被引用</span>
               <span v-else class="tag tag--free">未引用</span>
             </td>
-            <td>{{ fmtTime(r.at) }}</td>
+            <td data-label="更新">{{ fmtTime(r.at) }}</td>
             <td class="ops">
               <button
                 v-if="active !== 'blobs'"
@@ -402,6 +403,14 @@ onBeforeUnmount(() => {
 }
 .danger {
   color: var(--cbx-error);
+}
+@media (max-width: 767px) {
+  .stores__btn {
+    min-height: 36px;
+  }
+  .ops .cbx-btn {
+    min-height: var(--cbx-tap-min);
+  }
 }
 
 .rowdetail {

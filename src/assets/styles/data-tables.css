@@ -6,7 +6,13 @@
  */
 
 .dtblwrap {
+  /* ⚠️ 只横向滚。别套 .cbx-scroll：那是页面级滚动容器（overflow-y:auto + overscroll-behavior:contain），
+     套在表格外框上，滚轮 / 手指停在表格上时纵向滚动被外框截住、又不交给页面 ——
+     桌面表现为「在表格上滚不动」，手机上表格滑到头就卡住。
+     overflow-y:hidden 不是可滚容器，纵向滚动照常链到页面；contain 只管横向，防止横滑带出返回手势。 */
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   border: 1px solid var(--cbx-border);
   border-radius: var(--cbx-radius-md);
 }
@@ -94,12 +100,94 @@
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-placeholder);
 }
+/* 手机：表格改成「一行一张卡」—— 横着拖一张 500px 宽的表在 375px 屏上既看不全又容易误触。
+   每个单元格带 data-label（= 表头文字），卡片里显示成「标签 值」的小块自动折行；
+   .dcell--title 占满一行放最前（名称），.dcell--wide 占满一行放最后（正文 / 长文本），
+   .ops 放最底右对齐。表头对读屏保留、视觉隐藏。 */
 @media (max-width: 767px) {
-  .dtbl {
-    min-width: 480px;
+  .dtblwrap {
+    overflow-x: visible;
+    overflow-y: visible;
   }
+  .dtbl {
+    display: block;
+    min-width: 0;
+  }
+  .dtbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .dtbl tbody {
+    display: block;
+  }
+  .dtbl tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--cbx-space-1) var(--cbx-space-3);
+    padding: var(--cbx-space-3);
+    border-bottom: 1px solid var(--cbx-border);
+  }
+  .dtbl tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .dtbl th,
+  .dtbl td {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--cbx-space-1);
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    font-size: var(--cbx-fs-xs);
+    color: var(--cbx-text-secondary);
+  }
+  .dtbl td[data-label]::before {
+    content: attr(data-label);
+    color: var(--cbx-text-tertiary);
+  }
+  .dnum {
+    text-align: left;
+  }
+  .dtbl td.dzero {
+    color: var(--cbx-text-placeholder);
+  }
+  .dtbl .dcell--title {
+    order: -1;
+    flex-basis: 100%;
+    font-size: var(--cbx-fs-sm);
+    font-weight: var(--cbx-fw-medium);
+    color: var(--cbx-text);
+  }
+  .dtbl .dcell--wide {
+    order: 1;
+    flex-basis: 100%;
+    font-size: var(--cbx-fs-sm);
+    color: var(--cbx-text);
+    line-height: 1.6;
+  }
+  /* 长文本在卡片里最多显示 3 行，完整内容点开看 */
   .dtbl__clip {
-    max-width: 160px;
+    display: -webkit-box;
+    max-width: none;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+  .dtbl .dcell--title.dtbl__clip {
+    -webkit-line-clamp: 1;
+  }
+  .dtbl .ops {
+    order: 2;
+    flex-basis: 100%;
+    justify-content: flex-end;
+    gap: var(--cbx-space-2);
   }
   .dpager .cbx-btn {
     min-height: var(--cbx-tap-min);

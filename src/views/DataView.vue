@@ -11,6 +11,7 @@ import AppIcon from '@/components/icons/AppIcon.vue'
  * 性能：展开才挂载、收起即销毁；各表一律游标分页，无全量加载路径。
  */
 import { onMounted, ref } from 'vue'
+import { DRAWER_MQ, useMediaQuery } from '@/composables/useDrawerSwipe'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import SyncDialog from '@/components/data/SyncDialog.vue'
 import ChatDataPanel from '@/components/data/ChatDataPanel.vue'
@@ -25,6 +26,7 @@ import { APP_NAME } from '@/constants/app'
 import type { ChatMeta } from '@/types/chat'
 
 const chats = useChatsStore()
+const isMobile = useMediaQuery(DRAWER_MQ)
 const worlds = useWorldsStore()
 const toast = useToast()
 
@@ -174,8 +176,8 @@ async function doImport(e: Event) {
           </div>
 
           <template v-else>
-            <!-- 表格必须自己横向滚，绝不能让 body 横向溢出 —— 窄屏上列数放不下 -->
-            <div class="tablewrap cbx-scroll">
+            <!-- 桌面：表格自己横向滚，绝不能让 body 横向溢出；手机：每行变成一张卡（见样式） -->
+            <div class="tablewrap">
               <table class="tbl">
                 <thead>
                   <tr>
@@ -217,16 +219,22 @@ async function doImport(e: Event) {
                           </span>
                         </div>
                       </td>
-                      <td class="num">{{ c.messageCount }}</td>
-                      <td class="num" :class="{ zero: !rowOf(c).vars }">{{ rowOf(c).vars }}</td>
-                      <td class="num" :class="{ zero: !rowOf(c).chunks }">
+                      <td class="num" data-label="消息">{{ c.messageCount }}</td>
+                      <td class="num" data-label="变量" :class="{ zero: !rowOf(c).vars }">
+                        {{ rowOf(c).vars }}
+                      </td>
+                      <td class="num" data-label="向量块" :class="{ zero: !rowOf(c).chunks }">
                         {{ rowOf(c).chunks }}
                       </td>
-                      <td class="num" :class="{ zero: !rowOf(c).card }">
+                      <td class="num" data-label="状态卡" :class="{ zero: !rowOf(c).card }">
                         {{ rowOf(c).card ? `${rowOf(c).card} 字` : '—' }}
                       </td>
-                      <td class="num" :class="{ zero: !rowOf(c).timed }">{{ rowOf(c).timed }}</td>
-                      <td :class="{ zero: !rowOf(c).book }">{{ rowOf(c).book || '—' }}</td>
+                      <td class="num" data-label="定时" :class="{ zero: !rowOf(c).timed }">
+                        {{ rowOf(c).timed }}
+                      </td>
+                      <td class="book" data-label="世界书" :class="{ zero: !rowOf(c).book }">
+                        {{ rowOf(c).book || '—' }}
+                      </td>
                     </tr>
                     <!-- 展开行：v-if 保证收起即销毁（数据 tab 的缓存与分页状态一起释放） -->
                     <tr v-if="expanded.includes(c.id)" class="exprow">
@@ -242,7 +250,11 @@ async function doImport(e: Event) {
                 </tbody>
               </table>
             </div>
-            <p class="cbx-field__hint">点任意一行展开子表格；再点一次收起。可同时展开多行。</p>
+            <p class="cbx-field__hint">
+              点任意一{{ isMobile ? '项' : '行' }}展开子表格；再点一次收起。可同时展开多{{
+                isMobile ? '项' : '行'
+              }}。
+            </p>
           </template>
         </section>
 
@@ -284,9 +296,13 @@ async function doImport(e: Event) {
   gap: var(--cbx-space-3);
 }
 
-/* 表格自己横向滚，绝不让 body 溢出 —— 窄屏上 7 列放不下 */
+/* 表格自己横向滚，绝不让 body 溢出。
+   ⚠️ 只横向滚、别套 .cbx-scroll（页面级容器，自带 overscroll-behavior:contain）：
+   那会让滚轮 / 手指停在表格上时纵向滚动被截住又不交给页面，表现为「在表格上滚不动」。 */
 .tablewrap {
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   border: 1px solid var(--cbx-border);
   border-radius: var(--cbx-radius-md);
 }
@@ -409,43 +425,99 @@ async function doImport(e: Event) {
   font-variant-numeric: tabular-nums;
 }
 
+/* 手机：会话表改成「一行一张卡」。7 列的表在 375px 屏上只露得出第一列，横拖着看既累又容易误触展开。
+   卡片第一行是会话名，下面是「消息 12 · 变量 3 …」的小块自动折行；展开的子面板占满卡片宽度。 */
 @media (max-width: 767px) {
+  .body {
+    padding: var(--cbx-space-3);
+  }
   .tablewrap {
-    /* 窄屏限高，表格内部纵向也能滚，不至于把展开区推到屏幕外 */
-    max-height: 60vh;
+    overflow: visible;
   }
-  /* 窄屏下名字列不能再吃满宽度：640px 的表在 375px 屏上只露得出第一列，
-     右边的数字列一个都看不见，用户根本不知道还能横滑。收窄它让「消息」列
-     探出半个头，横向可滚才有视觉暗示。 */
+  .tbl {
+    display: block;
+    min-width: 0;
+  }
+  .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tbl tbody {
+    display: block;
+  }
+  .tbl__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--cbx-space-1) var(--cbx-space-3);
+    padding: var(--cbx-space-3);
+    border-bottom: 1px solid var(--cbx-border);
+  }
+  .tbl tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .tbl__row > td {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--cbx-space-1);
+    padding: 0;
+    border: 0;
+    font-size: var(--cbx-fs-xs);
+    color: var(--cbx-text-secondary);
+  }
+  .tbl__row > td[data-label]::before {
+    content: attr(data-label);
+    color: var(--cbx-text-tertiary);
+  }
+  .tbl__row > td.zero {
+    color: var(--cbx-text-placeholder);
+  }
+  .num {
+    text-align: left;
+  }
   .tbl__name {
+    flex-basis: 100%;
     width: auto;
-    /* 跟着横滑走会丢失「这是哪一行」，钉住首列。
-       钉住的格子必须自带不透明背景 + z-index，否则下面滚过去的数字会透上来。 */
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: var(--cbx-bg);
+    min-width: 0;
+    font-size: var(--cbx-fs-sm);
+    color: var(--cbx-text);
   }
-  .tbl__row--on .tbl__name {
-    /* 选中行钉住的首列要跟着变色，否则横滑时首列是白的、行是蓝的 */
-    background: var(--cbx-brand-light);
-  }
-  .tbl thead .tbl__name {
-    /* 表头首列两个方向都钉住，层级要压过只钉一个方向的邻居 */
-    z-index: 2;
+  .nm {
+    width: 100%;
+    min-width: 0;
+    min-height: 28px;
   }
   .tbl__title {
-    max-width: 120px;
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    font-weight: var(--cbx-fw-medium);
+  }
+  .book {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .exprow {
+    display: block;
+    border-bottom: 1px solid var(--cbx-border);
   }
   .exprow > td {
-    position: sticky;
-    left: 0;
+    display: block;
+    padding: var(--cbx-space-3);
+    border: 0;
   }
   .usage__quota,
   .usage__label {
     display: none;
   }
   .acts .cbx-btn {
+    flex: 1 1 140px;
     min-height: var(--cbx-tap-min);
   }
 }

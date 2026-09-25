@@ -50,11 +50,11 @@ function newer() {
 
 function preview(m: ChatMessage) {
   const text = m.mes.replace(/\s+/g, ' ').trim()
-  return text.length > 60 ? `${text.slice(0, 60)}…` : (text || '（空）')
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text || '（空）'
 }
 function who(m: ChatMessage) {
   if (m.is_system) return '系统'
-  return m.is_user ? '你' : (m.name || '？')
+  return m.is_user ? '你' : m.name || '？'
 }
 function timeOf(m: ChatMessage) {
   const d = new Date(m.send_date)
@@ -79,7 +79,7 @@ onMounted(() => void load(undefined))
 
 <template>
   <div class="msgtab">
-    <div class="dtblwrap cbx-scroll">
+    <div class="dtblwrap">
       <table class="dtbl">
         <thead>
           <tr>
@@ -99,14 +99,18 @@ onMounted(() => void load(undefined))
             :class="{ 'dtbl__row--on': selected?.id === m.id }"
             @click="selected = selected?.id === m.id ? null : m"
           >
-            <td class="dnum">{{ m.seq }}</td>
-            <td>{{ who(m) }}</td>
-            <td class="dtbl__clip" :title="m.mes">{{ preview(m) }}</td>
-            <td class="dnum" :class="{ dzero: !m.images?.length }">{{ m.images?.length ?? 0 }}</td>
-            <td class="dnum" :class="{ dzero: (m.swipes?.length ?? 0) < 2 }">
-              {{ (m.swipes?.length ?? 0) < 2 ? '—' : `${(m.swipe_id ?? 0) + 1}/${m.swipes!.length}` }}
+            <td class="dnum" data-label="seq">{{ m.seq }}</td>
+            <td data-label="角色">{{ who(m) }}</td>
+            <td class="dtbl__clip dcell--wide" :title="m.mes">{{ preview(m) }}</td>
+            <td class="dnum" data-label="图片" :class="{ dzero: !m.images?.length }">
+              {{ m.images?.length ?? 0 }}
             </td>
-            <td>{{ timeOf(m) }}</td>
+            <td class="dnum" data-label="候选" :class="{ dzero: (m.swipes?.length ?? 0) < 2 }">
+              {{
+                (m.swipes?.length ?? 0) < 2 ? '—' : `${(m.swipe_id ?? 0) + 1}/${m.swipes!.length}`
+              }}
+            </td>
+            <td data-label="时间">{{ timeOf(m) }}</td>
           </tr>
           <tr v-if="!rows.length && !loading">
             <td colspan="6" class="dzero">还没有消息</td>
@@ -126,16 +130,12 @@ onMounted(() => void load(undefined))
         >
           <AppIcon name="ArrowLeft" /> 更新
         </button>
-        <button
-          class="cbx-btn cbx-btn--ghost sm"
-          :disabled="!hasOlder || loading"
-          @click="older"
-        >
+        <button class="cbx-btn cbx-btn--ghost sm" :disabled="!hasOlder || loading" @click="older">
           更早 <AppIcon name="ArrowRight" />
         </button>
       </div>
     </div>
-    <pre v-if="selected" class="msgdetail cbx-scroll">{{ detailJson }}</pre>
+    <pre v-if="selected" class="msgdetail">{{ detailJson }}</pre>
   </div>
 </template>
 

@@ -192,7 +192,11 @@ async function clearMessages() {
 }
 
 async function removeChat() {
-  if (!(await confirmDialog({ text: `删除会话「${props.chat.title}」及其全部数据？此操作不可撤销。` })))
+  if (
+    !(await confirmDialog({
+      text: `删除会话「${props.chat.title}」及其全部数据？此操作不可撤销。`,
+    }))
+  )
     return
   await chats.removeChat(props.chat.id)
   emit('refresh')
@@ -262,10 +266,14 @@ async function removeChat() {
         <div v-for="(r, i) in varRows" :key="i" class="varrow">
           <input v-model="r.key" class="cbx-input varrow__k" placeholder="变量名" />
           <input v-model="r.value" class="cbx-input varrow__v" placeholder="值" />
-          <button class="cbx-icon-btn tiny" title="删除" @click="removeVar(i)"><AppIcon name="X" tone="danger" /></button>
+          <button class="cbx-icon-btn tiny" title="删除" @click="removeVar(i)">
+            <AppIcon name="X" tone="danger" />
+          </button>
         </div>
         <div class="acts">
-          <button class="cbx-btn cbx-btn--ghost sm" @click="addVar"><AppIcon name="Plus" /> 添加变量</button>
+          <button class="cbx-btn cbx-btn--ghost sm" @click="addVar">
+            <AppIcon name="Plus" /> 添加变量
+          </button>
           <button class="cbx-btn cbx-btn--soft sm" @click="saveVars">保存变量</button>
         </div>
       </div>
@@ -477,6 +485,17 @@ async function removeChat() {
   color: var(--cbx-error);
 }
 @media (max-width: 767px) {
+  /* 子表签多，窄屏横排一行可左右滑，不折成两三行把内容往下挤 */
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .tabs__btn {
+    flex-shrink: 0;
+    min-height: 36px;
+  }
   .varrow__k {
     width: 110px;
   }

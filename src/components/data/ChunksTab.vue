@@ -49,10 +49,10 @@ onMounted(() => void load(undefined))
 <template>
   <div class="chunktab">
     <p class="cbx-field__hint">
-      向量块是从消息推导的派生数据（检索用），清除后会在后续对话中自动重建。
-      共 {{ chunkCount }} 块。
+      向量块是从消息推导的派生数据（检索用），清除后会在后续对话中自动重建。 共
+      {{ chunkCount }} 块。
     </p>
-    <div class="dtblwrap cbx-scroll">
+    <div class="dtblwrap">
       <table class="dtbl">
         <thead>
           <tr>
@@ -67,13 +67,13 @@ onMounted(() => void load(undefined))
         </thead>
         <tbody>
           <tr v-for="(c, i) in rows" :key="`${c.kindRank}-${c.ord}`">
-            <td>{{ kindLabel(c.kindRank) }}</td>
-            <td class="dnum">{{ c.ord }}</td>
-            <td class="dnum">{{ c.startSeq }}–{{ c.endSeq }}</td>
-            <td class="dnum">{{ c.srcCount }}</td>
-            <td class="dnum">{{ c.dims }}</td>
-            <td class="dnum">{{ (c.bytes / 1024).toFixed(1) }}KB</td>
-            <td class="dtbl__clip" :title="c.textPreview">{{ c.textPreview }}</td>
+            <td data-label="类型">{{ kindLabel(c.kindRank) }}</td>
+            <td class="dnum" data-label="ord">{{ c.ord }}</td>
+            <td class="dnum" data-label="seq">{{ c.startSeq }}–{{ c.endSeq }}</td>
+            <td class="dnum" data-label="覆盖">{{ c.srcCount }}</td>
+            <td class="dnum" data-label="维度">{{ c.dims }}</td>
+            <td class="dnum" data-label="大小">{{ (c.bytes / 1024).toFixed(1) }}KB</td>
+            <td class="dtbl__clip dcell--wide" :title="c.textPreview">{{ c.textPreview }}</td>
           </tr>
           <tr v-if="!rows.length && !loading">
             <td colspan="7" class="dzero">还没有向量块</td>
@@ -84,7 +84,11 @@ onMounted(() => void load(undefined))
     <div class="dpager">
       <span class="dpager__info">第 {{ pageNo }} / {{ totalPages }} 页</span>
       <div class="dpager__acts">
-        <button class="cbx-btn cbx-btn--ghost sm" :disabled="stack.length <= 1 || loading" @click="prev">
+        <button
+          class="cbx-btn cbx-btn--ghost sm"
+          :disabled="stack.length <= 1 || loading"
+          @click="prev"
+        >
           <AppIcon name="ArrowLeft" /> 上一页
         </button>
         <button class="cbx-btn cbx-btn--ghost sm" :disabled="!hasMore || loading" @click="next">

@@ -56,10 +56,10 @@ onMounted(async () => {
 <template>
   <div class="imgtab">
     <p class="cbx-field__hint">
-      本会话消息引用的图片（含强制头像）。图片被消息引用着，不能单独删除；
-      换封面 / 删消息后产生的孤儿可在下方「其他数据 · 图片」里清理。
+      本会话消息引用的图片（含强制头像）。图片被消息引用着，不能单独删除； 换封面 /
+      删消息后产生的孤儿可在下方「其他数据 · 图片」里清理。
     </p>
-    <div class="dtblwrap cbx-scroll">
+    <div class="dtblwrap">
       <table class="dtbl">
         <thead>
           <tr>
@@ -84,11 +84,11 @@ onMounted(async () => {
                 <BlobThumb :blob-id="r.id" />
               </button>
             </td>
-            <td>{{ r.mime }}</td>
-            <td class="dnum">{{ (r.size / 1024).toFixed(1) }}KB</td>
-            <td class="dnum">{{ r.refs }}</td>
-            <td>{{ fmtTime(r.createdAt) }}</td>
-            <td class="dtbl__clip dzero" :title="r.id">{{ r.id }}</td>
+            <td data-label="类型">{{ r.mime }}</td>
+            <td class="dnum" data-label="大小">{{ (r.size / 1024).toFixed(1) }}KB</td>
+            <td class="dnum" data-label="引用">{{ r.refs }}</td>
+            <td data-label="时间">{{ fmtTime(r.createdAt) }}</td>
+            <td class="dtbl__clip dzero dcell--wide" :title="r.id">{{ r.id }}</td>
           </tr>
           <tr v-if="!rows.length && !loading">
             <td colspan="6" class="dzero">本会话没有引用图片</td>
