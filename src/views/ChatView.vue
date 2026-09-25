@@ -10,7 +10,7 @@ import ChatComposer from '@/components/chat/ChatComposer.vue'
 import PromptPreview from '@/components/chat/PromptPreview.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
 import ImageViewer, { type ViewerItem } from '@/components/chat/ImageViewer.vue'
-import { dialogueImagePrompt } from '@/services/image/prompts'
+import { dialogueImagePrompt, pickSceneCharacters } from '@/services/image/prompts'
 import { dialogueImagePromptViaLLM } from '@/services/image/promptFromLLM'
 import type { CharacterImageReference, GeneratedImage } from '@/types/image'
 import type { ChatMessage } from '@/types/chat'
@@ -51,8 +51,10 @@ function openImage(messageId?: string) {
     ? rows.find((m) => m.id === messageId)
     : [...rows].reverse().find((m) => !m.is_system && !m.exclude && m.mes.trim())
   if (!target || target.is_system || target.exclude || !target.mes.trim()) return
+  // 群聊只带这一幕真正出场的人（发言者 + 被点名的成员，最多 3 张参考图），
+  // 而不是全体成员 —— 否则不在场的人也被画进来、面孔互相串，6GB 显存还容易 OOM
   const members = isGroup.value
-    ? groupMembers.value
+    ? pickSceneCharacters(target, rows, groupMembers.value)
     : [chars.byId(chats.current.characterId)].filter((c) => !!c)
   const references = members.map((character) => ({
     characterId: character.id,
@@ -198,6 +200,12 @@ const groupMembers = computed(() =>
   (group.value?.members ?? [])
     .map((id) => chars.byId(id))
     .filter((c): c is NonNullable<typeof c> => !!c),
+)
+/** 输入框「@ 提及」候选：仅群聊 */
+const mentionMembers = computed(() =>
+  isGroup.value
+    ? groupMembers.value.map((c) => ({ id: c.id, name: c.data.name, avatarBlobId: c.avatarBlobId }))
+    : undefined,
 )
 /** 手动策略时显示点名条 */
 const showSpeakerTray = computed(() => isGroup.value && group.value?.activation_strategy === 2)
@@ -458,6 +466,7 @@ async function newChat() {
   <ChatComposer
     :busy="gen.busy"
     :send-on-enter="settings.settings.chat.sendOnEnter"
+    :members="mentionMembers"
     @send="onSend"
     @stop="gen.stop()"
   />

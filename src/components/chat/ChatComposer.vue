@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Send, Square } from '@/components/icons'
+import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 
-const props = defineProps<{ busy: boolean; sendOnEnter: boolean }>()
+export interface MentionMember {
+  id: string
+  name: string
+  avatarBlobId?: string | undefined
+}
+
+const props = defineProps<{
+  busy: boolean
+  sendOnEnter: boolean
+  /** 群聊成员：传了才启用「@ 提及」选择列表 */
+  members?: MentionMember[] | undefined
+}>()
 const emit = defineEmits<{ send: [text: string]; stop: [] }>()
 
 const text = ref('')
@@ -65,10 +77,123 @@ function onAction() {
   else submit()
 }
 
+// ── @ 提及 ─────────────────────────────────────────────
+// 光标前是「@ + 若干非空白字符」就弹出成员列表，按名字过滤；选中后把 `@查询` 换成 `@名字 `。
+// 发送后 activation.ts 的 explicitMentions 按同一规则认出被 @ 的人，让他们优先发言。
+const mention = ref<{ at: number; query: string } | null>(null)
+const mentionIndex = ref(0)
+const mentionList = ref<HTMLElement | null>(null)
+/** 按 Esc 关掉的那个 @ 的位置：光标还停在它后面时不再自动弹出 */
+let dismissedAt = -1
+
+const mentionOptions = computed(() => {
+  const m = mention.value
+  const members = props.members ?? []
+  if (!m || !members.length) return []
+  const q = m.query.toLowerCase()
+  if (!q) return members
+  const hit = members.filter((c) => c.name.toLowerCase().includes(q))
+  // 名字以查询开头的排前面
+  return [
+    ...hit.filter((c) => c.name.toLowerCase().startsWith(q)),
+    ...hit.filter((c) => !c.name.toLowerCase().startsWith(q)),
+  ]
+})
+const mentionOpen = computed(() => mentionOptions.value.length > 0)
+
+function closeMention() {
+  mention.value = null
+}
+
+function updateMention() {
+  const el = ta.value
+  if (!el || !props.members?.length || el.selectionStart !== el.selectionEnd) {
+    closeMention()
+    return
+  }
+  const caret = el.selectionStart
+  // @ 前面不能紧挨字母数字（避开邮箱 a@b.com）；查询里不含空白与 @
+  const m = /(^|[^A-Za-z0-9_])@([^\s@]{0,24})$/.exec(el.value.slice(0, caret))
+  if (!m) {
+    dismissedAt = -1
+    closeMention()
+    return
+  }
+  const query = m[2] ?? ''
+  const at = caret - query.length - 1
+  if (at === dismissedAt) {
+    closeMention()
+    return
+  }
+  if (mention.value?.at !== at || mention.value.query !== query) mentionIndex.value = 0
+  mention.value = { at, query }
+}
+
+/** 方向键上下由列表接管，松开时不能重算（会把高亮重置回第一项） */
+function onKeyup(e: KeyboardEvent) {
+  if (mentionOpen.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return
+  updateMention()
+}
+
+function pickMention(member: MentionMember) {
+  const el = ta.value
+  const m = mention.value
+  if (!el || !m) return
+  const end = el.selectionStart
+  const insert = `@${member.name} `
+  text.value = el.value.slice(0, m.at) + insert + el.value.slice(end)
+  closeMention()
+  const caret = m.at + insert.length
+  void nextTick(() => {
+    el.focus()
+    el.setSelectionRange(caret, caret)
+  })
+}
+
+function moveMention(step: number) {
+  const n = mentionOptions.value.length
+  mentionIndex.value = (mentionIndex.value + step + n) % n
+  void nextTick(() =>
+    mentionList.value
+      ?.querySelector<HTMLElement>(`[data-index="${mentionIndex.value}"]`)
+      ?.scrollIntoView({ block: 'nearest' }),
+  )
+}
+
+/** 列表打开时接管方向键 / Enter / Tab / Esc；返回 true 表示已处理 */
+function onMentionKey(e: KeyboardEvent): boolean {
+  if (!mentionOpen.value) return false
+  switch (e.key) {
+    case 'ArrowDown':
+      moveMention(1)
+      break
+    case 'ArrowUp':
+      moveMention(-1)
+      break
+    case 'Enter':
+    case 'Tab': {
+      const pick = mentionOptions.value[mentionIndex.value]
+      if (!pick) return false
+      pickMention(pick)
+      break
+    }
+    case 'Escape':
+      dismissedAt = mention.value?.at ?? -1
+      closeMention()
+      break
+    default:
+      return false
+  }
+  e.preventDefault()
+  e.stopPropagation()
+  return true
+}
+
 function onKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Enter') return
   // 输入法组词期间不能拦截，否则中文候选选词会误触发送
   if (e.isComposing) return
+  if (onMentionKey(e)) return
+  if (e.key !== 'Enter') return
   if (e.shiftKey || e.ctrlKey || e.metaKey) return
   // 移动端 Enter 一律换行（没有 Shift 键可用）
   if (!props.sendOnEnter || window.matchMedia('(max-width: 767px)').matches) return
@@ -80,14 +205,48 @@ function onKeydown(e: KeyboardEvent) {
 <template>
   <div class="composer">
     <div class="inner">
+      <!-- @ 提及成员列表。pointerdown.prevent：点选时输入框不失焦，手机键盘不收起 -->
+      <ul
+        v-if="mentionOpen"
+        id="composer-mention-list"
+        ref="mentionList"
+        class="mention"
+        role="listbox"
+        aria-label="选择要提及的成员"
+        @pointerdown.prevent
+      >
+        <li
+          v-for="(c, i) in mentionOptions"
+          :id="`composer-mention-${i}`"
+          :key="c.id"
+          :data-index="i"
+          class="mention__item"
+          :class="{ 'mention__item--active': i === mentionIndex }"
+          role="option"
+          :aria-selected="i === mentionIndex"
+          @pointerenter="mentionIndex = i"
+          @click="pickMention(c)"
+        >
+          <CbxAvatar :blob-id="c.avatarBlobId" :name="c.name" size="sm" />
+          <span class="mention__name">{{ c.name }}</span>
+        </li>
+      </ul>
       <textarea
         ref="ta"
         v-model="text"
         class="cbx-textarea cbx-textarea--auto field"
         rows="1"
         aria-label="消息内容"
-        placeholder="说点什么…"
+        :placeholder="members?.length ? '说点什么…输入 @ 提及成员' : '说点什么…'"
+        aria-autocomplete="list"
+        :aria-expanded="mentionOpen"
+        :aria-controls="mentionOpen ? 'composer-mention-list' : undefined"
+        :aria-activedescendant="mentionOpen ? `composer-mention-${mentionIndex}` : undefined"
         @keydown="onKeydown"
+        @keyup="onKeyup"
+        @input="updateMention"
+        @click="updateMention"
+        @blur="closeMention"
       />
       <div class="composer-footer">
         <span class="composer-hint" :class="{ 'composer-hint--busy': busy }" role="status">
@@ -145,6 +304,7 @@ function onKeydown(e: KeyboardEvent) {
   background: linear-gradient(to bottom, transparent, var(--cbx-bg) 35%);
 }
 .inner {
+  position: relative;
   display: flex;
   flex-direction: column;
   max-width: var(--cbx-read-w);
@@ -163,6 +323,44 @@ function onKeydown(e: KeyboardEvent) {
   box-shadow:
     0 0 0 3px var(--cbx-brand-subtle),
     var(--cbx-shadow-sm);
+}
+.mention {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + var(--cbx-space-2));
+  z-index: 20;
+  width: min(280px, 100%);
+  max-height: 264px;
+  margin: 0;
+  padding: var(--cbx-space-1);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-lg);
+  background: var(--cbx-bg);
+  box-shadow: var(--cbx-shadow-md);
+}
+.mention__item {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-3);
+  min-height: 44px;
+  padding: var(--cbx-space-1) var(--cbx-space-3);
+  border-radius: var(--cbx-radius-md);
+  cursor: pointer;
+  user-select: none;
+}
+.mention__item--active {
+  background: var(--cbx-brand-light);
+}
+.mention__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text);
 }
 .field {
   min-height: 48px;
@@ -308,6 +506,10 @@ function onKeydown(e: KeyboardEvent) {
   .inner {
     padding: var(--cbx-space-2);
     border-radius: var(--cbx-radius-lg);
+  }
+  .mention {
+    width: 100%;
+    max-height: 40vh;
   }
   .desktop-hint {
     display: none;

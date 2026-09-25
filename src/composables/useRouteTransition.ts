@@ -2,6 +2,7 @@ import { nextTick, onBeforeUnmount } from 'vue'
 import type { RouteLocationNormalized, Router } from 'vue-router'
 import { viewTransitionActive } from './useViewTransition'
 import { DRAWER_MQ } from './useDrawerSwipe'
+import { revalidateInert } from '@/utils/inert'
 
 /**
  * 全部路由切换的过渡：离场 → 换页 → 入场，作用在 `.main` 内容区上。
@@ -57,7 +58,10 @@ const IN: Record<Kind, Keyframe[]> = {
   ],
 }
 
-function depthOf(r: RouteLocationNormalized): number {
+export function depthOf(r: Pick<RouteLocationNormalized, 'meta' | 'params'>): number {
+  // 手机布局：聊天 / 设置是底部标签页之上的二级页（见 router/layout）
+  if (r.meta.mobileDepth !== undefined && window.matchMedia(DRAWER_MQ).matches)
+    return r.meta.mobileDepth
   // 一页多栏的路由：层级 = 已选中的参数个数（手机上一栏一屏，正好对应一层）
   if (r.meta.panes) return Object.values(r.params).filter((v) => !!v && v !== '').length
   return r.meta.depth ?? 0
@@ -110,13 +114,23 @@ export function useRouteTransition(router: Router, main: () => HTMLElement | nul
     if (!nav.kind || failure) {
       // 导航被取消 / 被守卫拦下：页面没换，把离场的隐形撤掉
       dropOut()
+      await nextTick()
+      revalidateInert(main())
       return
     }
     // 等新页挂上 DOM 再入场；离场动画在同一帧撤掉，入场从 opacity 0 接上，不闪
     await nextTick()
     if (nav.my !== token) return
     dropOut()
-    main()?.animate(IN[nav.kind], { duration: IN_MS, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' })
+    const el = main()
+    // 换页后重算一次 inert：Chromium 偶发把原生 dialog 的「模态惰性」残留在 .main 上，
+    // 整个内容区点不动（exe 实测，见 utils/inert.ts）。入场动画播完再兜一次
+    revalidateInert(el)
+    const anim = el?.animate(IN[nav.kind], {
+      duration: IN_MS,
+      easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+    })
+    anim?.finished.then(() => revalidateInert(el)).catch(() => {})
   })
 
   onBeforeUnmount(() => {

@@ -24,6 +24,24 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
 
+    // 桌面：关闭时记下窗口位置 / 大小 / 最大化 / 全屏，下次启动创建窗口时原样恢复
+    // （存在应用配置目录的 .window-state.json）。刻意不带 VISIBLE：万一记下的是隐藏态，
+    // 恢复后窗口就再也出不来了。上次所在的显示器已拔掉时插件会自动退回主屏，不会开在屏幕外。
+    #[cfg(desktop)]
+    let builder = {
+        use tauri_plugin_window_state::StateFlags;
+        builder.plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    StateFlags::POSITION
+                        | StateFlags::SIZE
+                        | StateFlags::MAXIMIZED
+                        | StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
+    };
+
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

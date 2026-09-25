@@ -55,6 +55,28 @@ export function layersSettled(): Promise<void> {
   return pending ?? Promise.resolve()
 }
 
+/**
+ * 一次性弹掉栈顶所有浮层历史（顺带关掉这些浮层），等落地后再返回。
+ * 页面级导航（appStack）要按「页面」算历史位置，先把浮层条目清干净。
+ */
+export async function popAllLayers(): Promise<void> {
+  await layersSettled()
+  const n = layersIn(history.state).length
+  if (!n) return
+  pending = new Promise<void>((resolve) => {
+    settle = resolve
+    setTimeout(() => {
+      if (settle === resolve) {
+        settle = null
+        pending = null
+        resolve()
+      }
+    }, 600)
+  })
+  history.go(-n)
+  await pending
+}
+
 function onPopState(e: PopStateEvent) {
   const ids = layersIn(e.state)
   const sameUrl = location.href === lastHref

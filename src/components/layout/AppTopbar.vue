@@ -1,16 +1,38 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
 import MenuIcon from '@/components/icons/MenuIcon.vue'
+import AppIcon from '@/components/icons/AppIcon.vue'
+import { DRAWER_MQ, useMediaQuery } from '@/composables/useDrawerSwipe'
+import { goBack } from '@/router/appStack'
 
 defineProps<{ title: string }>()
 
 const ui = useUiStore()
+const route = useRoute()
+const isMobile = useMediaQuery(DRAWER_MQ)
+/**
+ * 手机上聊天 / 设置是压在标签页之上的二级页（meta.mobileDepth）：左上角换成返回箭头。
+ * 其它详情页自带「返回」按钮，保持菜单键。会话列表仍可从左缘右滑拉出抽屉。
+ */
+const showBack = computed(() => isMobile.value && route.meta.mobileDepth !== undefined)
 </script>
 
 <template>
   <header class="topbar">
+    <button
+      v-if="showBack"
+      class="cbx-icon-btn back-btn"
+      type="button"
+      aria-label="返回"
+      @click="goBack()"
+    >
+      <AppIcon name="ChevronLeft" />
+    </button>
     <!-- 菜单：三线 ↔ X 连续变形，可在过渡中反向切换。 -->
     <button
+      v-else
       class="cbx-icon-btn menu-btn"
       type="button"
       aria-label="菜单"

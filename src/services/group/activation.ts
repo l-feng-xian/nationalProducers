@@ -53,6 +53,33 @@ function mentions(text: string, name: string): boolean {
 
 const enabled = (g: Group) => g.members.filter((m) => !g.disabled_members.includes(m))
 
+/**
+ * 用户消息里被「@名字」显式点名的成员，按 @ 在文中出现的先后排序、去重。
+ *
+ * 与输入框的 @ 选择列表同一套规则：@ 前面不能紧挨字母数字（避开邮箱 a@b.com）。
+ * 同一个 @ 后面能对上多个名字时取**最长**的（「白夜」不会被误认成「白」）。
+ * 静音成员也算：@ 是用户的明确点名，和点名条一样不受静音限制。
+ */
+export function explicitMentions(
+  text: string,
+  group: Group,
+  charById: Map<string, Character>,
+): string[] {
+  if (!text.includes('@')) return []
+  const lower = text.toLowerCase()
+  const candidates = group.members
+    .map((id) => ({ id, name: charById.get(id)?.data.name.toLowerCase() ?? '' }))
+    .filter((c) => c.name)
+    .sort((a, b) => b.name.length - a.name.length)
+  const hits: string[] = []
+  for (let i = lower.indexOf('@'); i !== -1; i = lower.indexOf('@', i + 1)) {
+    if (i > 0 && /[A-Za-z0-9_]/.test(lower[i - 1] ?? '')) continue
+    const hit = candidates.find((c) => lower.startsWith(c.name, i + 1))
+    if (hit && !hits.includes(hit.id)) hits.push(hit.id)
+  }
+  return hits
+}
+
 /** 自然顺序：提名优先 + 按 talkativeness 掷骰，可能多人发言 */
 export function activateNaturalOrder(input: ActivationInput): string[] {
   const { group, charById, chat, isUserInput, activationText } = input
@@ -139,9 +166,7 @@ export function activateManual(input: ActivationInput): string[] {
   return pick ? [pick] : []
 }
 
-/** 统一入口。forceId 优先（点名 / 重新生成指定角色） */
-export function selectSpeakers(input: ActivationInput, forceId?: string): string[] {
-  if (forceId) return [forceId]
+function activateByStrategy(input: ActivationInput): string[] {
   const strategy: GroupActivationStrategy = input.group.activation_strategy
   switch (strategy) {
     case group_activation_strategy.LIST:
@@ -154,4 +179,26 @@ export function selectSpeakers(input: ActivationInput, forceId?: string): string
     default:
       return activateNaturalOrder(input)
   }
+}
+
+/**
+ * 统一入口。forceId 优先（点名 / 重新生成指定角色）。
+ *
+ * 用户消息里有「@名字」时，被 @ 的人**先**发言（按 @ 的先后）：
+ * - 自然 / 列表：被 @ 的人排到最前，其余照原策略接在后面（同一人不重复）；
+ * - 轮流 / 手动：本来一轮只有一人或无人回复，这一轮改成**只**由被 @ 的人回复。
+ */
+export function selectSpeakers(input: ActivationInput, forceId?: string): string[] {
+  if (forceId) return [forceId]
+  const mentioned = input.isUserInput
+    ? explicitMentions(input.activationText, input.group, input.charById)
+    : []
+  if (!mentioned.length) return activateByStrategy(input)
+  const strategy = input.group.activation_strategy
+  if (
+    strategy === group_activation_strategy.POOLED ||
+    strategy === group_activation_strategy.MANUAL
+  )
+    return mentioned
+  return [...new Set([...mentioned, ...activateByStrategy(input)])]
 }

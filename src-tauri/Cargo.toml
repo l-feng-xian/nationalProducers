@@ -34,6 +34,10 @@ serde_json = "1"
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-barcode-scanner = "2"
 
+# 记住窗口位置 / 大小 / 最大化，下次打开原样恢复。只有桌面实现，同理不能放通用依赖。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-window-state = "2"
+
 # 调试信息是 dev 构建的内存大头，降一档能显著少占内存与磁盘，
 # 断点行号仍在（见 .cargo/config.toml 里那段 OOM 说明）。
 [profile.dev]

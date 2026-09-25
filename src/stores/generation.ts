@@ -215,6 +215,35 @@ export const useGenerationStore = defineStore('generation', () => {
     return cfg
   }
 
+  /**
+   * 会话记忆的两路输入，1v1 的 build() 与 1vN 的 generateOne() **共用这一处**。
+   *
+   * ⚠️ 两个曾经的坑，都是因为两条路径各写各的：
+   *  1. 群聊漏了向量召回：sendGroup 照常 prepareRecall 算好了命中，generateOne 却从没把
+   *     记忆书并进 loreSources —— 索引在建、检索在跑，结果全被丢掉，群聊里召回永远不生效。
+   *  2. 状态卡只看「有没有」、不看开关：关掉「启用会话记忆」后，之前提炼好的状态卡照样
+   *     每轮注入。开关必须对注入生效，而不只是停止提炼。
+   */
+  function memoryInputs(
+    meta: ChatMeta,
+    loreSources: ReturnType<ReturnType<typeof useWorldsStore>['resolveSources']>,
+  ) {
+    const mem = useSettingsStore().settings.memory
+    if (!mem.enabled) return { stateCard: '', loreSources }
+    // 向量召回的结果由 prepareRecall() 在组装**之前**算好放在 runtime 里 ——
+    // 组装是同步的，这是整个方案唯一的架构阻碍
+    if (mem.vector.modelId) {
+      const book = buildMemoryBook({
+        stateCard: '',
+        hits: memRuntime.currentHits(),
+        stateDepth: mem.depth,
+        recallDepth: mem.vector.recallDepth,
+      })
+      if (book) loreSources = { ...loreSources, chat: [book, ...loreSources.chat] }
+    }
+    return { stateCard: meta.chat_metadata.stateCard?.text ?? '', loreSources }
+  }
+
   /** 本轮发言者。build() 与 send() 必须算出同一个人，所以只此一处 */
   function resolveSpeaker(meta: ChatMeta): Character {
     const chars = useCharactersStore()
@@ -227,6 +256,8 @@ export const useGenerationStore = defineStore('generation', () => {
       composerText?: string
       isContinue?: boolean
       isDryRun?: boolean
+      /** 仅群聊：预览哪位成员的提示词；缺省 = 按策略的下一位发言者 */
+      speakerId?: string
     } = {},
   ): BuiltPrompt | null {
     const chats = useChatsStore()
@@ -236,30 +267,38 @@ export const useGenerationStore = defineStore('generation', () => {
     const meta = chats.current
     if (!meta) return null
 
+    // ⚠️ 群聊必须走群聊组装。这里原本不分会话类型一律按 1v1 组装，群聊会话没有
+    // characterId，resolveSpeaker 回落成「助手」—— 「预览提示词」看到的是一份
+    // 根本不会发出去的提示词（没有成员卡、关系图谱、群聊约束）。
+    if (meta.kind === 'group') {
+      const g = meta.groupId ? useGroupsStore().byId(meta.groupId) : undefined
+      if (!g) return null
+      const members = groupMembers(g)
+      const id =
+        opts.speakerId && members.has(opts.speakerId) ? opts.speakerId : nextGroupSpeaker(g)
+      const speakerChar = id ? members.get(id) : undefined
+      if (!speakerChar) return null
+      return buildGroup({
+        group: g,
+        speakerChar,
+        members,
+        ...(opts.isDryRun ? { isDryRun: true } : {}),
+      })
+    }
+
     const char = resolveSpeaker(meta)
     const speaker = { id: char.id, name: char.data.name, char }
 
     // 需求 5：全局世界书只在全局配置启用；角色世界书随角色带入
-    const loreSources = worlds.resolveSources({
-      globalBookIds: settings.settings.worldInfo.globalBookIds,
-      characterBookIds: char.worldBookIds,
-      chatBookId: meta.chat_metadata.worldBookId,
-      personaBookId: settings.settings.persona.worldBookId,
-    })
-
-    // 向量召回的结果由 prepareRecall() 在 build() **之前**算好放在 runtime 里 ——
-    // build() 是同步的，这是整个方案唯一的架构阻碍。把它改成 async 会牵动
-    // send/sendGroup/generateOne 三处加 PromptPreview.vue，返工面太大。
-    const mem = settings.settings.memory
-    if (mem.enabled && mem.vector.modelId) {
-      const book = buildMemoryBook({
-        stateCard: '',
-        hits: memRuntime.currentHits(),
-        stateDepth: mem.depth,
-        recallDepth: mem.vector.recallDepth,
-      })
-      if (book) loreSources.chat = [book, ...loreSources.chat]
-    }
+    const memory = memoryInputs(
+      meta,
+      worlds.resolveSources({
+        globalBookIds: settings.settings.worldInfo.globalBookIds,
+        characterBookIds: char.worldBookIds,
+        chatBookId: meta.chat_metadata.worldBookId,
+        personaBookId: settings.settings.persona.worldBookId,
+      }),
+    )
 
     // dryRun 必须克隆定时效果，否则每点一次预览就推进一格 sticky/cooldown
     const isDryRun = opts.isDryRun ?? false
@@ -280,10 +319,10 @@ export const useGenerationStore = defineStore('generation', () => {
       isContinue: opts.isContinue ?? false,
       trigger: 'normal',
       composerText: opts.composerText ?? '',
-      loreSources,
+      loreSources: memory.loreSources,
       timedStore,
       isDryRun,
-      stateCard: meta.chat_metadata.stateCard?.text ?? '',
+      stateCard: memory.stateCard,
     })
     lastPrompt.value = built
     return built
@@ -451,11 +490,7 @@ export const useGenerationStore = defineStore('generation', () => {
       return
     }
 
-    const charById = new Map(
-      g.members
-        .map((id) => [id, chars.byId(id)])
-        .filter((e): e is [string, NonNullable<ReturnType<typeof chars.byId>>] => !!e[1]),
-    )
+    const charById = groupMembers(g)
     const speakers = selectSpeakers(
       {
         group: g,
@@ -514,27 +549,74 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  /** 生成单个角色的一条回复（1vN 内部用） */
-  async function generateOne(args: {
+  /** 群聊成员 id → 角色；已删除的角色跳过 */
+  function groupMembers(g: Group): Map<string, Character> {
+    const chars = useCharactersStore()
+    return new Map(
+      g.members.map((id) => [id, chars.byId(id)]).filter((e): e is [string, Character] => !!e[1]),
+    )
+  }
+
+  /**
+   * 预览 / 默认发言者：按群聊策略选出**下一位**会说话的人。
+   * 用户刚说完话就按「用户发言」激活，否则按「自动续聊」激活；
+   * 策略选不出人（手动点名、全员静音）时退回第一个未静音成员，预览总得有人可看。
+   */
+  function nextGroupSpeaker(g: Group): string | undefined {
+    const chats = useChatsStore()
+    const charById = groupMembers(g)
+    const last = chats.messages[chats.messages.length - 1]
+    const isUserInput = !!last?.is_user
+    const picked = selectSpeakers({
+      group: g,
+      charById,
+      chat: chats.messages,
+      isUserInput,
+      activationText: isUserInput ? (last?.mes ?? '') : '',
+    })[0]
+    return (
+      picked ??
+      g.members.find((id) => charById.has(id) && !g.disabled_members.includes(id)) ??
+      g.members.find((id) => charById.has(id))
+    )
+  }
+
+  /**
+   * 组装 1vN 某位成员这一轮的提示词。**纯组装、无副作用**：
+   * 真实生成（generateOne）与「预览提示词」共用，两边永远看到同一份提示词。
+   * dryRun 克隆定时效果与会话变量，看几眼预览不会推进 sticky/cooldown，也不会被 {{setvar}} 改掉变量。
+   */
+  function buildGroup(args: {
     group: Group
     speakerChar: Character
     members: Map<string, Character>
-    genId: number
-  }): Promise<void> {
+    isDryRun?: boolean
+  }): BuiltPrompt | null {
     const chats = useChatsStore()
     const settings = useSettingsStore()
     const worlds = useWorldsStore()
-    const toast = useToast()
     const meta = chats.current
-    if (!meta) return
+    if (!meta) return null
 
-    const { group: g, speakerChar: char, members, genId } = args
+    const { group: g, speakerChar: char, members } = args
+    const isDryRun = args.isDryRun ?? false
     const memberList = g.members
       .map((mid) => members.get(mid))
       .filter((c): c is Character => !!c)
       .map((c) => ({ id: c.id, name: c.data.name, char: c }))
     const speaker = { id: char.id, name: char.data.name, char }
-    const allNames = memberList.map((m) => m.name)
+    // 与 1v1 共用：状态卡按开关注入，向量召回命中并进记忆书（见 memoryInputs）
+    const memory = memoryInputs(
+      meta,
+      worlds.resolveSources({
+        globalBookIds: settings.settings.worldInfo.globalBookIds,
+        characterBookIds: g.mergeMemberBooks
+          ? [...new Set(memberList.flatMap((m) => m.char.worldBookIds))]
+          : char.worldBookIds,
+        chatBookId: meta.chat_metadata.worldBookId,
+        personaBookId: settings.settings.persona.worldBookId,
+      }),
+    )
 
     const built = buildChatPrompt({
       isGroup: true,
@@ -545,23 +627,41 @@ export const useGenerationStore = defineStore('generation', () => {
       history: chats.messages,
       chatId: meta.id,
       chatIdHash: meta.chat_metadata.chat_id_hash ?? 0,
-      variables: meta.chat_metadata.variables,
-      stateCard: meta.chat_metadata.stateCard?.text ?? '',
+      variables: isDryRun ? toPlain(meta.chat_metadata.variables) : meta.chat_metadata.variables,
+      stateCard: memory.stateCard,
       group: g,
       relations: meta.chat_metadata.relationGraph?.relations ?? g.relations,
       relationTemplate: meta.chat_metadata.relationGraph?.relationTemplate ?? g.relationTemplate,
       trigger: 'normal',
-      loreSources: worlds.resolveSources({
-        globalBookIds: settings.settings.worldInfo.globalBookIds,
-        characterBookIds: g.mergeMemberBooks
-          ? [...new Set(memberList.flatMap((m) => m.char.worldBookIds))]
-          : char.worldBookIds,
-        chatBookId: meta.chat_metadata.worldBookId,
-        personaBookId: settings.settings.persona.worldBookId,
-      }),
-      timedStore: meta.chat_metadata.timedWorldInfo,
+      loreSources: memory.loreSources,
+      timedStore: isDryRun
+        ? toPlain(meta.chat_metadata.timedWorldInfo)
+        : meta.chat_metadata.timedWorldInfo,
+      isDryRun,
     })
     lastPrompt.value = built
+    return built
+  }
+
+  /** 生成单个角色的一条回复（1vN 内部用） */
+  async function generateOne(args: {
+    group: Group
+    speakerChar: Character
+    members: Map<string, Character>
+    genId: number
+  }): Promise<void> {
+    const chats = useChatsStore()
+    const settings = useSettingsStore()
+    const toast = useToast()
+    const meta = chats.current
+    if (!meta) return
+
+    const { group: g, speakerChar: char, members, genId } = args
+    const allNames = g.members
+      .map((mid) => members.get(mid)?.data.name)
+      .filter((n): n is string => !!n)
+    const built = buildGroup({ group: g, speakerChar: char, members })
+    if (!built) return
 
     const row = await chats.appendAi(char.data.name, char.id)
     if (!row) return
@@ -631,20 +731,54 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  /** 重新生成：删掉最后一条 AI 消息再发 */
+  /**
+   * 重新生成：删掉最后一条 AI 消息，**由同一个角色**重新说一遍（与 SillyTavern 一致）。
+   *
+   * ⚠️ 群聊必须走 sendGroup。原来无条件调 send()（1v1 路径），而群聊会话没有 characterId，
+   * resolveSpeaker 回落到 defaultAssistantCharacter() —— 重新生成出来的发言者就成了「助手」，
+   * 提示词也按 1v1 组装（没有成员卡、关系图谱、群聊约束）。
+   */
   async function regenerate(): Promise<void> {
     const chats = useChatsStore()
+    const groups = useGroupsStore()
     if (busy.value) return
+    const meta = chats.current
     const last = chats.messages[chats.messages.length - 1]
-    if (!last || last.is_user) return
+    if (!meta || !last || last.is_user) return
     await chats.removeTail(1)
+    if (meta.kind === 'group') {
+      const g = meta.groupId ? groups.byId(meta.groupId) : undefined
+      // original_avatar 是这条消息权威的发言者 id；该成员已被移出群聊时退回按策略选人
+      const speakerId = last.original_avatar
+      const forceId = speakerId && g?.members.includes(speakerId) ? speakerId : undefined
+      await sendGroup({ ...(forceId ? { forceId } : {}), isUserInput: false })
+      return
+    }
     await send()
+  }
+
+  /** 预览面板用：群聊成员（按列表顺序）与默认预览对象。非群聊返回 null */
+  function previewSpeakers(): {
+    members: { id: string; name: string }[]
+    defaultId: string
+  } | null {
+    const chats = useChatsStore()
+    const meta = chats.current
+    if (meta?.kind !== 'group' || !meta.groupId) return null
+    const g = useGroupsStore().byId(meta.groupId)
+    if (!g) return null
+    const byId = groupMembers(g)
+    const members = g.members
+      .filter((id) => byId.has(id))
+      .map((id) => ({ id, name: byId.get(id)!.data.name }))
+    return { members, defaultId: nextGroupSpeaker(g) ?? members[0]?.id ?? '' }
   }
 
   return {
     busy,
     lastPrompt,
     build,
+    previewSpeakers,
     send,
     sendGroup,
     regenerate,

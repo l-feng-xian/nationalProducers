@@ -18,6 +18,7 @@ import { APP_NAME } from '@/constants/app'
 const BASE_URL = import.meta.env.BASE_URL
 import type { ChatMeta } from '@/types/chat'
 import { confirmDialog } from '@/composables/useConfirm'
+import { homePath, MOBILE_TAB_NAMES } from '@/router/layout'
 
 const props = defineProps<{
   open: boolean
@@ -40,17 +41,6 @@ const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const chats = useChatsStore()
-
-/**
- * 侧栏 7 个顶层分区（角色/群聊/世界书…）之间是**平级**关系，不是逐层深入。
- * 但 RouterLink 默认 push，于是「角色→群聊→世界书→模型」会在历史里叠 4 层，
- * 手势返回要一层层退，很烦（用户报的「路由多层嵌套」）。
- *
- * 规则：当前在**聊天页（首页）**时 push，从别处进分区能靠返回回到聊天；
- * 已经在某个分区里再切别的分区就 replace，平级切换不叠历史。
- * 详情页（/characters/:id 等）的下钻仍由各自页面 push，返回正常回列表。
- */
-const replaceNav = computed(() => !route.path.startsWith('/chat'))
 
 /** 图标进按钮、文案进 title —— 见模板里的说明。动画 SVG 组件，切换时新图标弹入。 */
 const themeIcon = { light: SunIcon, dark: MoonIcon, system: MonitorIcon }
@@ -86,16 +76,17 @@ const groups = computed(() => {
  * 「聊天 → 分区」，而不是「聊天 → 抽屉空条目 → 分区」。
  * 原来点**当前**会话路由不变、抽屉也就不收，手机上只能再去点遮罩。
  */
-function go(to: string, replace = false) {
+function go(to: string) {
   ui.closeDrawer()
   if (route.fullPath === to) return
-  void (replace ? router.replace(to) : router.push(to))
+  // 分区 / 会话之间平级切换不叠历史，由 router/appStack 统一决定压栈还是退回
+  void router.push(to)
 }
 
 async function remove(id: string, title: string) {
   if (!(await confirmDialog({ text: `删除会话「${title}」？其全部消息将一并删除。` }))) return
   await chats.removeChat(id)
-  if (route.params['id'] === id) await router.push('/chat')
+  if (route.params['id'] === id) await router.push(homePath())
 }
 
 function newChat() {
@@ -104,14 +95,18 @@ function newChat() {
   ui.newChatOpen = true
 }
 
-const NAV = [
-  { to: '/characters', label: '角色', icon: CharactersIcon },
-  { to: '/groups', label: '群聊', icon: GroupsIcon },
-  { to: '/worlds', label: '世界书', icon: WorldsIcon },
-  { to: '/models', label: '模型管理', icon: ModelsIcon },
-  { to: '/data', label: '数据管理', icon: DataIcon },
-  { to: '/settings', label: '设置', icon: SettingsIcon },
+const ALL_NAV = [
+  { name: 'characters', to: '/characters', label: '角色', icon: CharactersIcon },
+  { name: 'groups', to: '/groups', label: '群聊', icon: GroupsIcon },
+  { name: 'worlds', to: '/worlds', label: '世界书', icon: WorldsIcon },
+  { name: 'models', to: '/models', label: '模型管理', icon: ModelsIcon },
+  { name: 'data', to: '/data', label: '数据管理', icon: DataIcon },
+  { name: 'settings', to: '/settings', label: '设置', icon: SettingsIcon },
 ]
+/** 手机上这几项在底部标签栏里，抽屉只留会话列表与设置 */
+const NAV = computed(() =>
+  props.drawerMode ? ALL_NAV.filter((n) => !MOBILE_TAB_NAMES.includes(n.name)) : ALL_NAV,
+)
 </script>
 
 <template>
@@ -179,7 +174,7 @@ const NAV = [
           class="cbx-nav-item"
           :class="{ 'cbx-nav-item--active': route.path.startsWith(n.to) }"
           :aria-current="route.path.startsWith(n.to) ? 'page' : undefined"
-          @click.prevent="go(n.to, replaceNav)"
+          @click.prevent="go(n.to)"
         >
           <span class="nav-ico"><component :is="n.icon" /></span>
           <span>{{ n.label }}</span>

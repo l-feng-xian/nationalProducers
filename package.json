@@ -17,6 +17,7 @@
     "verify:image-generation": "node scripts/verify-image-generation.mjs",
     "verify:data-view": "node scripts/verify-data-view.mjs",
     "verify:icons": "node scripts/verify-icons.mjs",
+    "verify:group-mentions": "node --import ./scripts/ts-register.mjs scripts/verify-group-mentions.ts",
     "format": "oxfmt src/",
     "verify:torus": "node --import ./scripts/ts-register.mjs scripts/verify-torus.ts",
     "verify:path": "node --import ./scripts/ts-register.mjs scripts/verify-path.ts",

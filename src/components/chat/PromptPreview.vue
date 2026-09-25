@@ -21,14 +21,25 @@ const emit = defineEmits<{ close: [] }>()
 useBackClose(() => emit('close'))
 
 const gen = useGenerationStore()
-const built = ref(gen.build({ isDryRun: true }))
+
+/**
+ * 群聊：每位成员的提示词都不一样（角色卡、世界书、群聊约束、stop 串都按发言者组装），
+ * 所以给一个成员下拉。默认选「按群聊策略下一位会发言的人」，就是点发送后真正会发出去的那份。
+ */
+const group = gen.previewSpeakers()
+const speakerId = ref(group?.defaultId ?? '')
+
+function rebuild() {
+  return gen.build({ isDryRun: true, ...(speakerId.value ? { speakerId: speakerId.value } : {}) })
+}
+const built = ref(rebuild())
 
 onMounted(() => {
-  built.value = gen.build({ isDryRun: true })
+  built.value = rebuild()
 })
 
 function refresh() {
-  built.value = gen.build({ isDryRun: true })
+  built.value = rebuild()
 }
 
 const sections = computed<PromptMessage[]>(() => built.value?.debug.sections ?? [])
@@ -94,6 +105,15 @@ function copyJson() {
           </div>
 
           <template v-else>
+            <label v-if="group && group.members.length" class="cbx-field speaker">
+              <span class="cbx-field__label">预览发言者</span>
+              <select v-model="speakerId" class="cbx-input" @change="refresh">
+                <option v-for="m in group.members" :key="m.id" :value="m.id">
+                  {{ m.name }}{{ m.id === group.defaultId ? '（下一位发言）' : '' }}
+                </option>
+              </select>
+            </label>
+
             <!-- 概览 -->
             <div class="stats">
               <span class="cbx-badge cbx-badge--brand">
@@ -159,6 +179,9 @@ function copyJson() {
 </template>
 
 <style scoped>
+.speaker {
+  max-width: var(--cbx-fieldw-md);
+}
 .head-ops {
   display: flex;
   align-items: center;

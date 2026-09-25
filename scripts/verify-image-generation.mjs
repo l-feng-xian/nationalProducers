@@ -585,7 +585,8 @@ try {
     size: '',
   })
 
-  // 群聊多角色参考图按显示顺序上传，保持编号与人物的对应关系。
+  // 群聊配图只带这一幕出场的人：发言者（参考图 1）+ 这句话点名的成员；未出场的成员不带。
+  // 参考图按这个顺序上传，编号与人物一一对应。
   const groupData = await page.evaluate(async (id) => {
     const { useCharactersStore } = await import('/src/stores/characters.ts')
     const { useGroupsStore } = await import('/src/stores/groups.ts')
@@ -604,8 +605,12 @@ try {
     const blob = await (await fetch(url)).blob()
     second.avatarBlobId = await blobsRepo.put(blob)
     await chars.save(second)
+    // 路人有封面但这句话没提到他 —— 不应出现在参考图里
+    const third = await chars.create('路人')
+    third.avatarBlobId = await blobsRepo.put(blob)
+    await chars.save(third)
     const group = await groups.create('双人书店')
-    group.members = [second.id, id]
+    group.members = [second.id, id, third.id]
     await groups.save(group)
     const meta = await chats.createGroup(group.id, group.name)
     await chats.open(meta.id)
@@ -624,23 +629,25 @@ try {
   dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('img', { name: '望月的参考图' })).toBeVisible()
   await expect(dialog.getByRole('img', { name: '时雨的参考图' })).toBeVisible()
+  await expect(dialog.getByRole('img', { name: '路人的参考图' })).toHaveCount(0)
   mode = 'base64'
   await dialog.getByRole('button', { name: '生成图片', exact: true }).click()
   await expect(dialog.getByRole('img', { name: '生成图片预览' })).toBeVisible()
-  // 群聊按参考图顺序锚定每个成员的外貌（望月=参考图1、时雨=参考图2），与各自参考图对应。
+  // 发言者在前（时雨=参考图1），被点名的望月=参考图2；外貌逐一锚定到对应编号，未出场的路人不出现。
   assert.match(
     requests.at(-1).body.prompt,
-    /参考图 1 望月：[\s\S]*黑色短发[\s\S]*参考图 2 时雨：[\s\S]*银色长发/,
+    /参考图 1 时雨：[\s\S]*银色长发[\s\S]*参考图 2 望月：[\s\S]*黑色短发/,
   )
+  assert.doesNotMatch(requests.at(-1).body.prompt, /路人/)
   assert.match(requests.at(-1).body.prompt, /递过一本旧书/) // 画面内容取自当前这一句
   assert.deepEqual(requests.at(-1).images, [
+    { field: 'image[]', name: 'reference-1.png', type: 'image/png', base64: png },
     {
       field: 'image[]',
-      name: 'reference-1.png',
+      name: 'reference-2.png',
       type: 'image/png',
       base64: groupData.secondBase64,
     },
-    { field: 'image[]', name: 'reference-2.png', type: 'image/png', base64: png },
   ])
   await page.screenshot({ path: 'output/image-generation/reference-preview.png' })
   await dialog.getByRole('button', { name: '关闭', exact: true }).first().click()
@@ -664,8 +671,22 @@ try {
     delete char.avatarBlobId
     await chars.save(char)
   }, groupData.secondId)
+  // 被点名的配角没有封面：直接不带他，不阻塞发言者的配图
   await page.getByRole('button', { name: '生成对话配图', exact: true }).click()
-  await expect(dialog.getByRole('alert')).toContainText('请先为「望月」设置角色封面')
+  await expect(dialog.getByRole('img', { name: '时雨的参考图' })).toBeVisible()
+  await expect(dialog.getByRole('img', { name: '望月的参考图' })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '生成图片', exact: true })).toBeEnabled()
+  await dialog.getByRole('button', { name: '关闭', exact: true }).first().click()
+  // 发言者自己没有封面：必须拦下，不许悄悄降级成纯文生图
+  await page.evaluate(async (id) => {
+    const { useCharactersStore } = await import('/src/stores/characters.ts')
+    const chars = useCharactersStore()
+    const char = chars.byId(id)
+    delete char.avatarBlobId
+    await chars.save(char)
+  }, characterId)
+  await page.getByRole('button', { name: '生成对话配图', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('请先为「时雨」设置角色封面')
   await expect(dialog.getByRole('button', { name: '生成图片', exact: true })).toBeDisabled()
   assert.equal(requests.length, beforeMissing)
   assert.deepEqual(errors, [])

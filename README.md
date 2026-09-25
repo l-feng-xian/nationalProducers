@@ -44,6 +44,7 @@ Yoshub 的 API 根地址填写 `https://api.yoshub.com/v1`。两个模型配置�
 一次性准备：Rust 工具链 + MSVC 生成工具（Visual Studio Build Tools 勾选「使用 C++ 的桌面开发」）。
 
 ```bash
+npm run tauri build -- --no-bundle    # 只构建免安装版本
 npm run tauri build -- --bundles nsis   # 推荐：只出 NSIS 安装器，最快、无需 WiX
 npm run tauri build                      # tauri.conf 的 targets 为 all，会同时出 NSIS + MSI(需 WiX)
 ```

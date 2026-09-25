@@ -3,6 +3,108 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import basicSsl from '@vitejs/plugin-basic-ssl'
+import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import https from 'node:https'
+
+/**
+ * ComfyUI 局域网中转（仅开发服务器）：浏览器里的网页版把 ComfyUI 请求发到同源的 `/comfyui/*`，
+ * 由这里转发到请求头 `X-ComfyUI-Target` 指定的 ComfyUI（本机或局域网里另一台电脑）。
+ *
+ * 为什么网页版需要它（原生 App 走 plugin-http 不受这些限制，不经过这里）：
+ *  1. **混合内容**：手机联调用 `npm run dev:lan`，页面是 https；浏览器禁止 https 页面去请求
+ *     `http://192.168.x.x:8188`，连请求都发不出去。走同源中转就没有这个问题。
+ *  2. **CORS**：ComfyUI 不开 `--enable-cors-header` 就不回 CORS 头，跨源读不到响应。
+ *  3. **ComfyUI 的防 CSRF 中间件**：带 `Sec-Fetch-Site: cross-site`，或目标是回环地址而 Origin
+ *     与 Host 不一致，都会直接 403。这里转发时剥掉浏览器的来源类请求头。
+ *
+ * ⚠️ 只许转发到**私网 / 回环**地址：`dev:lan` 会把开发服务器暴露给整个局域网，不设限就成了
+ * 谁都能用的开放代理（SSRF）。
+ */
+function isPrivateHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  if (h === 'localhost' || h.endsWith('.local') || h === '::1') return true
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!m) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return (
+    a === 127 ||
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  )
+}
+
+const DROP_HEADERS = new Set(['host', 'origin', 'referer', 'connection', 'x-comfyui-target'])
+/**
+ * 逐跳（hop-by-hop）头不能转发。`dev:lan` 是 https，Vite 用的是 **HTTP/2**：
+ * 请求里带 `:method` `:path` 这类伪头（原样塞进 HTTP/1 请求会直接抛错 → 500），
+ * 而 HTTP/2 响应又禁止出现 connection / transfer-encoding 这类连接级头。两头都要过滤。
+ */
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-connection',
+  'transfer-encoding',
+  'upgrade',
+  'te',
+  'trailer',
+])
+
+function comfyuiRelay(): Plugin {
+  function handle(req: IncomingMessage, res: ServerResponse) {
+    const raw = req.headers['x-comfyui-target']
+    let target: URL
+    try {
+      target = new URL(String(Array.isArray(raw) ? raw[0] : raw))
+      if (!/^https?:$/.test(target.protocol)) throw new Error('protocol')
+    } catch {
+      res.statusCode = 400
+      res.end('comfyui relay: 缺少或无效的 X-ComfyUI-Target')
+      return
+    }
+    if (!isPrivateHost(target.hostname)) {
+      res.statusCode = 403
+      res.end('comfyui relay: 只允许转发到本机或局域网地址')
+      return
+    }
+    const headers: Record<string, string | string[]> = {}
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v === undefined || k.startsWith(':') || DROP_HEADERS.has(k) || HOP_BY_HOP.has(k)) continue
+      if (k.startsWith('sec-fetch-')) continue
+      headers[k] = v
+    }
+    headers['host'] = target.host
+    // req.url 已被 connect 去掉了挂载前缀 /comfyui
+    const url = new URL(req.url || '/', target)
+    const upstream = (url.protocol === 'https:' ? https : http).request(
+      url,
+      { method: req.method, headers },
+      (up) => {
+        const out: Record<string, string | string[]> = {}
+        for (const [k, v] of Object.entries(up.headers)) {
+          if (v !== undefined && !HOP_BY_HOP.has(k)) out[k] = v
+        }
+        res.writeHead(up.statusCode ?? 502, out)
+        up.pipe(res)
+      },
+    )
+    upstream.on('error', (e) => {
+      if (res.headersSent) return res.destroy()
+      res.statusCode = 502
+      res.end(
+        `comfyui relay: 连不上 ${target.host}（${(e as NodeJS.ErrnoException).code ?? e.message}）`,
+      )
+    })
+    req.pipe(upstream)
+  }
+  return {
+    name: 'comfyui-lan-relay',
+    configureServer(server) {
+      server.middlewares.use('/comfyui', handle)
+    },
+  }
+}
 
 /**
  * 认出 onnxruntime-web 的 asyncify 版 wasm（这一支历史上叫过 jsep）。
@@ -57,7 +159,9 @@ function dropUnusedOrtAsyncifyWasm(): Plugin {
       // 直接走 console：rolldown 不保证把插件的 this.warn 透到构建输出里，
       // 而「悄悄失效」正是这个插件最需要避免的失败方式。
       if (droppedBytes) {
-        console.log(`[ort] 已剔除未使用的 asyncify wasm ${mb(droppedBytes)}；保留 ${kept.join('、')}`)
+        console.log(
+          `[ort] 已剔除未使用的 asyncify wasm ${mb(droppedBytes)}；保留 ${kept.join('、')}`,
+        )
       } else {
         console.warn(
           `[ort] ⚠️ 没有匹配到 asyncify wasm。若 onnxruntime-web 升级后改了命名，` +
@@ -95,7 +199,7 @@ export default defineConfig(({ mode }) => {
   const lanPlugins = mode === 'lan' ? [basicSsl()] : []
 
   return {
-    plugins: [vue(), vueDevTools(), dropUnusedOrtAsyncifyWasm(), ...lanPlugins],
+    plugins: [vue(), vueDevTools(), dropUnusedOrtAsyncifyWasm(), comfyuiRelay(), ...lanPlugins],
     // esnext 是唯一的非协商项：transformers.js v4 用了顶层 await。
     // 官方所有 embedding 示例的 vite.config 也就只有这一行。
     build: { target: 'esnext' },

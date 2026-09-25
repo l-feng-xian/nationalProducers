@@ -102,7 +102,7 @@ async function fetchModels() {
       )
       if (disposed || ctl.signal.aborted) return
       comfyModels.value = result
-      status.value = `已拉取 DiT ${result.unets.length} · 编码器 ${result.clips.length} · VAE ${result.vaes.length}，可从下拉选择。`
+      status.value = `已连接。拉取到 DiT ${result.unets.length} · 编码器 ${result.clips.length} · VAE ${result.vaes.length}，可从下拉选择。`
     } catch (cause) {
       if (!disposed && !ctl.signal.aborted)
         error.value = cause instanceof Error ? cause.message : String(cause)
@@ -215,8 +215,8 @@ async function save() {
                 <option value="comfyui">本地 ComfyUI（Qwen-Image-2.1）</option>
               </select>
               <span class="cbx-field__hint">
-                本地 ComfyUI 在原生 App 里可直连；纯网页版需 ComfyUI 开启 --enable-cors-header
-                或填写下方代理地址。
+                可调用本机或局域网里另一台电脑上的 ComfyUI。App（电脑 /
+                安卓）直连；网页开发版经开发服务器中转， 手机上的网页版也能用。
               </span>
             </label>
             <label class="cbx-field">
@@ -235,7 +235,7 @@ async function save() {
               />
               <span class="cbx-field__hint">{{
                 draft.backend === 'comfyui'
-                  ? 'ComfyUI 服务器地址（默认 http://127.0.0.1:8188）。'
+                  ? '本机填 http://127.0.0.1:8188；在手机或另一台设备上，填运行 ComfyUI 的电脑的局域网地址（如 http://192.168.1.10:8188），且那台电脑的 ComfyUI 要用 --listen 0.0.0.0 启动。点下方「测试连接并拉取模型」即可验证。'
                   : '填写接口根地址。封面生成使用 /images/generations，对话参考图生成使用 /images/edits，需选择支持该接口的模型。'
               }}</span>
             </label>
@@ -397,7 +397,7 @@ async function save() {
                 <span class="cbx-field__hint">放在 models/vae/ 下的 Qwen-Image-2.1 VAE。</span>
               </label>
               <button type="button" class="cbx-btn cbx-btn--soft" @click="fetchModels">
-                {{ fetching ? '拉取中…' : '拉取模型列表（/object_info）' }}
+                {{ fetching ? '连接中…' : '测试连接并拉取模型' }}
               </button>
               <div class="image-grid params">
                 <label class="cbx-field">

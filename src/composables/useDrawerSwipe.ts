@@ -45,6 +45,8 @@ export function useDrawerSwipe(shell: () => HTMLElement | null, drawer: () => HT
     lastX: number
     lastT: number
     v: number
+    /** 起手时手指下的元素：抬手 / 取消事件只会派发到它身上（见 onStart 里的说明） */
+    target: EventTarget | null
   } | null = null
 
   function progressAt(x: number): number {
@@ -55,7 +57,8 @@ export function useDrawerSwipe(shell: () => HTMLElement | null, drawer: () => HT
   }
 
   function onStart(e: TouchEvent) {
-    track = null
+    // 上一段手势的收尾若丢了，这里兜底清掉，别让残留的拖动值继续开着遮罩
+    abort()
     if (!mq.matches || e.touches.length !== 1) return
     const t = e.touches[0]!
     const root = shell()
@@ -71,7 +74,18 @@ export function useDrawerSwipe(shell: () => HTMLElement | null, drawer: () => HT
       lastX: t.clientX,
       lastT: e.timeStamp,
       v: 0,
+      target: e.target,
     }
+    // ⚠️ touchend / touchcancel 永远派发给**起手时的那个元素**，哪怕它已被移出文档；
+    // 移出后事件到不了 document，document 上的监听就收不到。典型场景是安卓左缘
+    // 「系统返回」手势：滑到一半页面被切走，手指下的元素随旧页面一起卸载 → 收尾丢失 →
+    // drawerDrag 残留 → 半透明遮罩（.scrim--on）盖满全屏，整页点不动（实测复现）。
+    // 所以同时在起手元素上直接挂一次性的收尾监听。
+    e.target?.addEventListener('touchend', onEnd as EventListener, { passive: true, once: true })
+    e.target?.addEventListener('touchcancel', onCancel as EventListener, {
+      passive: true,
+      once: true,
+    })
   }
 
   function onMove(e: TouchEvent) {
@@ -101,9 +115,35 @@ export function useDrawerSwipe(shell: () => HTMLElement | null, drawer: () => HT
     ui.drawerDrag = progressAt(t.clientX)
   }
 
+  /** 解除起手元素上的收尾监听（document 那路先到时，别让它再触发第二次） */
+  function detachTarget(cur: NonNullable<typeof track>) {
+    cur.target?.removeEventListener('touchend', onEnd as EventListener)
+    cur.target?.removeEventListener('touchcancel', onCancel as EventListener)
+  }
+
+  /**
+   * 放弃当前手势：拖动值清掉，抽屉回到起手前的状态。
+   * 用于手势被系统接管（touchcancel）、切页、切到后台 —— 这些都不是用户「松手」，
+   * 不能按位置 / 速度去决定开合。
+   */
+  function abort() {
+    const cur = track
+    track = null
+    if (cur) detachTarget(cur)
+    if (ui.drawerDrag === null) return
+    if (cur?.fromOpen) ui.openDrawer()
+    else ui.closeDrawer()
+    ui.drawerDrag = null
+  }
+
+  function onCancel() {
+    abort()
+  }
+
   function onEnd() {
     const cur = track
     track = null
+    if (cur) detachTarget(cur)
     if (!cur?.locked) return
     const p = ui.drawerDrag ?? (cur.fromOpen ? 1 : 0)
     const open = cur.v > FLING ? true : cur.v < -FLING ? false : p > 0.5
@@ -117,12 +157,22 @@ export function useDrawerSwipe(shell: () => HTMLElement | null, drawer: () => HT
     document.addEventListener('touchstart', onStart, { passive: true })
     document.addEventListener('touchmove', onMove, { passive: true })
     document.addEventListener('touchend', onEnd, { passive: true })
-    document.addEventListener('touchcancel', onEnd, { passive: true })
+    document.addEventListener('touchcancel', onCancel, { passive: true })
+    document.addEventListener('visibilitychange', onVisibility)
   })
   onBeforeUnmount(() => {
     document.removeEventListener('touchstart', onStart)
     document.removeEventListener('touchmove', onMove)
     document.removeEventListener('touchend', onEnd)
-    document.removeEventListener('touchcancel', onEnd)
+    document.removeEventListener('touchcancel', onCancel)
+    document.removeEventListener('visibilitychange', onVisibility)
+    abort()
   })
+
+  function onVisibility() {
+    if (document.visibilityState !== 'visible') abort()
+  }
+
+  /** 切页时由外部调用：手势进行中页面换了，这段手势作废 */
+  return { abort }
 }

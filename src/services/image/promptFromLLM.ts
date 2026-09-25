@@ -10,14 +10,19 @@ import type { ProviderConfig } from '@/types/provider'
 import type { ProviderSettings } from '@/types/settings'
 import { chatOnce } from '@/services/provider/openaiCompatible'
 import { stripThink } from '@/services/memory/stateCard'
-import { characterImagePrompt, dialogueImagePrompt, type DialogueCharacter } from './prompts'
+import {
+  characterImagePrompt,
+  dialogueImagePrompt,
+  referenceLines,
+  type DialogueCharacter,
+} from './prompts'
 
 const CHARACTER_SYSTEM = `你是文生图提示词专家。根据下面的角色资料，写一段用于「文生图」的画面提示词。
 要求：聚焦人物外貌、发型、五官、体态、服饰与整体气质，并补上呼应设定的场景与光线；具体、可视化、可直接绘制。
 只输出提示词本身，不要解释、标题、引号或 Markdown；画面里不要出现文字、水印、边框或聊天气泡。中文或英文均可，控制在 150 字以内。`
 
-const DIALOGUE_SYSTEM = `你是图生图提示词专家。给你若干出场人物的外貌设定（对应参考图）和最近的对话，写一段用于「图生图」的画面提示词。
-硬性要求：先明确复述每个出场人物的关键外貌——发型、发色、瞳色、脸型、服饰，必须与参考图和给定设定完全一致、保持不变；再描述当前这一刻的动作、表情、场景与氛围。
+const DIALOGUE_SYSTEM = `你是图生图提示词专家。给你若干出场人物的外貌设定（按「参考图 1、参考图 2……」编号，与输入参考图的顺序一一对应）和最近的对话，写一段用于「图生图」的画面提示词。
+硬性要求：用「参考图 N 中的人物」来指代每个人（多人时必须逐一对应编号，绝不能混淆谁是谁），先明确复述每个出场人物的关键外貌——发型、发色、瞳色、脸型、服饰，必须与参考图和给定设定完全一致、保持不变；再描述当前这一刻的动作、表情、场景与氛围。画面中只出现给定的这些人物，不要添加其他角色。
 除非对话明确要求换装或改变外貌，否则绝不改变人物的服饰、发型与长相。只输出提示词本身，不要解释、引号或 Markdown；画面里不要出现文字、聊天气泡或水印。控制在 200 字以内。`
 
 function providerConfig(p: ProviderSettings, apiKey: string): ProviderConfig {
@@ -104,11 +109,8 @@ export async function dialogueImagePromptViaLLM(input: {
     .map((m) => `${m.name}：${m.mes.trim().slice(0, 400)}`)
     .join('\n')
   // 出场人物的外貌设定：让 LLM 把它写进提示词，和参考图一起双重锚定，避免服饰漂移
-  const appearance = input.characters
-    .map(
-      (c) => `- ${c.name}${c.description?.trim() ? '：' + c.description.trim().slice(0, 600) : ''}`,
-    )
-    .join('\n')
+  // 编号与参考图发送顺序一一对应（与模板同一套 referenceLines），多人时 LLM 才能写出「参考图 2 中的……」
+  const appearance = referenceLines(input.characters).join('\n')
   const user = [
     appearance ? `出场人物（外貌需与参考图一致、保持不变）：\n${appearance}` : '',
     recent ? `最近对话：\n${recent}` : '',

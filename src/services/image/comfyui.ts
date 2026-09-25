@@ -33,6 +33,76 @@ import { buildHeaders, resolveUrl, send as httpSend } from '@/services/provider/
 import { armStall } from '@/services/provider/timeout'
 import { toProviderError } from '@/services/provider/stream'
 import { ProviderError } from '@/types/provider'
+import { isTauri } from '@/services/platform/env'
+
+/** 开发期网页版的同源中转前缀，见 vite.config.ts 的 comfyuiRelay */
+const DEV_RELAY = '/comfyui'
+
+/**
+ * 某个 ComfyUI 接口的实际请求地址与附加请求头。**所有请求都必须经过这里**。
+ *
+ * - 原生 App（exe / 安卓）：plugin-http 直连填写的地址，本机 127.0.0.1 与局域网 IP 都行；
+ * - 网页版开发期（未手填代理）：改走同源 `/comfyui` 中转，由开发服务器转发到目标 ComfyUI ——
+ *   手机用 `npm run dev:lan` 打开的是 https 页面，直连 http 的局域网 ComfyUI 会被浏览器当作
+ *   混合内容拦下；走中转也免去 CORS 与 ComfyUI 防 CSRF 的 403；
+ * - 手填了代理地址：沿用旧逻辑（用代理前缀替换源）。
+ */
+function endpoint(
+  service: Pick<ImageModelService, 'baseUrl' | 'proxyPrefix'>,
+  path: string,
+): { url: string; headers: Record<string, string> } {
+  const base = service.baseUrl.trim()
+  const proxy = service.proxyPrefix.trim()
+  if (!proxy && !isTauri && import.meta.env.DEV) {
+    try {
+      return { url: DEV_RELAY + path, headers: { 'X-ComfyUI-Target': new URL(base).origin } }
+    } catch {
+      // 地址本身不合法：交给下面的直连，报出正常的地址错误
+    }
+  }
+  return { url: resolveUrl(base, path, proxy), headers: {} }
+}
+
+function hostKind(baseUrl: string): 'loopback' | 'lan' | 'other' {
+  try {
+    const h = new URL(baseUrl).hostname
+    if (h === 'localhost' || h === '::1' || h.startsWith('127.')) return 'loopback'
+    if (/^(10|192\.168|172\.(1[6-9]|2\d|3[01])|169\.254)\./.test(h) || h.endsWith('.local'))
+      return 'lan'
+  } catch {
+    /* 非法地址 */
+  }
+  return 'other'
+}
+
+/** 是不是「根本没连上」这一类错误：浏览器 fetch 的 TypeError，或原生 plugin-http 的连接错误 */
+function isConnectFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return !/ByteString|Headers|header/i.test(error.message)
+  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return /error sending request|connect|timed out|refused|unreachable|dns|relay: 连不上/i.test(msg)
+}
+
+/**
+ * 连不上时给出**按场景**的原因，而不是一句笼统的「无法连接」。
+ * 局域网调用最常见的三种错法：安卓上填了 127.0.0.1、ComfyUI 没监听局域网、https 网页直连 http。
+ */
+export function comfyConnectHint(baseUrl: string): string {
+  const kind = hostKind(baseUrl)
+  const onAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
+  if (kind === 'loopback' && onAndroid)
+    return '无法连接 ComfyUI：在手机上 127.0.0.1 指的是手机自己。请改填运行 ComfyUI 的电脑的局域网地址，例如 http://192.168.1.10:8188。'
+  if (
+    !isTauri &&
+    typeof location !== 'undefined' &&
+    location.protocol === 'https:' &&
+    baseUrl.trim().startsWith('http:') &&
+    !import.meta.env.DEV
+  )
+    return '无法连接 ComfyUI：当前网页是 https，浏览器禁止它访问 http 地址（混合内容）。请改用 App，或通过 https 反向代理访问 ComfyUI。'
+  if (kind === 'lan')
+    return '无法连接局域网里的 ComfyUI：请确认那台电脑上 ComfyUI 已用「--listen 0.0.0.0」启动（可用「启动Qwen-Image-局域网.bat」）、Windows 防火墙放行了 8188 端口，且本设备与它在同一个局域网。'
+  return '无法连接 ComfyUI，请检查服务器地址、ComfyUI 是否已启动；纯网页（非开发模式）还需给 ComfyUI 加 --enable-cors-header。'
+}
 import { imageBlob } from './generate'
 
 /** 生成的每张图最长等待（6GB 上 Qwen-2.1 一张约 70–120s，含每次 /free 后的重载，留足余量）。 */
@@ -52,7 +122,12 @@ export function validateComfyService(service: ImageModelService) {
   if (!service.clipName.trim()) throw new Error('请填写文本编码器文件名')
   if (!service.vaeName.trim()) throw new Error('请填写 VAE 文件名')
   const resolution = Number(service.resolution)
-  if (!Number.isFinite(resolution) || resolution < 256 || resolution > 2048 || resolution % 32 !== 0)
+  if (
+    !Number.isFinite(resolution) ||
+    resolution < 256 ||
+    resolution > 2048 ||
+    resolution % 32 !== 0
+  )
     throw new Error('分辨率需为 256–2048 之间、32 的倍数')
   const steps = Number(service.steps)
   if (!Number.isInteger(steps) || steps < 1 || steps > 100) throw new Error('步数需为 1–100')
@@ -83,11 +158,11 @@ async function uploadImage(
   form.append('image', source, `ref-${Date.now()}-${index + 1}.${ext}`)
   form.append('overwrite', 'true')
   form.append('type', 'input')
-  const headers = buildHeaders('')
+  const ep = endpoint(service, '/upload/image')
+  const headers = { ...buildHeaders(''), ...ep.headers }
   // multipart 边界由运行时生成，带上 JSON 的 Content-Type 会让服务无法解析。
   delete headers['Content-Type']
-  const url = resolveUrl(service.baseUrl.trim(), '/upload/image', service.proxyPrefix.trim())
-  const res = await httpSend({ url, method: 'POST', headers, body: form, signal })
+  const res = await httpSend({ url: ep.url, method: 'POST', headers, body: form, signal })
   if (!res.ok) throw await toProviderError(res)
   const payload = (await res.json()) as { name?: string; subfolder?: string }
   if (!payload?.name) throw new Error('参考图上传失败，ComfyUI 未返回文件名')
@@ -99,7 +174,7 @@ async function uploadImage(
  *
  * 关键点：KSampler 的 latent_image 必须接 TextEncodeQwenImage21 的第 3 个输出(index 2, 空 latent)——
  * Qwen 的 latent 通道数与普通 EmptyLatentImage/EmptySD3LatentImage 不同，接错会让每步慢 10 倍。
- * 参考图通过编码器的 autogrow 输入 images.image_N 注入（reference_latents），并把 vae 接进编码器；
+ * 参考图通过编码器的 Autogrow 输入注入（API 键名是平铺的 `images.image_N`，见下方注释），并把 vae 接进编码器；
  * 编辑用 denoise=1（靠 reference_latents 而非部分去噪）。CFG 固定 1（引导蒸馏），负面提示词此时不生效。
  */
 function buildGraph(
@@ -114,7 +189,6 @@ function buildGraph(
     prompt,
     negative_prompt: service.negativePrompt ?? '',
     resolution,
-    images: {},
   }
   const graph: ComfyGraph = {
     '1': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: service.model.trim() } },
@@ -147,17 +221,24 @@ function buildGraph(
     '10': { class_type: 'SaveImage', inputs: { images: ['9', 0], filename_prefix: 'mujian_gen' } },
   }
   if (uploadedNames.length > 0) {
-    // 参考图编辑：每张参考图一个 LoadImage，接进编码器的 images.image_N；vae 也接进去编码 reference_latents
-    const images: Record<string, [string, number]> = {}
+    // 参考图编辑：每张参考图一个 LoadImage，接进编码器的 Autogrow 输入；vae 也接进去编码 reference_latents。
+    //
+    // ⚠️ API 格式里 Autogrow 的每个槽位是**平铺的点号键** `images.image_1`、`images.image_2`……
+    // （ComfyUI 的 finalize_prefix 按 `输入id.槽名` 登记，执行前 build_nested_inputs 再还原成
+    //  节点收到的 `images = {image_1: …}`）。**不能**写成嵌套对象 `images: { image_1: … }`：
+    // 键 `images` 不是已登记的输入 id，会被执行器静默丢弃，节点拿到空的 images ——
+    // 没有 reference_latents、视觉塔也看不到参考图，实际跑成纯文生图；LoadImage 也因不再被
+    // 任何节点引用而根本不执行。症状就是「图生图出来的图和参考图完全不一样」且不报任何错。
+    // （已用 ComfyUI v0.37.0 自身的 get_finalized_class_inputs / build_nested_inputs 对两种写法实测核对。）
     uploadedNames.forEach((name, i) => {
       const nodeId = String(20 + i)
       graph[nodeId] = { class_type: 'LoadImage', inputs: { image: name } }
-      images[`image_${i + 1}`] = [nodeId, 0]
+      encoderInputs[`images.image_${i + 1}`] = [nodeId, 0]
     })
-    encoderInputs.images = images
     encoderInputs.vae = ['3', 0]
     const denoise = Number(service.denoise)
-    ;(graph['8'] as ComfyNode).inputs.denoise = Number.isFinite(denoise) && denoise > 0 ? denoise : 1
+    ;(graph['8'] as ComfyNode).inputs.denoise =
+      Number.isFinite(denoise) && denoise > 0 ? denoise : 1
     // ⚠️ 6GB 上图生图必须用「分块」VAE 解码，否则会崩溃（本机实测，见文件头注释 3）：
     // 图生图把参考图编码进 reference_latents，采样阶段驻留显存远大于文生图，解码时 DiT 仍占用
     // ~2.8GB，普通 VAEDecode 连 ComfyUI 自带的 tiled 回退都会 OOM。一旦 OOM，ComfyUI 的
@@ -184,16 +265,15 @@ async function pollResult(
   promptId: string,
   guard: ReturnType<typeof armStall>,
 ): Promise<{ filename: string; subfolder: string; type: string }> {
-  const base = service.baseUrl.trim()
-  const proxy = service.proxyPrefix.trim()
   for (;;) {
     guard.signal.throwIfAborted()
     await new Promise((r) => setTimeout(r, 1500))
     guard.signal.throwIfAborted()
+    const ep = endpoint(service, `/history/${encodeURIComponent(promptId)}`)
     const res = await httpSend({
-      url: resolveUrl(base, `/history/${encodeURIComponent(promptId)}`, proxy),
+      url: ep.url,
       method: 'GET',
-      headers: buildHeaders(''),
+      headers: { ...buildHeaders(''), ...ep.headers },
       signal: guard.signal,
     })
     if (!res.ok) throw await toProviderError(res)
@@ -229,10 +309,11 @@ async function pollResult(
  */
 async function freeComfyMemory(service: ImageModelService, signal: AbortSignal): Promise<void> {
   try {
+    const ep = endpoint(service, '/free')
     await httpSend({
-      url: resolveUrl(service.baseUrl.trim(), '/free', service.proxyPrefix.trim()),
+      url: ep.url,
       method: 'POST',
-      headers: buildHeaders(''),
+      headers: { ...buildHeaders(''), ...ep.headers },
       body: JSON.stringify({ unload_models: true, free_memory: true }),
       signal,
     })
@@ -266,10 +347,11 @@ export async function generateViaComfyUI(args: {
     const seed = Math.floor(Math.random() * 2 ** 48)
     const graph = buildGraph(service, prompt, uploaded, seed)
     const clientId = crypto.randomUUID()
+    const promptEp = endpoint(service, '/prompt')
     const submit = await httpSend({
-      url: resolveUrl(service.baseUrl.trim(), '/prompt', service.proxyPrefix.trim()),
+      url: promptEp.url,
       method: 'POST',
-      headers: buildHeaders(''),
+      headers: { ...buildHeaders(''), ...promptEp.headers },
       body: JSON.stringify({ prompt: graph, client_id: clientId }),
       signal: guard.signal,
     })
@@ -302,13 +384,11 @@ export async function generateViaComfyUI(args: {
       subfolder: image.subfolder ?? '',
       type: image.type ?? 'output',
     })
+    const viewEp = endpoint(service, `/view?${params.toString()}`)
     const view = await httpSend({
-      url: resolveUrl(
-        service.baseUrl.trim(),
-        `/view?${params.toString()}`,
-        service.proxyPrefix.trim(),
-      ),
+      url: viewEp.url,
       method: 'GET',
+      headers: viewEp.headers,
       signal: guard.signal,
     })
     if (!view.ok) throw new Error(`下载生成图片失败（${view.status}）`)
@@ -319,12 +399,9 @@ export async function generateViaComfyUI(args: {
     if (guard.stalled)
       throw new ProviderError('timeout', '图片生成超时，请确认 ComfyUI 正在运行且未卡住')
     if (signal.aborted) throw new ProviderError('aborted', '已取消生成')
-    // 浏览器 fetch 连不上时抛的是 TypeError（Failed to fetch）。但其它 TypeError 不能一概翻译成
-    // 「无法连接」—— 那会把真正的原因藏掉（曾把响应头 ByteString 错误误报成连不上）
-    if (error instanceof TypeError && !/ByteString|Headers|header/i.test(error.message))
-      throw new Error(
-        '无法连接 ComfyUI，请检查服务器地址、是否已启动，以及跨域（--enable-cors-header）设置',
-      )
+    // 连不上（浏览器 TypeError / 原生连接错误 / 中转 502）：按场景给出原因。
+    // 其它 TypeError 不能一概翻译成「无法连接」—— 曾把响应头 ByteString 错误误报成连不上
+    if (isConnectFailure(error)) throw new Error(comfyConnectHint(service.baseUrl))
     if (error instanceof SyntaxError) throw new Error('ComfyUI 返回了无效的数据')
     throw error
   } finally {
@@ -340,12 +417,27 @@ export async function listComfyModels(
   service: Pick<ImageModelService, 'baseUrl' | 'proxyPrefix'>,
   signal: AbortSignal,
 ): Promise<{ unets: string[]; clips: string[]; vaes: string[] }> {
-  const res = await httpSend({
-    url: resolveUrl(service.baseUrl.trim(), '/object_info', service.proxyPrefix.trim()),
-    method: 'GET',
-    headers: buildHeaders(''),
-    signal,
-  })
+  const ep = endpoint(service, '/object_info')
+  let res: Response
+  try {
+    res = await httpSend({
+      url: ep.url,
+      method: 'GET',
+      headers: { ...buildHeaders(''), ...ep.headers },
+      signal,
+    })
+  } catch (error) {
+    if (signal.aborted) throw error
+    if (isConnectFailure(error)) throw new Error(comfyConnectHint(service.baseUrl))
+    throw error
+  }
+  // 中转连不上目标时回 502，同样按场景解释
+  if (res.status === 502 && ep.url.startsWith(DEV_RELAY))
+    throw new Error(comfyConnectHint(service.baseUrl))
+  if (res.status === 403)
+    throw new Error(
+      'ComfyUI 拒绝了请求（403，来源校验）。请给 ComfyUI 启动参数加上 --enable-cors-header "*"。',
+    )
   if (!res.ok) throw await toProviderError(res)
   const info = (await res.json()) as Record<
     string,

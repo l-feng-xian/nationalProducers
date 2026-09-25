@@ -2,6 +2,8 @@
 import { computed, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
+import MobileTabBar from '@/components/layout/MobileTabBar.vue'
+import { MOBILE_TAB_NAMES } from '@/router/layout'
 import CbxToastHost from '@/components/ui/CbxToastHost.vue'
 import CbxConfirmHost from '@/components/ui/CbxConfirmHost.vue'
 import NewChatSheet from '@/components/chat/NewChatSheet.vue'
@@ -10,15 +12,20 @@ import { useSettingsStore } from '@/stores/settings'
 import { useBackClose } from '@/composables/useBackClose'
 import { DRAWER_MQ, useDrawerSwipe, useMediaQuery } from '@/composables/useDrawerSwipe'
 import { useRouteTransition } from '@/composables/useRouteTransition'
+import { revalidateInert } from '@/utils/inert'
 
 const ui = useUiStore()
 const route = useRoute()
 const settings = useSettingsStore()
 
-// 移动端：路由变化自动收起抽屉
+// 移动端：路由变化自动收起抽屉；进行中的边缘拖动一并作废
+// （安卓系统返回手势会在拖到一半时切页，残留的拖动值会让遮罩一直挡着整页，见 useDrawerSwipe）
 watch(
   () => route.fullPath,
-  () => ui.closeDrawer(),
+  () => {
+    drawerSwipe.abort()
+    ui.closeDrawer()
+  },
 )
 
 // ── 移动端抽屉：返回键关闭 + 边缘右滑拉出 / 左滑推回 ──
@@ -34,13 +41,62 @@ watch(isDrawerMode, (on) => {
   if (!on) ui.closeDrawer()
 })
 const shellEl = ref<HTMLElement | null>(null)
-useDrawerSwipe(
+const drawerSwipe = useDrawerSwipe(
   () => shellEl.value,
   () => shellEl.value?.querySelector<HTMLElement>('.sidebar') ?? null,
 )
 // 全部路由切换的过渡（离场 → 换页 → 入场），动的是右侧内容区
 const mainEl = ref<HTMLElement | null>(null)
 useRouteTransition(useRouter(), () => mainEl.value)
+
+/**
+ * 任何原生 <dialog> 关闭后，下一帧重算一次内容区的 inert。
+ * `close` 事件不冒泡，但捕获阶段照样经过 document，所以一个监听覆盖全部弹框。
+ * 背景见 utils/inert.ts：Chromium 偶发把模态惰性残留在 .main 上，页面看着正常却点不动。
+ */
+function onDialogClose() {
+  requestAnimationFrame(() => revalidateInert(mainEl.value))
+}
+onMounted(() => document.addEventListener('close', onDialogClose, true))
+onBeforeUnmount(() => document.removeEventListener('close', onDialogClose, true))
+
+/**
+ * 手机底部标签栏：只在五个标签页本身显示，二级页（详情 / 聊天 / 设置）收起。
+ * 软键盘弹起（焦点在输入框里）时也收起，否则它会被顶到键盘上沿、挤掉一截可视区域。
+ */
+const typing = ref(false)
+function isTextField(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false
+  if (el.isContentEditable || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)
+    return true
+  return (
+    el instanceof HTMLInputElement &&
+    !['checkbox', 'radio', 'range', 'button', 'submit', 'reset', 'file', 'color'].includes(el.type)
+  )
+}
+function onFocusIn(e: FocusEvent) {
+  typing.value = isTextField(e.target)
+}
+function onFocusOut() {
+  // 焦点从一个输入框跳到另一个时 focusout 先到：等一拍看落点
+  requestAnimationFrame(() => (typing.value = isTextField(document.activeElement)))
+}
+onMounted(() => {
+  document.addEventListener('focusin', onFocusIn)
+  document.addEventListener('focusout', onFocusOut)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('focusin', onFocusIn)
+  document.removeEventListener('focusout', onFocusOut)
+})
+const showTabBar = computed(
+  () =>
+    isDrawerMode.value &&
+    !typing.value &&
+    MOBILE_TAB_NAMES.includes(String(route.name)) &&
+    // 世界书带参数（选中了某本书）时是二级页
+    !Object.values(route.params).some((v) => !!v && v !== ''),
+)
 
 const scrimVisible = computed(() => ui.drawerOpen || ui.drawerDrag !== null)
 const scrimStyle = computed(() =>
@@ -130,6 +186,7 @@ const KEEP_ALIVE = ['CharactersView']
         </KeepAlive>
       </RouterView>
     </main>
+    <MobileTabBar v-if="showTabBar" />
     <CbxToastHost />
     <CbxConfirmHost />
     <NewChatSheet v-if="ui.newChatOpen" />
@@ -163,6 +220,10 @@ const KEEP_ALIVE = ['CharactersView']
 }
 
 @media (max-width: 767px) {
+  /* 手机上侧栏是 fixed 抽屉、不占流；内容区与底部标签栏上下排 */
+  .shell {
+    flex-direction: column;
+  }
   .scrim {
     display: block;
     position: fixed;
