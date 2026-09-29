@@ -367,6 +367,24 @@ a:hover {
   width: 96px;
   height: 96px;
 }
+/* 可点击预览的头像（CbxAvatar previewable）：按钮本身不带任何外观 */
+.cbx-avatar-btn {
+  display: block;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--cbx-radius-pill);
+  background: none;
+  cursor: zoom-in;
+}
+.cbx-avatar-btn--card {
+  width: 100%;
+  border-radius: var(--cbx-radius-md);
+}
+.cbx-avatar-btn:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
+}
 /* 2:3 角色卡面 */
 .cbx-avatar--card {
   width: 100%;
@@ -978,7 +996,7 @@ a:hover {
   animation-timing-function: var(--cbx-ease);
 }
 
-/* 数据管理「图片」表：缩略图 ⇄ 放大预览（useBlobPreview / BlobLightbox）。
+/* 数据管理「图片」表：缩略图 ⇄ 放大预览（全站统一预览 useImagePreview / ImagePreview）。
 
    这一组和 cbx-morph 的取舍**正好相反**：上面那条「不要照抄 object-fit:cover;
    height:100%」说的是两端等比的场景，而这里两端比例根本不同 ——

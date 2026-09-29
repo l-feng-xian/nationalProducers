@@ -40,7 +40,7 @@ const emit = defineEmits<{
   generateImage: []
   imageLoaded: []
   /** 点了某张配图：交给 ChatView 打开整段对话的多图查看页 */
-  openImage: [blobId: string]
+  openImage: [blobId: string, el: HTMLElement]
   /**
    * 进入/退出内联编辑。给虚拟滚动用：`editing`/`draft` 是组件内状态，
    * 这一行一旦滚出窗口被卸载，用户正在改的草稿就无声没了（全量渲染时不会）。
@@ -118,12 +118,13 @@ function act(fn: () => void) {
 </script>
 
 <template>
-  <div class="row" :class="{ 'row--user': isUser }">
+  <div class="row" :class="{ 'row--user': isUser }" :data-msg-id="msg.id">
     <CbxAvatar
       v-if="!isUser"
       :blob-id="avatarBlobId"
       :name="msg.name"
       size="sm"
+      previewable
     />
 
     <div class="col">
@@ -176,7 +177,7 @@ function act(fn: () => void) {
             :key="image.blobId"
             :image="image"
             @loaded="emit('imageLoaded')"
-            @open="emit('openImage', image.blobId)"
+            @open="(el: HTMLElement) => emit('openImage', image.blobId, el)"
           />
         </template>
       </div>

@@ -7,7 +7,7 @@ import { downloadBlob, safeFileName } from '@/utils/download'
 import { useToast } from '@/composables/useToast'
 import type { MessageImage } from '@/types/image'
 const props = defineProps<{ image: MessageImage }>()
-const emit = defineEmits<{ loaded: []; open: [] }>()
+const emit = defineEmits<{ loaded: []; open: [el: HTMLElement] }>()
 const { url } = useObjectUrl(computed(() => props.image.blobId))
 const toast = useToast()
 
@@ -32,6 +32,13 @@ async function saveImage() {
  * IndexedDB 里读的时候这一格就已经是最终高度，不会「先一行字、再撑满」跳两次。
  * 老记录没存尺寸，回退到不占位（与改动前一致）。
  */
+/** 把图片元素交出去做缩略图 → 大图的形变 */
+function onOpen(e: MouseEvent) {
+  const el =
+    (e.currentTarget as HTMLElement).querySelector('img') ?? (e.currentTarget as HTMLElement)
+  emit('open', el)
+}
+
 const frameStyle = computed(() => {
   const { width, height } = props.image
   return width && height ? { aspectRatio: `${width} / ${height}` } : undefined
@@ -39,18 +46,18 @@ const frameStyle = computed(() => {
 </script>
 
 <template>
-  <figure class="message-image">
+  <figure class="message-image" :data-blob-id="image.blobId">
     <!-- 不用 loading="lazy"：虚拟滚动本身已经是窗口化，再叠一层浏览器懒加载
          只会让高度在滚入后又变一次 -->
     <!-- 原来是 <a target="_blank"> 开新标签：安卓 WebView 里没有标签页，点了没反应。
-         改为在应用内的全屏查看页里看（ChatView 里的 ImageViewer，可缩放、可上下滑切图） -->
+         改为应用内的统一预览（useImagePreview：可缩放、可左右切换本会话的全部配图） -->
     <button
       v-if="url"
       type="button"
       class="frame"
       :style="frameStyle"
       aria-label="查看大图"
-      @click="emit('open')"
+      @click="onOpen"
     >
       <img :src="url" alt="根据对话生成的配图" draggable="false" @load="emit('loaded')" />
     </button>
@@ -76,6 +83,25 @@ const frameStyle = computed(() => {
 </template>
 
 <style scoped>
+/* 「定位到配图」时闪一下（ChatView.revealImage 临时加上 message-image--flash） */
+.message-image--flash .frame {
+  animation: image-flash 1.6s var(--cbx-ease);
+}
+@keyframes image-flash {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px var(--cbx-brand);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-image--flash .frame {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--cbx-brand);
+  }
+}
 .message-image {
   margin: 12px 0 0;
   width: min(100%, 420px);

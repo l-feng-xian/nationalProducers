@@ -40,7 +40,7 @@ export async function remove(id: string): Promise<void> {
 export interface BlobRefSource {
   messages?: { images?: { blobId: string }[]; force_avatar?: string }[]
   characters?: { avatarBlobId?: string | undefined; depthBlobId?: string | undefined }[]
-  groups?: { avatarBlobId?: string | undefined }[]
+  groups?: { avatarBlobId?: string | undefined; depthBlobId?: string | undefined }[]
   persona?: { avatarBlobId?: string | undefined } | undefined
 }
 
@@ -63,8 +63,10 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
     if (c.avatarBlobId) out.add(c.avatarBlobId)
     if (c.depthBlobId) out.add(c.depthBlobId)
   }
+  // 群聊封面同样是两个字段：横版封面 + 视差深度图
   for (const g of src.groups ?? []) {
     if (g.avatarBlobId) out.add(g.avatarBlobId)
+    if (g.depthBlobId) out.add(g.depthBlobId)
   }
   if (src.persona?.avatarBlobId) out.add(src.persona.avatarBlobId)
   return out

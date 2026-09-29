@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
-import { onMounted } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
@@ -10,6 +10,9 @@ import { useChatsStore } from '@/stores/chats'
 import { useToast } from '@/composables/useToast'
 import type { Group } from '@/types/group'
 import { confirmDialog } from '@/composables/useConfirm'
+import { ZoomIn } from '@/components/icons'
+import { useImagePreview } from '@/composables/useImagePreview'
+import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
 
 const router = useRouter()
 const groups = useGroupsStore()
@@ -22,6 +25,63 @@ onMounted(() => {
   // 成员头像要靠 characterId 反查，这页也得把角色载进来
   if (!chars.loaded) void chars.load()
 })
+
+// ── 群聊封面横幅（3:2）+ 深度视差，挂载方式照抄角色列表页 ──
+/** 与 GroupEditView 的封面比例一致 */
+const COVER_ASPECT = 3 / 2
+const parallax = useDepthParallax()
+const scroller = ref<HTMLElement | null>(null)
+let io: IntersectionObserver | null = null
+
+async function onBannerEnter(g: Group, e: PointerEvent) {
+  if (parallaxMode !== 'pointer') return
+  await parallax.activate(
+    e.currentTarget as HTMLElement,
+    g.avatarBlobId,
+    g.depthBlobId,
+    COVER_ASPECT,
+  )
+}
+function onBannerMove(e: PointerEvent) {
+  parallax.pointer(e)
+}
+function onBannerLeave() {
+  if (parallaxMode === 'pointer') parallax.release()
+}
+/** 手机倾斜模式：只给进入可视区的横幅挂画布（渲染器最多同时 10 个视图） */
+function observeBanners() {
+  io?.disconnect()
+  io = null
+  parallax.release()
+  if (parallaxMode !== 'tilt' || !scroller.value) return
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        const el = en.target as HTMLElement
+        const g = groups.byId(el.dataset['id'])
+        if (en.isIntersecting && g)
+          void parallax.activate(el, g.avatarBlobId, g.depthBlobId, COVER_ASPECT)
+        else parallax.deactivate(el)
+      }
+    },
+    { root: scroller.value, rootMargin: '100px 0px', threshold: 0 },
+  )
+  for (const el of scroller.value.querySelectorAll<HTMLElement>('.banner[data-id]')) io.observe(el)
+}
+watch(
+  () => groups.items.map((g) => `${g.id}:${g.avatarBlobId}:${g.depthBlobId}`).join('|'),
+  () => void nextTick(observeBanners),
+  { immediate: true },
+)
+onBeforeUnmount(() => io?.disconnect())
+
+/** 卡片点击是进编辑；封面角落的放大按钮才是预览 */
+const imagePreview = useImagePreview()
+function previewCover(g: Group, e: MouseEvent) {
+  if (!g.avatarBlobId) return
+  const img = (e.currentTarget as HTMLElement).closest('.banner')?.querySelector('img')
+  void imagePreview.open([{ blobId: g.avatarBlobId, caption: `${g.name} · 群聊封面` }], 0, img)
+}
 
 /** 最多叠 4 个头像，再多用「+N」收口，否则成员一多卡片就被撑破 */
 const MAX_FACES = 4
@@ -81,7 +141,7 @@ async function startChat(g: Group) {
     </template>
   </AppTopbar>
 
-  <div class="cbx-scroll body">
+  <div ref="scroller" class="cbx-scroll body">
     <div v-if="!groups.items.length" class="cbx-empty">
       <span class="cbx-empty__icon"><AppIcon name="UsersRound" tone="brand" /></span>
       <span class="cbx-empty__title">还没有群聊</span>
@@ -92,6 +152,25 @@ async function startChat(g: Group) {
 
     <div v-else class="grid">
       <article v-for="g in groups.items" :key="g.id" class="card">
+        <div
+          v-if="g.avatarBlobId"
+          class="banner"
+          :data-id="g.id"
+          @pointerenter="onBannerEnter(g, $event)"
+          @pointermove="onBannerMove"
+          @pointerleave="onBannerLeave"
+        >
+          <CbxAvatar class="banner__img" :blob-id="g.avatarBlobId" :name="g.name" />
+          <button
+            type="button"
+            class="banner__zoom"
+            :aria-label="`放大查看「${g.name}」的封面`"
+            title="放大查看"
+            @click.stop="previewCover(g, $event)"
+          >
+            <ZoomIn :size="18" />
+          </button>
+        </div>
         <div class="card__top">
           <div class="faces">
             <!-- 没成员时给个占位，否则这一行只剩右侧一个 ✕ 悬着，是条空白 -->
@@ -164,6 +243,47 @@ async function startChat(g: Group) {
     box-shadow: var(--cbx-shadow-md);
     transform: translateY(-2px);
   }
+}
+
+/* 封面横幅贴满卡片顶边（抵消卡片内边距） */
+.banner {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  margin: calc(-1 * var(--cbx-space-4)) calc(-1 * var(--cbx-space-4)) var(--cbx-space-1);
+  overflow: hidden;
+  border-radius: var(--cbx-radius) var(--cbx-radius) 0 0;
+  background: var(--cbx-bg-secondary);
+}
+.banner__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-fit: cover;
+}
+.banner__zoom {
+  position: absolute;
+  right: var(--cbx-space-2);
+  bottom: var(--cbx-space-2);
+  z-index: 1;
+  width: var(--cbx-tap-min);
+  height: var(--cbx-tap-min);
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--cbx-radius-pill);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: zoom-in;
+}
+@media (hover: hover) {
+  .banner__zoom:hover {
+    background: rgba(0, 0, 0, 0.72);
+  }
+}
+.banner__zoom:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 
 .card__top {

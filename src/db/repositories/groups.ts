@@ -119,6 +119,7 @@ export async function remove(id: string): Promise<void> {
   const tx = db.transaction(['groups', 'chats', 'messages', 'blobs'], 'readwrite')
   const g = await tx.objectStore('groups').get(id)
   if (g?.avatarBlobId) await tx.objectStore('blobs').delete(g.avatarBlobId)
+  if (g?.depthBlobId) await tx.objectStore('blobs').delete(g.depthBlobId)
 
   const chatStore = tx.objectStore('chats')
   const msgStore = tx.objectStore('messages')

@@ -60,7 +60,13 @@ export function useDepthParallax() {
   }
 
   /** 挂到画框上。失败静默返回 false（视差是纯装饰），画框里仍是静态 <img> */
-  async function activate(el: HTMLElement, avatarBlobId?: string, depthBlobId?: string) {
+  /** aspect = 画框宽高比：角色卡 2:3（默认），群聊封面横版 3:2 */
+  async function activate(
+    el: HTMLElement,
+    avatarBlobId?: string,
+    depthBlobId?: string,
+    aspect = 2 / 3,
+  ) {
     if (!eligible(avatarBlobId, depthBlobId)) return false
     if (hosts.has(el)) return true
     hosts.add(el)
@@ -83,7 +89,7 @@ export function useDepthParallax() {
       key: `${avatarBlobId}|${depthBlobId}`,
       color,
       depth,
-      aspect: 2 / 3,
+      aspect,
     })
     if (!hosts.has(el)) {
       // 等待期间已被 deactivate：mount 若成功要撤掉

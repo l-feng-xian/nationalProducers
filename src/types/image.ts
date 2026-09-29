@@ -84,11 +84,24 @@ export interface GeneratedImage {
   referenceMode?: 'multipart' | 'json'
 }
 
-/** 生成窗口固定本次所用的角色封面，不从后续路由或角色变更中重新取图。 */
-export interface CharacterImageReference {
-  characterId: string
+/**
+ * 生图对话框里可选的一张参考图。选中的按顺序就是「参考图 1、2、3……」，
+ * 提示词里的编号说明（prompts.ts referenceLines）与发送顺序一一对应。
+ */
+export interface ImageRefCandidate {
+  /** 全局唯一：`char:<角色id>` / `group:<群聊id>` / `img:<blobId>` */
+  id: string
+  /** character = 角色封面；group = 群聊封面；history = 本会话此前的配图 */
+  kind: 'character' | 'group' | 'history'
+  /** 人物名 / 群名 / 配图所在消息的发言者 */
   name: string
+  /** 角色还没设封面时为空：选中它会阻止生成并提示去设置 */
   blobId?: string
+  /** 界面上的来源说明，如「艾莉的封面」「第 12 条 · 阿蓝 的配图」 */
+  label: string
+  characterId?: string
+  /** 人物外貌设定（角色简介），写进提示词与参考图双重锚定 */
+  description?: string
 }
 
 export interface ImageReferenceInput {

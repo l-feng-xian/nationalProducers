@@ -68,12 +68,20 @@ export async function generateImage(args: {
   apiKey: string
   prompt: string
   references?: ImageReferenceInput[]
+  /** 覆盖服务的默认尺寸（群聊封面要横版）。ComfyUI 只出方图，忽略 */
+  size?: string
   signal: AbortSignal
 }): Promise<GeneratedImage> {
   const { service, signal } = args
   // 本地 ComfyUI 与 OpenAI Images 的请求形态完全不同，分流到专用后端。
   if (service.backend === 'comfyui')
-    return generateViaComfyUI({ service, prompt: args.prompt, references: args.references, signal })
+    return generateViaComfyUI({
+      service,
+      prompt: args.prompt,
+      references: args.references,
+      ...(args.size ? { size: args.size } : {}),
+      signal,
+    })
   validateImageService(service)
   const prompt = args.prompt.trim()
   if (!prompt) throw new Error('请填写画面描述')
@@ -81,7 +89,8 @@ export async function generateImage(args: {
   try {
     guard.signal.throwIfAborted()
     const body: Record<string, unknown> = { model: service.model.trim(), prompt, n: 1 }
-    if (service.size.trim()) body.size = service.size.trim()
+    const size = (args.size ?? service.size).trim()
+    if (size) body.size = size
     if (service.quality.trim()) body.quality = service.quality.trim()
     if (service.responseFormat) body.response_format = service.responseFormat
     const references = args.references ?? []

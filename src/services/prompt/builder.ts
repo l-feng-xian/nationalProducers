@@ -27,6 +27,8 @@ import { fitWithinBudget } from './budget'
 import { exampleBlockToMessages, parseMesExamples, type ExampleNames } from './examples'
 import { renderRelations } from './relations'
 import { joinGroupCards } from '../group/cards'
+import { buildStatusBlock } from '../status/template'
+import type { StatusData, StatusField } from '@/types/status'
 import { checkWorldInfo } from '../worldinfo/engine'
 import { resolveSortedEntries, type LoreSources } from '../worldinfo/sources'
 import type { WIScanResult } from '../worldinfo/engine'
@@ -137,6 +139,14 @@ export interface BuildPromptInput {
   isDryRun?: boolean
   /** 会话记忆 · 状态卡正文。空/未传则整块不出现 */
   stateCard?: string
+  /** 角色状态：生效字段 + 最新一份快照。未传或字段为空则整块不出现 */
+  status?: {
+    fields: StatusField[]
+    current: StatusData | null
+    depth: number
+    /** 快照里必须各有一项的角色（群聊 = 全体成员，含静音）；用户由 persona 补上 */
+    charNames: string[]
+  }
 }
 
 export interface BuiltPrompt {
@@ -344,6 +354,36 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
         scan: false, // 记忆不参与世界书扫描，避免自己触发自己
       }),
     )
+  }
+
+  // 3d. 角色状态：只注入**最新一份**快照 + 输出格式要求。
+  // 历史消息里不会有旧快照 —— 状态块在落库前就从正文剥掉了（services/status/parse.ts）。
+  // order 250 > 约束 200：格式要求离回复最近，模型最不容易忘记输出。
+  if (input.status?.fields.length) {
+    const statusText = buildStatusBlock({
+      fields: input.status.fields,
+      current: input.status.current,
+      userName: persona.name,
+      // 发言者排第一：示例骨架取第一个名字
+      charNames: [
+        input.speaker.name,
+        ...input.status.charNames.filter((n) => n !== input.speaker.name),
+      ],
+      isGroup: input.isGroup,
+      sub,
+    })
+    if (statusText) {
+      injections.push(
+        makeInjection({
+          key: 'STATUS',
+          value: statusText,
+          depth: input.status.depth,
+          role: EXT_ROLE.SYSTEM,
+          order: 250,
+          scan: false,
+        }),
+      )
+    }
   }
 
   // ── 4. 固定块（顺序即最终输出顺序） ──

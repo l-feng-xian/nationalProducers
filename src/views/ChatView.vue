@@ -2,23 +2,34 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Virtualizer } from 'virtua/vue'
-import { ImagePlus, MessageCircle, Plus, ScanText, UsersRound } from '@/components/icons'
+import {
+  ImagePlus,
+  MessageCircle,
+  PanelRight,
+  Plus,
+  ScanText,
+  UsersRound,
+} from '@/components/icons'
 import AppIcon from '@/components/icons/AppIcon.vue'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import MessageBubble from '@/components/chat/MessageBubble.vue'
 import ChatComposer from '@/components/chat/ChatComposer.vue'
 import PromptPreview from '@/components/chat/PromptPreview.vue'
-import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
-import ImageViewer, { type ViewerItem } from '@/components/chat/ImageViewer.vue'
-import { dialogueImagePrompt, pickSceneCharacters } from '@/services/image/prompts'
+import StatusPanel from '@/components/chat/StatusPanel.vue'
+import { useImagePreview, type PreviewItem } from '@/composables/useImagePreview'
+import { dialogueImagePrompt, pickSceneCharacters, statusAt } from '@/services/image/prompts'
 import { dialogueImagePromptViaLLM } from '@/services/image/promptFromLLM'
-import type { CharacterImageReference, GeneratedImage } from '@/types/image'
+import type { GeneratedImage, ImageRefCandidate } from '@/types/image'
 import type { ChatMessage } from '@/types/chat'
 import { useChatsStore } from '@/stores/chats'
 import { useCharactersStore } from '@/stores/characters'
 import { useGroupsStore } from '@/stores/groups'
 import { useSettingsStore } from '@/stores/settings'
 import { useGenerationStore } from '@/stores/generation'
+import { useUiStore } from '@/stores/ui'
+import { useStatusStore } from '@/stores/status'
+import { useImageJobStore, type RevealRequest } from '@/stores/imageJob'
+import { useMediaQuery, DRAWER_MQ } from '@/composables/useDrawerSwipe'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import { useToast } from '@/composables/useToast'
 import { messagesRepo } from '@/db/repositories'
@@ -33,82 +44,182 @@ const groups = useGroupsStore()
 const settings = useSettingsStore()
 const gen = useGenerationStore()
 const toast = useToast()
-const imageTarget = ref<{
-  chatId: string
-  messageId: string
-  prompt: string
-  references: CharacterImageReference[]
-  message: ChatMessage
-} | null>(null)
+const ui = useUiStore()
+const status = useStatusStore()
+const isMobile = useMediaQuery(DRAWER_MQ)
+
+// ── 角色状态侧栏 ──────────────────────────────────────────
+const showStatus = computed(() => !!chats.current && status.enabled)
+/** 浮层形态（手机 / 桌面未固定）：聊天时要让开 */
+const statusFloating = computed(() => isMobile.value || !ui.statusPinned)
+function toggleStatus() {
+  ui.statusOpen = !ui.statusOpen
+}
+/**
+ * 输入框获得焦点 = 要开始打字了，浮层收起别挡着。
+ * 挂在 .chat-col 上按目标判断：ChatComposer 是多根组件（带 Teleport），@focusin 透传不下去
+ */
+function onColFocus(e: FocusEvent) {
+  if (!statusFloating.value) return
+  if (e.target instanceof Element && e.target.closest('.composer')) ui.statusOpen = false
+}
+/**
+ * 入口按钮上的「有新状态」圆点：侧栏关着时出现了新快照。
+ * 以「快照所在消息 id + 更新时间」为键；打开侧栏或切换会话时视为已读。
+ */
+const statusKey = computed(() => {
+  const cur = status.current
+  return cur ? `${cur.msg.id}:${cur.status.updatedAt}` : ''
+})
+const statusSeen = ref('')
+watch(
+  [statusKey, () => ui.statusOpen],
+  ([key, open]) => {
+    if (open) statusSeen.value = key
+  },
+  { immediate: true },
+)
+const statusUnseen = computed(
+  () => !ui.statusOpen && !!statusKey.value && statusKey.value !== statusSeen.value,
+)
+const imageJob = useImageJobStore()
 const canGenerateImage = computed(() =>
   chats.messages.some((m) => !m.is_system && !m.exclude && m.mes.trim()),
 )
 
+/**
+ * 打开对话配图。任务交给应用层（stores/imageJob.ts，App.vue 渲染对话框）：
+ * 最小化后离开聊天页（手机上一个返回手势）生成也不会被取消。
+ *
+ * 参考图候选池：出场角色的封面 + 群聊封面 + 本会话此前的全部配图（新的在前）。
+ * 默认只勾选角色封面 —— 群聊按 pickSceneCharacters 挑这一幕真正出场的人，
+ * 不把全体成员都塞进去（不在场的人被画进来、面孔互相串）。用户可在对话框里再增删。
+ *
+ * ⚠️ 下面的回调都闭包住**打开这一刻**的会话快照（chatId / 消息列表），不读 chats.current：
+ * 对话框活得比聊天页久，用户中途切了会话，回调里读到的就是别人的消息。
+ */
 function openImage(messageId?: string) {
+  // 已有一个（最小化的）配图任务：先把它展开，同一时刻只跑一个
+  if (imageJob.job) {
+    imageJob.minimized = false
+    return
+  }
   if (!chats.current || gen.busy) return
-  const rows = chats.messages
+  const chatId = chats.current.id
+  const rows = [...chats.messages]
   const target = messageId
     ? rows.find((m) => m.id === messageId)
     : [...rows].reverse().find((m) => !m.is_system && !m.exclude && m.mes.trim())
   if (!target || target.is_system || target.exclude || !target.mes.trim()) return
-  // 群聊只带这一幕真正出场的人（发言者 + 被点名的成员，最多 3 张参考图），
-  // 而不是全体成员 —— 否则不在场的人也被画进来、面孔互相串，6GB 显存还容易 OOM
-  const members = isGroup.value
-    ? pickSceneCharacters(target, rows, groupMembers.value)
+  const cast = isGroup.value
+    ? groupMembers.value
     : [chars.byId(chats.current.characterId)].filter((c) => !!c)
-  const references = members.map((character) => ({
-    characterId: character.id,
-    name: character.data.name,
-    blobId: character.avatarBlobId,
+  const candidates: ImageRefCandidate[] = cast.map((c) => ({
+    id: `char:${c.id}`,
+    kind: 'character',
+    name: c.data.name,
+    ...(c.avatarBlobId ? { blobId: c.avatarBlobId } : {}),
+    label: `${c.data.name}的封面`,
+    characterId: c.id,
+    description: c.data.description,
   }))
-  // 角色外貌（角色简介）写进提示词，和参考图一起双重锚定人物，避免图生图服饰漂移
-  const characters = members.map((character) => ({
-    name: character.data.name,
-    description: character.data.description,
-  }))
-  imageTarget.value = {
-    chatId: chats.current.id,
-    messageId: target.id,
-    prompt: dialogueImagePrompt(target, characters),
-    references,
-    message: target,
-  }
-}
-
-async function applyImage(image: GeneratedImage) {
-  const target = imageTarget.value
-  if (!target) throw new Error('对话已切换，请重新生成配图')
-  await chats.attachImage(target.chatId, target.messageId, image)
-  toast.success('配图已保存到对话')
-}
-
-/** 用已配置的 LLM 依据最近对话生成图生图提示词（失败回退模板）。 */
-async function dialoguePromptGen(signal: AbortSignal): Promise<string> {
-  const target = imageTarget.value
-  if (!target) return ''
-  const p = settings.settings.provider
-  const apiKey = await settings.getApiKey(p.secretRef)
-  const history = chats.messages.filter((m) => m.seq <= target.message.seq)
-  // 从参考角色取外貌设定（角色简介），随提示词一起下发以锁定人物
-  const characters = target.references.map((r) => ({
-    name: r.name,
-    description: chars.byId(r.characterId)?.data.description ?? '',
-  }))
-  return dialogueImagePromptViaLLM({
-    message: target.message,
-    history,
-    characters,
-    provider: p,
-    apiKey,
-    signal,
+  const g = group.value
+  if (isGroup.value && g?.avatarBlobId)
+    candidates.push({
+      id: `group:${g.id}`,
+      kind: 'group',
+      name: g.name,
+      blobId: g.avatarBlobId,
+      label: '群聊封面',
+    })
+  const history: ImageRefCandidate[] = []
+  rows.forEach((m, i) => {
+    for (const img of m.images ?? [])
+      history.push({
+        id: `img:${img.blobId}`,
+        kind: 'history',
+        name: m.name,
+        blobId: img.blobId,
+        label: `第 ${i + 1} 条 · ${m.name}的配图`,
+      })
   })
+  const picked = isGroup.value
+    ? pickSceneCharacters(target, rows, groupMembers.value)
+    : cast.slice(0, 1)
+  // 目标消息那一刻的角色状态、以及它之前（含）的对话
+  const status = statusAt(rows, target.seq)
+  const before = rows.filter((m) => m.seq <= target.seq)
+
+  imageJob.start({
+    title: '生成对话配图',
+    applyLabel: '保存到对话',
+    requireReferences: true,
+    // 历史配图新的在前（前面的角色 / 群聊封面顺序不动）
+    candidates: [...candidates, ...history.reverse()],
+    defaultSelected: picked.map((c) => `char:${c.id}`),
+    // 模板提示词：着重当前场景、表情、肢体动作与穿着
+    buildPrompt: (refs) => dialogueImagePrompt(target, refs, status),
+    // 用已配置的 LLM 依据最近对话 + 角色状态生成（失败回退模板）
+    generatePrompt: async (signal, refs) => {
+      const p = settings.settings.provider
+      const apiKey = await settings.getApiKey(p.secretRef)
+      return dialogueImagePromptViaLLM({
+        message: target,
+        history: before,
+        refs,
+        status,
+        provider: p,
+        apiKey,
+        signal,
+      })
+    },
+    apply: async (image: GeneratedImage) => {
+      const blobId = await chats.attachImage(chatId, target.id, image)
+      // 可点击：用户可能已经聊到别处、切到别的会话、甚至离开了聊天页，点一下回到这张图
+      toast.action('success', '配图已生成并保存到对话', {
+        label: '查看',
+        run: () =>
+          void imageJob.requestReveal({
+            chatId,
+            messageId: target.id,
+            ...(blobId ? { blobId } : {}),
+          }),
+      })
+    },
+  })
+}
+
+/**
+ * 执行「定位到配图」：imageJob.reveal 由提示的「查看」发起（它负责跳到对应会话），
+ * 这里等会话打开、定位完成后滚动过去并闪一下。虚拟滚动下目标可能没渲染，先让 virtua 滚进来。
+ */
+async function revealImage(req: RevealRequest) {
+  const { messageId, blobId } = req
+  const index = chats.messages.findIndex((m) => m.id === messageId)
+  if (index < 0) {
+    toast.info('这条消息已经不在了')
+    return
+  }
+  if (virtualized.value) {
+    vlist.value?.scrollToIndex(index, { align: 'center' })
+    await new Promise((r) => setTimeout(r, 60))
+  }
+  await nextTick()
+  const row = scroller.value?.querySelector<HTMLElement>(`[data-msg-id="${messageId}"]`)
+  const figure = (blobId && row?.querySelector<HTMLElement>(`[data-blob-id="${blobId}"]`)) || row
+  if (!figure) return
+  const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  figure.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' })
+  figure.classList.remove('message-image--flash')
+  void figure.offsetWidth // 重新触发动画
+  figure.classList.add('message-image--flash')
+  setTimeout(() => figure.classList.remove('message-image--flash'), 1700)
 }
 
 watch(
   () => route.params['id'],
   () => {
-    imageTarget.value = null
-    viewerStart.value = null
+    if (statusFloating.value) ui.statusOpen = false
   },
 )
 
@@ -123,6 +234,20 @@ const { stuck, scrollToBottom, follow } = useAutoScroll(scroller)
  * 途中要经过空态，藏错地方就是空态闪一下。
  */
 const positioning = ref(false)
+
+/**
+ * 「定位到配图」：会话切到位、打开时的定位完成（positioning 结束）再执行。
+ * 不用 immediate：setup 阶段 DOM 还没挂、虚拟列表的 ref 也还没声明。
+ * 从别的页面点「查看」回到**同一个**会话时 id 与 positioning 都不变，watch 不触发 ——
+ * 由 onMounted 末尾补调一次 tryReveal。
+ */
+function tryReveal() {
+  const req = imageJob.reveal
+  if (!req || positioning.value || req.chatId !== chats.current?.id) return
+  imageJob.reveal = null
+  void revealImage(req)
+}
+watch(() => [imageJob.reveal, chats.current?.id, positioning.value], tryReveal)
 
 /**
  * 超过这么多条才启用虚拟滚动（沿用 docs/design-data-arch.md 的既定阈值）。
@@ -224,6 +349,8 @@ async function syncRoute() {
   positioning.value = true
   try {
     await chats.open(chatId)
+    // 刚打开的会话里已有的快照不算「新」
+    statusSeen.value = statusKey.value
     editingId.value = null
     virtualized.value = chats.messages.length > VIRTUAL_THRESHOLD
     // nextTick 之后 DOM 已打补丁但尚未绘制，这里同步滚到底，首帧就是底部
@@ -251,6 +378,7 @@ onMounted(async () => {
     ro = new ResizeObserver(measureStartMargin)
     ro.observe(scroller.value)
   }
+  tryReveal()
 })
 onBeforeUnmount(() => {
   ro?.disconnect()
@@ -276,6 +404,7 @@ async function onSend(text: string) {
     await chats.open(meta.id)
   }
   await chats.appendUser(text)
+  if (statusFloating.value) ui.statusOpen = false
   await nextTick()
   scrollToBottom()
   if (isGroup.value) await gen.sendGroup({ isUserInput: true })
@@ -302,10 +431,10 @@ async function onSwipe(msgId: string, dir: -1 | 1) {
 const previewOpen = ref(false)
 
 /**
- * 整段对话的配图按消息顺序拍平成一个相册，查看页里上下滑动就能连着看，
+ * 整段对话的配图按消息顺序拍平成一个相册，预览里左右切换就能连着看，
  * 不用退出来再点下一张。每条消息的多张图保持原顺序。
  */
-const gallery = computed<ViewerItem[]>(() =>
+const gallery = computed<PreviewItem[]>(() =>
   chats.messages.flatMap((m) =>
     (m.images ?? []).map((img) => ({
       blobId: img.blobId,
@@ -313,10 +442,11 @@ const gallery = computed<ViewerItem[]>(() =>
     })),
   ),
 )
-const viewerStart = ref<number | null>(null)
-function openViewer(blobId: string) {
+const imagePreview = useImagePreview()
+/** 从本会话全部配图组成的相册里打开，预览里可左右切换 */
+function openViewer(blobId: string, el?: HTMLElement) {
   const i = gallery.value.findIndex((g) => g.blobId === blobId)
-  if (i >= 0) viewerStart.value = i
+  if (i >= 0) void imagePreview.open(gallery.value, i, el)
 }
 
 async function onEdit(id: string, text: string) {
@@ -363,6 +493,27 @@ async function newChat() {
         <ImagePlus :size="20" aria-hidden="true" /><span>生成配图</span>
       </button>
       <button
+        v-if="showStatus"
+        class="cbx-btn cbx-btn--ghost topbar-action status-toggle"
+        :class="{ 'status-toggle--on': ui.statusOpen }"
+        :title="
+          status.lastError
+            ? `最近一轮没有更新状态：${status.lastError.error}`
+            : '时间、地点、心情、背包等角色状态'
+        "
+        aria-label="角色状态"
+        :aria-pressed="ui.statusOpen"
+        @click="toggleStatus"
+      >
+        <PanelRight :size="20" aria-hidden="true" /><span>状态</span>
+        <i
+          v-if="status.lastError || statusUnseen"
+          class="status-dot"
+          :class="{ 'status-dot--warn': status.lastError }"
+          aria-hidden="true"
+        ></i>
+      </button>
+      <button
         v-if="hasChat"
         class="cbx-btn cbx-btn--ghost topbar-action"
         title="看看到底发了什么给模型"
@@ -382,97 +533,123 @@ async function newChat() {
     </template>
   </AppTopbar>
 
-  <!-- .stage 只为「回到底部」按钮提供定位上下文：它贴着消息区的底边，
+  <!-- 聊天列 + 右侧状态栏（固定常驻时并排；浮层时 StatusPanel 自己 fixed 定位） -->
+  <div class="chat-row">
+    <div class="chat-col" @focusin="onColFocus">
+      <!-- .stage 只为「回到底部」按钮提供定位上下文：它贴着消息区的底边，
        天然避开点名条与 composer，不用去量它们的高度 -->
-  <div class="stage">
-    <div ref="scroller" class="cbx-scroll body" :class="{ 'body--empty': !chats.messages.length }">
-      <div v-if="!chats.messages.length" class="welcome">
-        <div class="welcome-icon">
-          <MessageCircle :size="32" aria-hidden="true" />
-        </div>
-        <h2>从一句话，开始新的故事</h2>
-        <p>分享一个想法，或向你的角色打个招呼。<br />每一段对话，都从这里开始。</p>
-        <RouterLink to="/characters" class="welcome-link"
-          ><UsersRound :size="16" aria-hidden="true" />选择一个角色</RouterLink
+      <div class="stage">
+        <div
+          ref="scroller"
+          class="cbx-scroll body"
+          :class="{ 'body--empty': !chats.messages.length }"
         >
+          <div v-if="!chats.messages.length" class="welcome">
+            <div class="welcome-icon">
+              <MessageCircle :size="32" aria-hidden="true" />
+            </div>
+            <h2>从一句话，开始新的故事</h2>
+            <p>分享一个想法，或向你的角色打个招呼。<br />每一段对话，都从这里开始。</p>
+            <RouterLink to="/characters" class="welcome-link"
+              ><UsersRound :size="16" aria-hidden="true" />选择一个角色</RouterLink
+            >
+          </div>
+
+          <!-- 两个分支共用 bubbleProps()，避免十几行绑定抄两遍之后改一处漏一处 -->
+          <Virtualizer
+            v-else-if="virtualized"
+            ref="vlist"
+            class="stream"
+            :class="{ 'stream--positioning': positioning }"
+            :data="chats.messages"
+            :start-margin="startMargin"
+            :keep-mounted="pinned"
+            v-slot="{ item: m }"
+          >
+            <MessageBubble :key="m.id" v-bind="bubbleProps(m)" />
+          </Virtualizer>
+
+          <div v-else class="stream" :class="{ 'stream--positioning': positioning }">
+            <MessageBubble v-for="m in chats.messages" :key="m.id" v-bind="bubbleProps(m)" />
+          </div>
+        </div>
+
+        <Transition name="jump">
+          <button
+            v-if="!stuck && chats.messages.length"
+            type="button"
+            class="jump"
+            aria-label="回到最新消息"
+            title="回到最新消息"
+            @click="scrollToBottom(true)"
+          >
+            <AppIcon name="ArrowDownToLine" :size="20" />
+          </button>
+        </Transition>
       </div>
 
-      <!-- 两个分支共用 bubbleProps()，避免十几行绑定抄两遍之后改一处漏一处 -->
-      <Virtualizer
-        v-else-if="virtualized"
-        ref="vlist"
-        class="stream"
-        :class="{ 'stream--positioning': positioning }"
-        :data="chats.messages"
-        :start-margin="startMargin"
-        :keep-mounted="pinned"
-        v-slot="{ item: m }"
-      >
-        <MessageBubble :key="m.id" v-bind="bubbleProps(m)" />
-      </Virtualizer>
-
-      <div v-else class="stream" :class="{ 'stream--positioning': positioning }">
-        <MessageBubble v-for="m in chats.messages" :key="m.id" v-bind="bubbleProps(m)" />
+      <!-- 1vN 手动策略：点名条 -->
+      <div v-if="showSpeakerTray" class="tray">
+        <span class="tray__hint">点名发言：</span>
+        <button
+          v-for="c in groupMembers"
+          :key="c.id"
+          class="cbx-chip tray__item"
+          :disabled="gen.busy"
+          @click="speakAs(c.id)"
+        >
+          {{ c.data.name }}
+        </button>
       </div>
+
+      <ChatComposer
+        :busy="gen.busy"
+        :send-on-enter="settings.settings.chat.sendOnEnter"
+        :members="mentionMembers"
+        @send="onSend"
+        @stop="gen.stop()"
+      />
     </div>
-
-    <Transition name="jump">
-      <button
-        v-if="!stuck && chats.messages.length"
-        type="button"
-        class="jump"
-        aria-label="回到最新消息"
-        title="回到最新消息"
-        @click="scrollToBottom(true)"
-      >
-        <AppIcon name="ArrowDownToLine" :size="20" />
-      </button>
-    </Transition>
-  </div>
-
-  <!-- 1vN 手动策略：点名条 -->
-  <div v-if="showSpeakerTray" class="tray">
-    <span class="tray__hint">点名发言：</span>
-    <button
-      v-for="c in groupMembers"
-      :key="c.id"
-      class="cbx-chip tray__item"
-      :disabled="gen.busy"
-      @click="speakAs(c.id)"
-    >
-      {{ c.data.name }}
-    </button>
+    <StatusPanel v-if="showStatus" />
   </div>
 
   <PromptPreview v-if="previewOpen" @close="previewOpen = false" />
-  <ImageViewer
-    v-if="viewerStart !== null"
-    :items="gallery"
-    :start="viewerStart"
-    @close="viewerStart = null"
-  />
-  <ImageGenerationDialog
-    v-if="imageTarget"
-    title="生成对话配图"
-    :initial-prompt="imageTarget.prompt"
-    :generate-prompt="dialoguePromptGen"
-    :references="imageTarget.references"
-    require-references
-    apply-label="保存到对话"
-    :apply="applyImage"
-    @close="imageTarget = null"
-  />
-
-  <ChatComposer
-    :busy="gen.busy"
-    :send-on-enter="settings.settings.chat.sendOnEnter"
-    :members="mentionMembers"
-    @send="onSend"
-    @stop="gen.stop()"
-  />
 </template>
 
 <style scoped>
+/* 聊天列与状态栏并排。两层都要 min-height:0 / min-width:0，否则内容会撑破 flex 轨道 */
+.chat-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.chat-col {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.status-toggle {
+  position: relative;
+}
+.status-toggle--on {
+  color: var(--cbx-brand);
+  background: var(--cbx-brand-light);
+}
+.status-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cbx-brand);
+  box-shadow: 0 0 0 2px var(--cbx-bg);
+}
+.status-dot--warn {
+  background: var(--cbx-warning);
+}
 /* 接过原先 .body 的伸缩职责。⚠️ flex:1 与 min-height:0 缺一不可：
    少了 min-height:0，滚动容器会被内容撑破、把 composer 顶出屏幕（base.css 有记载） */
 .stage {

@@ -291,7 +291,7 @@ try {
   assert.equal(requests.at(-2).images.length, 1)
   assert.match(requests.at(-1).headers['content-type'], /^application\/json/)
   assert.equal(requests.at(-1).body.model, 'scene-image')
-  assert.match(requests.at(-1).body.prompt, /参考图 1 时雨：/)
+  assert.match(requests.at(-1).body.prompt, /参考图 1 是「时雨」的形象/)
   assert.deepEqual(requests.at(-1).body.image_urls, [`data:image/png;base64,${png}`])
   // 用户显式配置的返回格式优先于降级默认值。
   assert.equal(requests.at(-1).body.response_format, 'url')
@@ -370,7 +370,7 @@ try {
   const cdnRequest = requests[beforeUrl + 1]
   assert.equal(urlRequest.url, 'https://image-proxy.example.test/v1/images/edits')
   assert.equal(urlRequest.body.model, 'scene-image')
-  assert.match(urlRequest.body.prompt, /参考图 1 时雨：/)
+  assert.match(urlRequest.body.prompt, /参考图 1 是「时雨」的形象/)
   assert.match(urlRequest.body.prompt, /热茶/)
   assert.match(urlRequest.body.prompt, /银色长发/) // 外貌锚点写进提示词
   assert.doesNotMatch(urlRequest.body.prompt, /海边|旧场景/) // 只取当前这一句，不带历史
@@ -636,7 +636,7 @@ try {
   // 发言者在前（时雨=参考图1），被点名的望月=参考图2；外貌逐一锚定到对应编号，未出场的路人不出现。
   assert.match(
     requests.at(-1).body.prompt,
-    /参考图 1 时雨：[\s\S]*银色长发[\s\S]*参考图 2 望月：[\s\S]*黑色短发/,
+    /参考图 1 是「时雨」的形象[\s\S]*银色长发[\s\S]*参考图 2 是「望月」的形象[\s\S]*黑色短发/,
   )
   assert.doesNotMatch(requests.at(-1).body.prompt, /路人/)
   assert.match(requests.at(-1).body.prompt, /递过一本旧书/) // 画面内容取自当前这一句

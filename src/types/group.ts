@@ -4,6 +4,8 @@
  * 枚举数值权威来源：SillyTavern/public/scripts/group-chats.js L122 / L129
  */
 
+import type { GroupStatusConfig } from './status'
+
 export const group_activation_strategy = { NATURAL: 0, LIST: 1, MANUAL: 2, POOLED: 3 } as const
 export type GroupActivationStrategy =
   (typeof group_activation_strategy)[keyof typeof group_activation_strategy]
@@ -85,7 +87,12 @@ export interface Group {
    * true  = 并集去重所有成员的世界书。
    */
   mergeMemberBooks: boolean
+  /** 自研：本群聊的角色状态字段覆盖与初始状态（types/status.ts） */
+  status?: GroupStatusConfig
+  /** 群聊封面（横版 3:2），blobs 表 id */
   avatarBlobId?: string
+  /** 封面的深度图（视差），blobs 表 id。换封面时清空重算 */
+  depthBlobId?: string
   createdAt: number
   updatedAt: number
 }

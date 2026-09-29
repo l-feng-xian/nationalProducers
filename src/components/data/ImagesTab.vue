@@ -5,9 +5,8 @@
  */
 import { onMounted, ref } from 'vue'
 import { blobsRepo, browseRepo } from '@/db/repositories'
-import { useBlobPreview } from '@/composables/useBlobPreview'
+import { useImagePreview } from '@/composables/useImagePreview'
 import BlobThumb from './BlobThumb.vue'
-import BlobLightbox from './BlobLightbox.vue'
 
 const props = defineProps<{ chatId: string }>()
 
@@ -26,9 +25,18 @@ function fmtTime(t?: number) {
 }
 
 /** 点缩略图放大预览（带 View Transitions 形变） */
-const preview = useBlobPreview()
-function openPreview(r: ImgRow) {
-  void preview.open(r.id, `${r.mime} · ${(r.size / 1024).toFixed(1)}KB · ${fmtTime(r.createdAt)}`)
+const preview = useImagePreview()
+function captionOf(r: ImgRow) {
+  return `${r.mime} · ${(r.size / 1024).toFixed(1)}KB · ${fmtTime(r.createdAt)}`
+}
+/** 本会话的图片连成一组，预览里可左右切换 */
+function openPreview(r: ImgRow, e: MouseEvent) {
+  const items = rows.value.map((x) => ({ blobId: x.id, caption: captionOf(x) }))
+  void preview.open(
+    items,
+    rows.value.findIndex((x) => x.id === r.id),
+    e.currentTarget as HTMLElement,
+  )
 }
 
 onMounted(async () => {
@@ -77,9 +85,8 @@ onMounted(async () => {
               <button
                 type="button"
                 class="dpreview__btn"
-                :style="preview.thumbStyle(r.id)"
                 aria-label="放大预览这张图片"
-                @click="openPreview(r)"
+                @click="openPreview(r, $event)"
               >
                 <BlobThumb :blob-id="r.id" />
               </button>
@@ -96,13 +103,6 @@ onMounted(async () => {
         </tbody>
       </table>
     </div>
-
-    <BlobLightbox
-      :blob-id="preview.id.value"
-      :caption="preview.caption.value"
-      :morph-style="preview.stageStyle.value"
-      @close="preview.close()"
-    />
   </div>
 </template>
 

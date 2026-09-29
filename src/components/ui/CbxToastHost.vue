@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { useToast } from '@/composables/useToast'
+import { useToast, type Toast } from '@/composables/useToast'
 
 const { items, dismiss } = useToast()
+
+/** 点提示：有操作就执行，然后收起 */
+function onClick(t: Toast) {
+  dismiss(t.id)
+  t.action?.run()
+}
 </script>
 
 <template>
@@ -12,10 +18,13 @@ const { items, dismiss } = useToast()
           v-for="t in items"
           :key="t.id"
           class="toast"
-          :class="`toast--${t.kind}`"
-          @click="dismiss(t.id)"
+          :class="[`toast--${t.kind}`, { 'toast--action': t.action }]"
+          :role="t.action ? 'button' : undefined"
+          :tabindex="t.action ? 0 : undefined"
+          @click="onClick(t)"
+          @keydown.enter="onClick(t)"
         >
-          {{ t.text }}
+          {{ t.text }}<span v-if="t.action" class="toast__action">{{ t.action.label }}</span>
         </div>
       </TransitionGroup>
     </div>
@@ -49,6 +58,16 @@ const { items, dismiss } = useToast()
   color: var(--cbx-text);
   max-width: 100%;
   overflow-wrap: anywhere;
+}
+.toast__action {
+  margin-left: var(--cbx-space-3);
+  color: var(--cbx-brand);
+  font-weight: var(--cbx-fw-medium);
+  white-space: nowrap;
+}
+.toast--action:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
 }
 .toast--success {
   border-left: 3px solid var(--cbx-success);

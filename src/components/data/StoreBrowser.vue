@@ -19,9 +19,8 @@ import {
 } from '@/db/repositories'
 import type { BrowseRow, BrowseStore } from '@/db/repositories/browse'
 import { formatBytes } from '@/services/io/backup'
-import { useBlobPreview } from '@/composables/useBlobPreview'
+import { useImagePreview } from '@/composables/useImagePreview'
 import BlobThumb from './BlobThumb.vue'
-import BlobLightbox from './BlobLightbox.vue'
 import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
 import { useBackClose } from '@/composables/useBackClose'
 
@@ -135,11 +134,19 @@ function closeDetail() {
 useBackClose(closeDetail, () => detail.open)
 
 // ── 图片放大预览（点缩略图，带 View Transitions 形变）──
-const preview = useBlobPreview()
+const preview = useImagePreview()
 /** 图片表的数据列就是 mime / 大小，直接复用成预览说明，不再单取一次记录 */
-function openPreview(r: BrowseRow) {
-  const meta = `${fmtCol('blobs', 0, r.cols[0])} · ${fmtCol('blobs', 1, r.cols[1])} · ${fmtTime(r.at)}`
-  void preview.open(r.key, meta)
+function captionOf(r: BrowseRow) {
+  return `${fmtCol('blobs', 0, r.cols[0])} · ${fmtCol('blobs', 1, r.cols[1])} · ${fmtTime(r.at)}`
+}
+/** 当前页的图片连成一组，预览里可左右切换 */
+function openPreview(r: BrowseRow, e: MouseEvent) {
+  const items = rows.value.map((x) => ({ blobId: x.key, caption: captionOf(x) }))
+  void preview.open(
+    items,
+    rows.value.findIndex((x) => x.key === r.key),
+    e.currentTarget as HTMLElement,
+  )
 }
 
 // ── 删除（全部走级联删除的仓储方法）──
@@ -252,9 +259,8 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="dpreview__btn"
-                :style="preview.thumbStyle(r.key)"
                 aria-label="放大预览这张图片"
-                @click="openPreview(r)"
+                @click="openPreview(r, $event)"
               >
                 <BlobThumb :blob-id="r.key" />
               </button>
@@ -306,13 +312,6 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-
-    <BlobLightbox
-      :blob-id="preview.id.value"
-      :caption="preview.caption.value"
-      :morph-style="preview.stageStyle.value"
-      @close="preview.close()"
-    />
 
     <Teleport to="body">
       <dialog v-if="detail.open" ref="dlg" class="rowdetail cbx-page" @cancel.prevent="closeDetail">

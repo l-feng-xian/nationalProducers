@@ -9,6 +9,7 @@ import { useSettingsStore } from './settings'
 import { useGroupsStore } from './groups'
 import { toPlain } from '@/utils/plain'
 import type { GeneratedImage } from '@/types/image'
+import type { MessageStatus } from '@/types/status'
 import {
   invalidateDeletedSeq,
   invalidateFromSeq,
@@ -192,9 +193,15 @@ export const useChatsStore = defineStore('chats', () => {
     return row
   }
 
-  async function attachImage(chatId: string, messageId: string, image: GeneratedImage) {
+  /** 返回新配图的 blobId，供「定位到配图」使用 */
+  async function attachImage(
+    chatId: string,
+    messageId: string,
+    image: GeneratedImage,
+  ): Promise<string | undefined> {
     const row = await messagesRepo.attachImage(chatId, messageId, image)
     if (current.value?.id === chatId) patchLocal(messageId, { images: row.images })
+    return row.images?.at(-1)?.blobId
   }
 
   async function appendAi(name: string, characterId: string): Promise<ChatMessage | null> {
@@ -273,6 +280,18 @@ export const useChatsStore = defineStore('chats', () => {
         await invalidateFromSeq(meta.id, from.seq, meta.chat_metadata.memIndex),
       )
     }
+  }
+
+  /**
+   * 用户在状态侧栏手改状态：写到指定消息的 extra.status 上（清掉那条的解析失败标记）。
+   * 仍然挂在消息上而不是会话元数据 —— 删掉 / 重新生成这条之后，手改的版本也跟着回滚。
+   */
+  async function setMessageStatus(id: string, status: MessageStatus) {
+    const row = messages.value.find((m) => m.id === id)
+    if (!row) return
+    const { statusError: _e, ...rest } = row.extra
+    patchLocal(id, { extra: { ...rest, status } })
+    await persist(id)
   }
 
   /** 编辑某条消息的正文；若它有 swipes，同步更新当前那一条 */
@@ -400,6 +419,7 @@ export const useChatsStore = defineStore('chats', () => {
     removeChat,
     removeTail,
     editMessage,
+    setMessageStatus,
     deleteMessage,
     deleteFrom,
     branchFrom,

@@ -17,12 +17,9 @@ import { useCharactersStore } from '@/stores/characters'
 import { useChatsStore } from '@/stores/chats'
 import { useWorldsStore } from '@/stores/worlds'
 import { useToast } from '@/composables/useToast'
-import { blobsRepo } from '@/db/repositories'
-import { invalidateObjectUrl } from '@/composables/useObjectUrl'
 import { useViewTransition } from '@/composables/useViewTransition'
 import { useMorphTarget } from '@/composables/useMorphTarget'
 import { useSettingsStore } from '@/stores/settings'
-import { generateDepth } from '@/services/depth/generate'
 import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
 import { exportCharacterJson } from '@/services/io/characterCard'
 import { exportCharacterPng } from '@/services/io/characterPng'
@@ -31,6 +28,10 @@ import { MORPH_VT_NAME } from '@/constants/app'
 import { toPlain } from '@/utils/plain'
 import { DEPTH_PROMPT_DEPTH_DEFAULT, type Character } from '@/types/character'
 import { confirmDialog } from '@/composables/useConfirm'
+import { useCoverImage } from '@/composables/useCoverImage'
+import { useImagePreview } from '@/composables/useImagePreview'
+import StatusConfigEditor from '@/components/settings/StatusConfigEditor.vue'
+import type { CharacterStatusConfig } from '@/types/status'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,11 +45,9 @@ const CHAR_MACRO = '{{char}}'
 const ORIGINAL_MACRO = '{{original}}'
 
 const settings = useSettingsStore()
-const depthBusy = ref(false)
-const depthPct = ref(0)
 
 const model = ref<Character | null>(null)
-const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced'>('basic')
+const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced' | 'status'>('basic')
 const avatarInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
 /** PNG 导出要转码 + 编码，可能几百毫秒；连点会并发跑两遍、下两个文件、内存峰值翻倍 */
@@ -56,7 +55,18 @@ const exporting = ref(false)
 const aiOpen = ref(false)
 const coverOpen = ref(false)
 const coverPrompt = ref('')
-const avatarBusy = ref(false)
+// 封面 + 深度图的替换 / 生成（与群聊编辑页共用，规则见 useCoverImage）
+const {
+  avatarBusy,
+  depthBusy,
+  depthPct,
+  replace: replaceAvatar,
+  regenDepth,
+} = useCoverImage({
+  target: () => model.value,
+  save,
+  beforeReplace: releaseParallax,
+})
 const aiDescription = ref('')
 const beforeAiFill = ref<GeneratedCharacterData | null>(null)
 const hasCharacterContent = computed(() => {
@@ -128,6 +138,7 @@ const TABS = [
   { key: 'greetings', label: '开场白' },
   { key: 'examples', label: '对话示例' },
   { key: 'advanced', label: '高级' },
+  { key: 'status', label: '状态' },
 ] as const
 
 /**
@@ -174,6 +185,18 @@ watch(
   },
 )
 
+/** 点封面 = 放大预览（全站统一预览）。视差画布盖在图上也没关系，点击冒泡到画框 */
+const imagePreview = useImagePreview()
+function previewCover() {
+  const m = model.value
+  if (!m?.avatarBlobId) return
+  void imagePreview.open(
+    [{ blobId: m.avatarBlobId, caption: m.data.name }],
+    0,
+    frameEl.value?.querySelector('img'),
+  )
+}
+
 const title = computed(() => model.value?.data.name || '编辑角色')
 const greetingCount = computed(() => {
   const m = model.value
@@ -204,6 +227,20 @@ onMounted(async () => {
   model.value = draft
 })
 
+// ── 角色状态（extensions.np.status）：「状态」页签 ──
+/** 初始状态里锁定的人：角色本人 + 全局用户身份 */
+const statusPeople = computed(() =>
+  model.value ? [model.value.data.name.trim() || '新角色', settings.settings.persona.name] : [],
+)
+function setStatusConfig(cfg: CharacterStatusConfig | undefined) {
+  const ext = model.value?.data.extensions
+  if (!ext) return
+  const np = { ...ext.np }
+  if (cfg) np.status = cfg
+  else delete np.status
+  ext.np = np
+}
+
 watch(
   model,
   () => {
@@ -233,76 +270,6 @@ async function onAvatar(e: Event) {
     toast.error(error instanceof Error ? error.message : String(error))
   } finally {
     ;(e.target as HTMLInputElement).value = ''
-  }
-}
-
-async function replaceAvatar(source: Blob) {
-  const m = model.value
-  if (!m || avatarBusy.value || depthBusy.value) throw new Error('图片正在保存，请稍后重试')
-  avatarBusy.value = true
-  const old = m.avatarBlobId
-  const oldDepth = m.depthBlobId
-  let id: string | undefined
-  try {
-    id = await blobsRepo.put(source)
-    releaseParallax()
-    m.avatarBlobId = id
-    m.depthBlobId = undefined
-    try {
-      await save()
-    } catch (error) {
-      m.avatarBlobId = old
-      m.depthBlobId = oldDepth
-      await blobsRepo.remove(id)
-      throw error
-    }
-    // 先保存新引用；旧图片留给引用清理，避免破坏共享该封面的其他角色。
-    if (old) invalidateObjectUrl(old)
-    if (oldDepth) invalidateObjectUrl(oldDepth)
-    await makeDepth(source)
-  } finally {
-    avatarBusy.value = false
-  }
-}
-
-/**
- * 生成并保存深度图。模型没启用就直接跳过 —— 这是「勾选启用才生成」的执行点。
- *
- * 任何失败都只弹一条提示，不抛、不回滚：立绘已经换好了，视差有没有是另一回事。
- */
-async function makeDepth(source: Blob) {
-  const m = model.value
-  const modelId = settings.settings.depth.modelId
-  if (!m || !modelId) return
-  depthBusy.value = true
-  depthPct.value = 0
-  try {
-    const { promise } = generateDepth(source, modelId, (loaded, total) => {
-      if (total) depthPct.value = Math.round((loaded / total) * 100)
-    })
-    const res = await promise
-    const blobId = await blobsRepo.put(res.blob)
-    m.depthBlobId = blobId
-    await save()
-    toast.success(`深度图已生成（${res.width}×${res.height}，${(res.ms / 1000).toFixed(1)} 秒）`)
-  } catch (err) {
-    toast.error(`深度图生成失败：${err instanceof Error ? err.message : String(err)}`)
-  } finally {
-    depthBusy.value = false
-  }
-}
-
-/** 给已有立绘补生成。上传时会自动跑，这个按钮是给「先有图、后启用模型」的情况兜底 */
-async function regenDepth() {
-  const m = model.value
-  if (!m?.avatarBlobId || depthBusy.value) return
-  const blob = await blobsRepo.get(m.avatarBlobId)
-  if (!blob) return
-  const oldDepth = m.depthBlobId
-  await makeDepth(blob)
-  if (oldDepth && m.depthBlobId !== oldDepth) {
-    invalidateObjectUrl(oldDepth)
-    await blobsRepo.remove(oldDepth)
   }
 }
 
@@ -453,9 +420,15 @@ async function remove() {
               class="frame"
               :style="{ viewTransitionName: MORPH_VT_NAME }"
               ref="frameEl"
+              :class="{ 'frame--zoomable': !!model.avatarBlobId }"
+              :role="model.avatarBlobId ? 'button' : undefined"
+              :tabindex="model.avatarBlobId ? 0 : undefined"
+              :aria-label="model.avatarBlobId ? '预览角色封面' : undefined"
               @pointerenter="onAvatarEnter"
               @pointermove="onAvatarMove"
               @pointerleave="onAvatarLeave"
+              @click="previewCover"
+              @keydown.enter="previewCover"
             >
               <CbxAvatar
                 class="frame__img"
@@ -664,6 +637,24 @@ async function remove() {
           <button class="cbx-btn cbx-btn--ghost del" @click="remove">删除角色</button>
         </div>
       </section>
+
+      <section v-show="tab === 'status'" class="pane">
+        <p class="note">
+          聊天时 AI
+          每轮会在回复末尾输出一份状态（时间、地点、每个人的心情、背包……），聊天页右上角「状态」里查看。这里设置这个角色的专属字段与开场时的初始状态。
+        </p>
+        <StatusConfigEditor
+          :config="model.data.extensions.np?.status"
+          :people="statusPeople"
+          :user-name="settings.settings.persona.name"
+          own-label="使用这个角色专属的状态字段（仅单人聊天生效）"
+          @update:config="setStatusConfig"
+        >
+          <template #initial-hint>
+            会话还没有任何状态时，第一轮就以它为准（例如开场时的地点、随身物品）。在群聊里，这里填的「角色本人」那一项也会被沿用（群聊页没填这个成员时）。
+          </template>
+        </StatusConfigEditor>
+      </section>
     </div>
   </div>
   <AiCharacterDialog
@@ -732,6 +723,13 @@ async function remove() {
   white-space: nowrap;
   box-shadow: var(--cbx-shadow-md);
 }
+.frame--zoomable {
+  cursor: zoom-in;
+}
+.frame--zoomable:focus-visible {
+  outline: 2px solid var(--cbx-border-focus);
+  outline-offset: 2px;
+}
 .frame__img {
   width: 100%;
   height: 100%;
@@ -774,6 +772,13 @@ img.frame__img {
   /* auto-fill 而非 auto-fit：auto-fit 会折叠空轨道，把 2 项的网格各拉到约 400px */
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--cbx-space-3);
+}
+.note {
+  max-width: var(--cbx-read-w);
+  margin-bottom: var(--cbx-space-4);
+  font-size: var(--cbx-fs-sm);
+  color: var(--cbx-text-secondary);
+  line-height: 1.7;
 }
 .mt {
   margin-top: var(--cbx-space-3);

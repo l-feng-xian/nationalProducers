@@ -22,6 +22,14 @@ import { memchunksRepo } from '@/db/repositories'
 import * as memRuntime from '@/services/memory/runtime'
 import { buildMemoryBook } from '@/services/memory/book'
 import { catchUp, emptyIndexState } from '@/services/memory/vectorIndex'
+import { extractStatus, stripStatusForStream } from '@/services/status/parse'
+import {
+  completeStatus,
+  resolveStatusContext,
+  type StatusContext,
+} from '@/services/status/complete'
+import { resolvePersona } from '@/types/group'
+import type { MessageExtra } from '@/types/chat'
 
 export const useGenerationStore = defineStore('generation', () => {
   const busy = ref(false)
@@ -244,6 +252,71 @@ export const useGenerationStore = defineStore('generation', () => {
     return { stateCard: meta.chat_metadata.stateCard?.text ?? '', loreSources }
   }
 
+  /**
+   * 回复 → 正文 + 状态。关着开关时原样返回，免得误伤正文里恰好出现的 JSON。
+   * quiet：用户自己按了停止，没写完状态是预期内的，不记失败、不在侧栏报警。
+   */
+  function splitStatus(
+    text: string,
+    ctx: StatusContext | null,
+    quiet = false,
+  ): {
+    mes: string
+    status?: MessageExtra['status']
+    error?: string
+  } {
+    if (!ctx) return { mes: text }
+    const r = extractStatus(text)
+    if (!r.data) return { mes: r.body, ...(r.error && !quiet ? { error: r.error } : {}) }
+    // 用户与每个角色都必须有记录：漏写的人 / 字段沿用上一份
+    const data = completeStatus(r.data, ctx.current, ctx)
+    return { mes: r.body, status: { data, source: 'ai', updatedAt: Date.now() } }
+  }
+
+  /** 把解析结果合进 extra：成功写 status、失败写 statusError，两者互斥 */
+  function withStatus(extra: MessageExtra, parsed: ReturnType<typeof splitStatus>): MessageExtra {
+    const { status: _s, statusError: _e, ...rest } = extra
+    if (parsed.status) return { ...rest, status: parsed.status }
+    if (parsed.error) return { ...rest, statusError: parsed.error }
+    return rest
+  }
+
+  /**
+   * 当前会话的角色状态上下文（字段、必须出现的人、最新快照 / 初始状态）。
+   * 关着开关或没有字段时为 null。侧栏（stores/status.ts）用同一个 resolveStatusContext。
+   *
+   * ⚠️ 读的是 chats.messages，只对**当前打开**的会话成立 —— 生成时必须在流式开始前取好，
+   * 用户中途切走会话后再取就是别人的消息了。
+   */
+  function statusContextFor(meta: ChatMeta): StatusContext | null {
+    const settings = useSettingsStore().settings
+    if (!settings.status.enabled) return null
+    const chats = useChatsStore()
+    const g =
+      meta.kind === 'group' && meta.groupId ? useGroupsStore().byId(meta.groupId) : undefined
+    const ctx = resolveStatusContext({
+      settings: settings.status,
+      messages: chats.messages,
+      userName: resolvePersona(g, settings.persona).name,
+      ...(g
+        ? { members: [...groupMembers(g).values()], groupConfig: g.status ?? null }
+        : { char: resolveSpeaker(meta) }),
+    })
+    return ctx.fields.length ? ctx : null
+  }
+
+  /** 注入参数。build() 与 buildGroup() 共用，理由同 memoryInputs：两条路径各写各的迟早漂移 */
+  function statusInputs(meta: ChatMeta) {
+    const ctx = statusContextFor(meta)
+    if (!ctx) return undefined
+    return {
+      fields: ctx.fields,
+      current: ctx.current,
+      depth: useSettingsStore().settings.status.depth,
+      charNames: ctx.required.slice(0, -1),
+    }
+  }
+
   /** 本轮发言者。build() 与 send() 必须算出同一个人，所以只此一处 */
   function resolveSpeaker(meta: ChatMeta): Character {
     const chars = useCharactersStore()
@@ -323,6 +396,7 @@ export const useGenerationStore = defineStore('generation', () => {
       timedStore,
       isDryRun,
       stateCard: memory.stateCard,
+      status: statusInputs(meta),
     })
     lastPrompt.value = built
     return built
@@ -354,6 +428,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const started = Date.now()
     let text = ''
     let reasoning = ''
+    let statusCtx: StatusContext | null = null
 
     try {
       // 检索必须在 build() 之前：build() 是同步的，拿不到 await
@@ -361,6 +436,8 @@ export const useGenerationStore = defineStore('generation', () => {
       // 预检期间用户按了停止：此刻还没有占位行，干净退出即可
       if (ctl.signal.aborted) return
 
+      // 状态上下文在流式开始前取好（见 statusContextFor）
+      statusCtx = statusContextFor(meta)
       const built = build()
       if (!built) return
 
@@ -393,18 +470,20 @@ export const useGenerationStore = defineStore('generation', () => {
           const now = Date.now()
           if (now - lastFlush >= settings.settings.chat.streamFlushMs) {
             lastFlush = now
-            chats.patchLocal(row.id, { mes: text })
+            chats.patchLocal(row.id, { mes: stripStatusForStream(text) })
           }
         }
       } else {
         text = await chatOnce(cfg, req, ctl.signal)
       }
 
+      // 状态块先剥出来，正文落库时就不带它 —— 下一轮历史里也就不会有旧快照
+      const parsed = splitStatus(text, statusCtx)
       // 按 chatId 写回，不看用户现在开着哪段会话（切走了也不能丢回复）
       await chats.writeRow(meta.id, row, {
-        mes: text,
+        mes: parsed.mes,
         extra: {
-          ...row.extra,
+          ...withStatus(row.extra, parsed),
           model: p.model,
           duration: Date.now() - started,
           ...(reasoning ? { reasoning } : {}),
@@ -425,19 +504,29 @@ export const useGenerationStore = defineStore('generation', () => {
         // 一个字都没出就被中断（首字之前按停止很常见，带思维链的模型 TTFB 好几秒），
         // 留着就是一条永久空白的 assistant，还会被塞进之后每一轮提示词
         if (!text) await chats.removeRowFrom(meta.id, row)
-        else
-          await chats.writeRow(meta.id, row, { mes: text, extra: { ...row.extra, stopped: true } })
+        else {
+          const parsed = splitStatus(text, statusCtx, true)
+          await chats.writeRow(meta.id, row, {
+            mes: parsed.mes,
+            extra: { ...withStatus(row.extra, parsed), stopped: true },
+          })
+        }
       } else {
         toast.error(err.message)
         // 生成失败：把空的占位消息删掉，别在历史里留残骸
         if (!text) await chats.removeRowFrom(meta.id, row)
         // 超时同样是「话说到一半被掐」，打上 stopped 让气泡显示「已中断」，
         // 别让一条被截断的回复看起来像是模型自己说完了
-        else
+        else {
+          const parsed = splitStatus(text, statusCtx)
           await chats.writeRow(meta.id, row, {
-            mes: text,
-            ...(err.kind === 'timeout' ? { extra: { ...row.extra, stopped: true } } : {}),
+            mes: parsed.mes,
+            extra: {
+              ...withStatus(row.extra, parsed),
+              ...(err.kind === 'timeout' ? { stopped: true } : {}),
+            },
           })
+        }
       }
     } finally {
       busy.value = false
@@ -629,6 +718,7 @@ export const useGenerationStore = defineStore('generation', () => {
       chatIdHash: meta.chat_metadata.chat_id_hash ?? 0,
       variables: isDryRun ? toPlain(meta.chat_metadata.variables) : meta.chat_metadata.variables,
       stateCard: memory.stateCard,
+      status: statusInputs(meta),
       group: g,
       relations: meta.chat_metadata.relationGraph?.relations ?? g.relations,
       relationTemplate: meta.chat_metadata.relationGraph?.relationTemplate ?? g.relationTemplate,
@@ -660,6 +750,8 @@ export const useGenerationStore = defineStore('generation', () => {
     const allNames = g.members
       .map((mid) => members.get(mid)?.data.name)
       .filter((n): n is string => !!n)
+    // 上一位发言者已经落库，这里取到的「最新快照」就是他写的那份（见 statusContextFor）
+    const statusCtx = statusContextFor(meta)
     const built = buildGroup({ group: g, speakerChar: char, members })
     if (!built) return
 
@@ -689,40 +781,48 @@ export const useGenerationStore = defineStore('generation', () => {
           const now = Date.now()
           if (now - lastFlush >= settings.settings.chat.streamFlushMs) {
             lastFlush = now
-            chats.patchLocal(row.id, { mes: text })
+            chats.patchLocal(row.id, { mes: stripStatusForStream(text) })
           }
         }
       } else {
         text = await chatOnce(cfg, req, ctl.signal)
       }
+      // ⚠️ 先剥状态、再防串台截断。反过来的话截断可能连状态块一起切掉
+      const parsed = splitStatus(text, statusCtx)
       // 兜底：模型仍然替别人续写时，从那里截断
-      const cleaned = cleanGroupMessage(text, char.data.name, allNames)
+      const cleaned = cleanGroupMessage(parsed.mes, char.data.name, allNames)
       // 按 chatId 写回，不看用户现在开着哪段会话（与 send() 同理）
       await chats.writeRow(meta.id, row, {
         mes: cleaned,
-        extra: { ...row.extra, gen_id: genId, model: p.model },
+        extra: { ...withStatus(row.extra, parsed), gen_id: genId, model: p.model },
       })
     } catch (e) {
       const err = e instanceof ProviderError ? e : new ProviderError('unknown', String(e))
       if (err.kind === 'aborted') {
         aborted = true
         if (!text) await chats.removeRowFrom(meta.id, row)
-        else
+        else {
+          const parsed = splitStatus(text, statusCtx, true)
           await chats.writeRow(meta.id, row, {
-            mes: text,
-            extra: { ...row.extra, gen_id: genId, stopped: true },
+            mes: parsed.mes,
+            extra: { ...withStatus(row.extra, parsed), gen_id: genId, stopped: true },
           })
+        }
       } else {
         toast.error(err.message)
         aborted = true
         if (!text) await chats.removeRowFrom(meta.id, row)
-        else
+        else {
+          const parsed = splitStatus(text, statusCtx)
           await chats.writeRow(meta.id, row, {
-            mes: text,
-            ...(err.kind === 'timeout'
-              ? { extra: { ...row.extra, gen_id: genId, stopped: true } }
-              : {}),
+            mes: parsed.mes,
+            extra: {
+              ...withStatus(row.extra, parsed),
+              gen_id: genId,
+              ...(err.kind === 'timeout' ? { stopped: true } : {}),
+            },
           })
+        }
       }
     } finally {
       // ⚠️ 只清自己那一个。controller 是全局单例、每个发言者都会重新赋值，

@@ -5,6 +5,8 @@
  * 导出时写，运行时一律读 `char.data.description`，杜绝双真相源。
  */
 
+import type { CharacterStatusConfig } from './status'
+
 export interface DepthPrompt {
   prompt: string
   depth: number
@@ -23,7 +25,11 @@ export interface CharacterExtensions {
   world?: string
   depth_prompt?: DepthPrompt
   /** 本 app 的命名空间，保证往返无损 */
-  np?: { worldBookNames?: string[] }
+  np?: {
+    worldBookNames?: string[]
+    /** 角色状态的字段覆盖与初始状态，见 types/status.ts */
+    status?: CharacterStatusConfig
+  }
   [k: string]: unknown
 }
 

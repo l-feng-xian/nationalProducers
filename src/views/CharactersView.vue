@@ -23,6 +23,8 @@ import { readCharaFromPng } from '@/services/io/pngCard'
 import { normalizeCard } from '@/services/io/characterCard'
 import { blobsRepo } from '@/db/repositories'
 import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
+import { useImagePreview } from '@/composables/useImagePreview'
+import { ZoomIn } from '@/components/icons'
 import type { Character } from '@/types/character'
 
 // name 是 App.vue 里 KeepAlive :include 白名单的匹配依据。
@@ -60,6 +62,14 @@ const morph = useMorphTarget()
  *   纹理留在渲染器的缓存里，滚回来不用重新解码。
  * 没有深度图的卡永远是静态图。
  */
+/** 封面角落的放大按钮：全站统一预览 */
+const imagePreview = useImagePreview()
+function previewCover(c: Character, e: MouseEvent) {
+  if (!c.avatarBlobId) return
+  const img = (e.currentTarget as HTMLElement).closest('.card__frame')?.querySelector('img')
+  void imagePreview.open([{ blobId: c.avatarBlobId, caption: c.data.name }], 0, img)
+}
+
 const parallax = useDepthParallax()
 const { needsPermission: tiltNeedsGrant, enableTilt } = parallax
 const scroller = ref<HTMLElement | null>(null)
@@ -275,6 +285,17 @@ async function onImport(e: Event) {
           @click="openEditor(c.id)"
         >
           <CbxAvatar class="card__img" :blob-id="c.avatarBlobId" :name="c.data.name" card />
+          <!-- 卡片点击进编辑；预览走角落这个按钮（stop 掉，免得同时跳走） -->
+          <button
+            v-if="c.avatarBlobId"
+            type="button"
+            class="card__zoom"
+            :aria-label="`放大查看「${c.data.name}」的封面`"
+            title="放大查看"
+            @click.stop="previewCover(c, $event)"
+          >
+            <ZoomIn :size="18" />
+          </button>
         </div>
         <div class="card__name">{{ c.data.name }}</div>
         <div class="card__desc">{{ c.data.description || '（暂无简介）' }}</div>
@@ -315,6 +336,30 @@ async function onImport(e: Event) {
   aspect-ratio: 2 / 3;
   margin-bottom: var(--cbx-space-2);
   /* 画框自身不能有 transform —— 它是 VT 的配对元素，几何必须和编辑页那端一致 */
+}
+.card__zoom {
+  position: absolute;
+  right: var(--cbx-space-2);
+  bottom: var(--cbx-space-2);
+  z-index: 1;
+  width: var(--cbx-tap-min);
+  height: var(--cbx-tap-min);
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--cbx-radius-pill);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: zoom-in;
+}
+@media (hover: hover) {
+  .card__zoom:hover {
+    background: rgba(0, 0, 0, 0.72);
+  }
+}
+.card__zoom:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 .card__img {
   width: 100%;

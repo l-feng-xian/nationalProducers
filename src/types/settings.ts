@@ -4,6 +4,7 @@
 
 import { world_info_insertion_strategy } from './worldinfo'
 import type { ImageModelService } from './image'
+import { defaultStatusSettings, type StatusSettings } from './status'
 
 export type ChatMode = 'solo' | 'group'
 
@@ -177,6 +178,8 @@ export interface Settings {
   /** 需求 4 核心 */
   constraint: Record<ChatMode, ConstraintPromptConfig>
   memory: MemorySettings
+  /** 角色状态：随回复输出的结构化快照，见 types/status.ts */
+  status: StatusSettings
   depth: DepthSettings
   chat: {
     streamFlushMs: number
@@ -272,6 +275,7 @@ export function defaultSettings(): Settings {
         backfillLimit: 400,
       },
     },
+    status: defaultStatusSettings(),
     depth: { modelId: '' },
     constraint: {
       solo: { enabled: true, text: DEFAULT_SOLO_CONSTRAINT, depth: 0, role: 0, order: 200 },

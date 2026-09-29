@@ -6,6 +6,9 @@ import MobileTabBar from '@/components/layout/MobileTabBar.vue'
 import { MOBILE_TAB_NAMES } from '@/router/layout'
 import CbxToastHost from '@/components/ui/CbxToastHost.vue'
 import CbxConfirmHost from '@/components/ui/CbxConfirmHost.vue'
+import ImagePreview from '@/components/ui/ImagePreview.vue'
+import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
+import { useImageJobStore } from '@/stores/imageJob'
 import NewChatSheet from '@/components/chat/NewChatSheet.vue'
 import { useUiStore } from '@/stores/ui'
 import { useSettingsStore } from '@/stores/settings'
@@ -15,6 +18,7 @@ import { useRouteTransition } from '@/composables/useRouteTransition'
 import { revalidateInert } from '@/utils/inert'
 
 const ui = useUiStore()
+const imageJob = useImageJobStore()
 const route = useRoute()
 const settings = useSettingsStore()
 
@@ -189,6 +193,15 @@ const KEEP_ALIVE = ['CharactersView']
     <MobileTabBar v-if="showTabBar" />
     <CbxToastHost />
     <CbxConfirmHost />
+    <ImagePreview />
+    <!-- 聊天页的配图任务挂在应用层：最小化后离开聊天页（手机上一个返回手势）也不会被取消 -->
+    <ImageGenerationDialog
+      v-if="imageJob.job"
+      v-bind="imageJob.job"
+      minimizable
+      v-model:minimized="imageJob.minimized"
+      @close="imageJob.finish()"
+    />
     <NewChatSheet v-if="ui.newChatOpen" />
   </div>
 </template>

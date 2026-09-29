@@ -4,6 +4,9 @@ import { RouterLink } from 'vue-router'
 import { findPreset } from '@/services/vector/presets'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
+import StatusFieldsEditor from '@/components/settings/StatusFieldsEditor.vue'
+import { defaultStatusFields, type StatusField } from '@/types/status'
+import { confirmDialog } from '@/composables/useConfirm'
 import { useSettingsStore } from '@/stores/settings'
 
 const settings = useSettingsStore()
@@ -13,6 +16,15 @@ const USER_MACRO = '{{user}}'
 
 const wi = computed(() => settings.settings.worldInfo)
 const mem = computed(() => settings.settings.memory)
+const st = computed(() => settings.settings.status)
+function setStatusFields(fields: StatusField[]) {
+  st.value.fields = fields
+  settings.touch()
+}
+async function resetStatusFields() {
+  if (!(await confirmDialog({ text: '把状态字段恢复成默认模板？自定义的字段会被丢弃。' }))) return
+  setStatusFields(defaultStatusFields())
+}
 /** 非 null 即「已下载且已勾选启用」。向量召回的参数只在这时才有意义 */
 const activeModel = computed(() => findPreset(mem.value.vector.modelId))
 const budgetTokens = computed(() => {
@@ -380,6 +392,52 @@ onMounted(async () => {
         </template>
       </section>
 
+      <!-- 角色状态 -->
+      <section class="cbx-card sec">
+        <h3>角色状态</h3>
+        <p class="note">
+          要求 AI 在每轮回复末尾附带一份 JSON
+          状态（时间、地点、天气、每个人物的心情、背包……），解析后从正文里剥掉、按消息保存，聊天页右上角「状态」可查看、手改与回看历史。提示词里只注入<strong>最新一份</strong>，历史消息不带状态。
+          不额外调用 API，但每轮回复会多出几十到几百个 token —— 回复长度上限太小会把状态截断。
+        </p>
+        <div class="switchrow">
+          <label class="cbx-switch swopt">
+            <input v-model="st.enabled" type="checkbox" @change="settings.touch()" />
+            <span class="cbx-switch__track" />
+            <span>启用角色状态</span>
+          </label>
+        </div>
+        <template v-if="st.enabled">
+          <label class="cbx-field cbx-field--sm">
+            <span class="cbx-field__label">注入深度</span>
+            <input
+              v-model.number="st.depth"
+              class="cbx-input"
+              type="number"
+              min="0"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint">0 = 紧贴最后一条消息，模型最不容易忘记输出格式</span>
+          </label>
+          <div class="st-fields">
+            <div class="st-fields__head">
+              <span class="cbx-field__label">字段模板</span>
+              <button type="button" class="cbx-btn cbx-btn--ghost" @click="resetStatusFields">
+                恢复默认
+              </button>
+            </div>
+            <p class="note">
+              「场景」字段整场一份；「所有人」字段
+              {{ USER_MACRO }}
+              和每个角色各一份；「仅角色」「仅用户」只给对应的一方。每份快照里用户和每个角色都必定有记录，
+              AI 漏写的人会沿用上一份。列表字段输出为字符串数组，提示里可用
+              {{ USER_MACRO }}。角色卡与群聊的「状态」页签可以单独覆盖这里的字段。
+            </p>
+            <StatusFieldsEditor :model-value="st.fields" @update:model-value="setStatusFields" />
+          </div>
+        </template>
+      </section>
+
       <!-- ⑥ 外观 -->
       <section class="cbx-card sec">
         <h3>外观与聊天</h3>
@@ -533,6 +591,14 @@ onMounted(async () => {
    别让它在 1238px 的卡片里被拉成一条空条 */
 .depth-preview {
   max-width: var(--cbx-fieldw-md);
+}
+.st-fields {
+  margin-top: var(--cbx-space-4);
+}
+.st-fields__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 .mt {
   margin-top: var(--cbx-space-3);

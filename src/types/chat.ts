@@ -4,6 +4,7 @@
 
 import type { GroupRelation, GroupNodeLayout } from './group'
 import type { MessageImage } from './image'
+import type { MessageStatus } from './status'
 
 export interface MessageExtra {
   /** 一次多发言人批次的批号 → 支持「重掷整批」 */
@@ -16,6 +17,10 @@ export interface MessageExtra {
   duration?: number
   /** 是否被用户中断 */
   stopped?: boolean
+  /** 本轮随回复输出的角色状态快照（见 types/status.ts） */
+  status?: MessageStatus
+  /** 本轮应输出状态但没解析出来的原因；此时「当前状态」沿用上一份 */
+  statusError?: string
   [k: string]: unknown
 }
 

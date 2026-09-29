@@ -177,18 +177,63 @@ async function uploadImage(
  * 参考图通过编码器的 Autogrow 输入注入（API 键名是平铺的 `images.image_N`，见下方注释），并把 vae 接进编码器；
  * 编辑用 denoise=1（靠 reference_latents 而非部分去噪）。CFG 固定 1（引导蒸馏），负面提示词此时不生效。
  */
+/**
+ * 把提示词里的「参考图 N」标注成 Qwen-Image-2.1 自己的图片标签 `<imageN>`。
+ *
+ * 编码器模板（comfy/text_encoders/qwen_image21.py）按顺序给每张参考图前缀 `<image1>`、`<image2>`……
+ * 再接视觉 token —— 这才是模型认得的「第几张图」。App 的提示词（prompts.ts）统一写「参考图 N」，
+ * OpenAI 那边照常用；发给 ComfyUI 时补上 `<imageN>`，多图时谁是谁才对得上。只标实际上传了的编号。
+ */
+export function labelReferences(prompt: string, count: number): string {
+  if (!count) return prompt
+  return prompt.replace(/参考图\s*(\d+)(?!\d)(?!\s*[（(]<image)/g, (m, n: string) =>
+    Number(n) >= 1 && Number(n) <= count ? `${m}（<image${n}>）` : m,
+  )
+}
+
+/**
+ * 按期望比例算出采样用的像素尺寸：面积 ≈ resolution²，边长取 32 的倍数（与编码器缩放参考图的规则一致）。
+ * size 形如 '1536x1024'，只取比例。解析失败返回 null（沿用编码器给的尺寸）。
+ */
+export function targetSize(size: string | undefined, resolution: number) {
+  const m = /^(\d+)\s*x\s*(\d+)$/i.exec(size?.trim() ?? '')
+  if (!m) return null
+  const ratio = Number(m[1]) / Number(m[2])
+  if (!Number.isFinite(ratio) || ratio <= 0) return null
+  const width = Math.max(64, Math.round(Math.sqrt(resolution * resolution * ratio) / 32) * 32)
+  const height = Math.max(64, Math.round(Math.sqrt((resolution * resolution) / ratio) / 32) * 32)
+  return { width, height }
+}
+
+/**
+ * 3 张及以上参考图时，参考图按这个分辨率编码（出图尺寸不变，见 buildGraph 末尾）。
+ *
+ * 本机（RTX 3060 6GB，Q4 GGUF DiT + w4a8 编码器，12 步）实测：参考图总像素超过约 2×1024² 画面就碎——
+ *   1 张 1024 ✅ / 2 张 1024 ✅ / **3 张 1024 ❌ 整张碎成块状噪点**（竖版、横版都一样）/ 3 张 768 ✅。
+ * 编码器的 resolution 同时决定参考图缩放和空 latent 大小，所以这里单独压参考图，
+ * 再用 LatentUpscale 把出图拉回 service.resolution 的面积。
+ */
+export const MULTI_REF_RESOLUTION = 768
+
+/** 编码器实际用的参考图分辨率 */
+export function encoderResolution(resolution: number, refCount: number): number {
+  return refCount >= 3 ? Math.min(resolution, MULTI_REF_RESOLUTION) : resolution
+}
+
 function buildGraph(
   service: ImageModelService,
   prompt: string,
   uploadedNames: string[],
   seed: number,
+  /** 期望比例 'WxH'：群聊封面给的横版，或压了参考图分辨率时第一张参考图的原比例 */
+  size?: string,
 ): ComfyGraph {
   const resolution = Number(service.resolution) || 1024
   const encoderInputs: Record<string, unknown> = {
     clip: ['2', 0],
     prompt,
     negative_prompt: service.negativePrompt ?? '',
-    resolution,
+    resolution: encoderResolution(resolution, uploadedNames.length),
   }
   const graph: ComfyGraph = {
     '1': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: service.model.trim() } },
@@ -255,6 +300,24 @@ function buildGraph(
         temporal_overlap: 8,
       },
     }
+  }
+  // 指定了比例（群聊封面横版）：编码器给的空 latent 是「第一张参考图的比例」（文生图时是方图），
+  // 用 LatentUpscale 把这块全零 latent 改到目标尺寸。它对任意通道数都适用（Qwen 2.1 是 64 通道），
+  // 不会重蹈 EmptyLatentImage 4 通道不匹配、每步慢 10 倍的覆辙。
+  // ⚠️ LatentUpscale 的 width/height 以「像素 / 8」换算 latent，而 Qwen 的 latent 是像素 / 16 → 传一半。
+  const target = targetSize(size, resolution)
+  if (target) {
+    graph['6'] = {
+      class_type: 'LatentUpscale',
+      inputs: {
+        samples: ['5', 2],
+        upscale_method: 'nearest-exact',
+        width: target.width / 2,
+        height: target.height / 2,
+        crop: 'disabled',
+      },
+    }
+    ;(graph['8'] as ComfyNode).inputs.latent_image = ['6', 0]
   }
   return graph
 }
@@ -326,6 +389,8 @@ export async function generateViaComfyUI(args: {
   service: ImageModelService
   prompt: string
   references?: ImageReferenceInput[]
+  /** 期望的宽高比（如群聊封面 '1536x1024'）；只取比例，面积仍按 service.resolution */
+  size?: string
   signal: AbortSignal
 }): Promise<GeneratedImage> {
   const { service, signal } = args
@@ -345,7 +410,22 @@ export async function generateViaComfyUI(args: {
       guard.kick()
     }
     const seed = Math.floor(Math.random() * 2 ** 48)
-    const graph = buildGraph(service, prompt, uploaded, seed)
+    // 参考图被压了分辨率（3 张及以上）又没指定比例：按第一张参考图的原比例把出图拉回原面积，
+    // 否则编码器给的空 latent 跟着缩到 768 档，出图也跟着变小
+    let size = args.size
+    const resolution = Number(service.resolution) || 1024
+    if (!size && references[0] && encoderResolution(resolution, references.length) < resolution) {
+      const bmp = await createImageBitmap(references[0].blob)
+      size = `${bmp.width}x${bmp.height}`
+      bmp.close()
+    }
+    const graph = buildGraph(
+      service,
+      labelReferences(prompt, uploaded.length),
+      uploaded,
+      seed,
+      size,
+    )
     const clientId = crypto.randomUUID()
     const promptEp = endpoint(service, '/prompt')
     const submit = await httpSend({
