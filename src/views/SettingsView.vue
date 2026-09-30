@@ -1,16 +1,50 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { findPreset } from '@/services/vector/presets'
+import { renderQr } from '@/services/qr/render'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxSelect from '@/components/ui/CbxSelect.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
 import StatusFieldsEditor from '@/components/settings/StatusFieldsEditor.vue'
+import { Download } from '@/components/icons'
 import { defaultStatusFields, type StatusField } from '@/types/status'
 import { confirmDialog } from '@/composables/useConfirm'
 import { useSettingsStore } from '@/stores/settings'
 
 const settings = useSettingsStore()
+
+const androidQr = ref<HTMLCanvasElement | null>(null)
+const windowsQr = ref<HTMLCanvasElement | null>(null)
+const appDownloads = computed(() => {
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+  return [
+    {
+      key: 'android',
+      name: 'Android 应用',
+      description: '适用于 Android 手机和平板',
+      file: 'app-nationalProducers.apk',
+      url: `${origin}/app/app-nationalProducers.apk`,
+      qr: androidQr,
+    },
+    {
+      key: 'windows',
+      name: 'Windows 应用',
+      description: 'Windows 安装程序（EXE）',
+      file: 'exe-nationalproducers.exe',
+      url: `${origin}/app/exe-nationalproducers.exe`,
+      qr: windowsQr,
+    },
+  ] as const
+})
+
+function renderDownloadQrs() {
+  for (const download of appDownloads.value) {
+    if (download.qr.value && download.url) {
+      renderQr(download.qr.value, download.url, { size: 156, margin: 4, ecc: 'M' })
+    }
+  }
+}
 
 /** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const USER_MACRO = '{{user}}'
@@ -58,6 +92,8 @@ const budgetTokens = computed(() => {
 
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
+  await nextTick()
+  renderDownloadQrs()
 })
 </script>
 
@@ -553,6 +589,33 @@ onMounted(async () => {
           <RouterLink to="/data">数据管理</RouterLink> 里。
         </p>
       </section>
+      <section class="cbx-card sec app-downloads">
+        <div class="app-downloads__head">
+          <div>
+            <h3>应用下载</h3>
+            <p class="note app-downloads__note">
+              扫描对应二维码，或点击下载链接获取已打包的应用。
+            </p>
+          </div>
+          <span class="cbx-badge cbx-badge--success">当前版本</span>
+        </div>
+        <div class="app-downloads__grid">
+          <article v-for="download in appDownloads" :key="download.key" class="app-download">
+            <div class="app-download__qr">
+              <canvas :ref="(element) => { download.qr.value = element as HTMLCanvasElement | null }" />
+            </div>
+            <div class="app-download__body">
+              <h4>{{ download.name }}</h4>
+              <p>{{ download.description }}</p>
+              <a class="cbx-btn cbx-btn--soft app-download__link" :href="download.url" :download="download.file">
+                <Download :size="16" />
+                <span>下载 {{ download.file }}</span>
+              </a>
+              <span class="app-download__hint">扫码或点击按钮开始下载</span>
+            </div>
+          </article>
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -675,6 +738,68 @@ onMounted(async () => {
 .cons .cbx-collapse__head {
   cursor: default;
 }
+.app-downloads__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cbx-space-4);
+}
+.app-downloads__note {
+  margin-bottom: 0;
+}
+.app-downloads__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: var(--cbx-space-4);
+}
+.app-download {
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-4);
+  min-width: 0;
+  padding: var(--cbx-space-4);
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-md);
+  background: var(--cbx-surface-raised);
+}
+.app-download__qr {
+  flex: 0 0 156px;
+  width: 156px;
+  height: 156px;
+  padding: 8px;
+  background: #fff;
+  border-radius: var(--cbx-radius-sm);
+}
+.app-download__qr canvas {
+  display: block;
+  width: 140px !important;
+  height: 140px !important;
+}
+.app-download__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cbx-space-2);
+}
+.app-download__body h4,
+.app-download__body p {
+  margin: 0;
+}
+.app-download__body h4 {
+  font-size: var(--cbx-fs-md);
+}
+.app-download__body p,
+.app-download__hint {
+  color: var(--cbx-text-secondary);
+  font-size: var(--cbx-fs-sm);
+}
+.app-download__link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  text-decoration: none;
+}
 
 @media (max-width: 767px) {
   .body {
@@ -684,6 +809,14 @@ onMounted(async () => {
     /* auto-fill 在 317px 卡片里本就只有 1 列，这里显式声明是为了
        符合设计规范「内容多列网格在移动端降为单列」 */
     grid-template-columns: 1fr;
+  }
+  .app-downloads__head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .app-download {
+    align-items: flex-start;
+    flex-direction: column;
   }
   /* ⚠ 必须显式写：base.css 移动端块里的 .cbx-switch{min-height:44px} 是 (0,1,0)，
      压不过本文件 scoped 后变成 (0,2,0) 的 .swopt，会把开关按在 36px。
