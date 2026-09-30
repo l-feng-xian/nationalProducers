@@ -65,7 +65,7 @@ export const useStatusStore = defineStore('status', () => {
     })
   })
 
-  /** 还没有快照时的兜底：群聊 / 角色卡上配的初始状态 */
+  /** 还没有快照时的兜底：演绎 / 角色卡上配的初始状态 */
   const initial = computed<StatusData | null>(() =>
     context.value?.fromInitial ? context.value.current : null,
   )

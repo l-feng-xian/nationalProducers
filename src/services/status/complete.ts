@@ -1,6 +1,6 @@
 /**
  * 「用户和每个角色都必须有记录」的两半：
- *  - initialFor：还没有快照时，把群聊 / 角色卡上配的初始状态拼成一份；
+ *  - initialFor：还没有快照时，把演绎 / 角色卡上配的初始状态拼成一份；
  *  - completeStatus：模型漏写了某人（或某人的某个字段）时，沿用上一份。
  * 以及生成链路与侧栏共用的 resolveStatusContext —— 两边必须看到同一套字段与名单。
  *
@@ -35,9 +35,9 @@ export function resolveStatusContext(args: {
   settings: StatusSettings
   messages: readonly ChatMessage[]
   userName: string
-  /** 1v1：本会话的角色；群聊：不传 */
+  /** 1v1：本会话的角色；演绎：不传 */
   char?: Character | null
-  /** 群聊：成员（按群聊成员顺序）与群聊覆盖配置 */
+  /** 演绎：成员（按演绎成员顺序）与演绎覆盖配置 */
   members?: Character[]
   groupConfig?: CharacterStatusConfig | null
 }): StatusContext {
@@ -60,8 +60,8 @@ export function resolveStatusContext(args: {
 /**
  * 初始状态。
  * 1v1：角色卡上的整份。
- * 群聊：以群聊配的为底；群聊没配到的成员，从**那位成员自己的角色卡**里取出他本人那一条补上
- * （角色卡上的场景与其他人物不带进群聊 —— 那是为单人剧情写的）。
+ * 演绎：以演绎配的为底；演绎没配到的成员，从**那位成员自己的角色卡**里取出他本人那一条补上
+ * （角色卡上的场景与其他人物不带进演绎 —— 那是为单人剧情写的）。
  */
 export function initialFor(args: {
   isGroup: boolean
@@ -70,7 +70,7 @@ export function initialFor(args: {
 }): StatusData | null {
   if (!args.isGroup) return configInitialStatus(args.chars[0]?.data.extensions.np?.status)
   const base = configInitialStatus(args.groupConfig) ?? { scene: {}, people: [] }
-  // 群聊页的初始状态表单会把每个成员都列出来；一个字段都没填的等于「留空」，要回落到角色卡
+  // 演绎页的初始状态表单会把每个成员都列出来；一个字段都没填的等于「留空」，要回落到角色卡
   const people = base.people.filter((p) => Object.keys(p.fields).length)
   for (const c of args.chars) {
     const name = c.data.name

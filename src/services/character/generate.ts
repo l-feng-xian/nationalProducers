@@ -1,5 +1,5 @@
 import type { CharacterDataV2 } from '@/types/character'
-import type { ProviderConfig } from '@/types/provider'
+import { thinkingField, type ProviderConfig } from '@/types/provider'
 import type { ProviderSettings } from '@/types/settings'
 import { parseExampleBlocks, serializeExampleBlocks } from '@/utils/mesExample'
 import { chatOnce } from '@/services/provider/openaiCompatible'
@@ -121,6 +121,7 @@ export async function generateCharacter(input: {
     ...(input.apiKey ? { apiKey: input.apiKey } : {}),
     ...(p.proxyPrefix ? { proxyPrefix: p.proxyPrefix } : {}),
     headers: p.extraHeaders,
+    ...thinkingField(p.thinking),
   }
   input.signal.throwIfAborted()
   const raw = await chatOnce(

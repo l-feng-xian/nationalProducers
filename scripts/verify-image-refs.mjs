@@ -1,19 +1,20 @@
 /**
- * 生图参考图选择 / 提示词 / 群聊封面 / 全站预览 —— 模拟接口，不调用付费服务。
+ * 生图参考图选择 / 提示词 / 演绎封面 / 全站预览 —— 模拟接口，不调用付费服务。
  *
  * 跑法： npm run verify:image-refs   （截图输出到 test-results/image-refs/）
  *
  * 覆盖：
- *  - 参考图池 = 角色封面 + 群聊封面 + 本会话历史配图；默认只勾选出场角色；
+ *  - 参考图池 = 角色封面 + 演绎封面 + 本会话历史配图；默认只勾选出场角色；
  *  - 选中顺序 = multipart image[] 顺序；按后端限量（ComfyUI 3 张，切过去自动截断）；
  *  - 模板提示词带目标消息那一刻的角色状态（地点、衣着），未手改时随选择重建，手改后不覆盖；
- *  - 群聊封面：默认用全体成员封面作参考、横版 size、落库后群聊列表显示横幅；
+ *  - 演绎封面：默认用全体成员封面作参考、横版 size、落库后演绎列表显示横幅；
  *  - 统一预览：聊天配图左右切换与计数、头像点开、列表「放大」按钮不跳转、返回键关闭。
  */
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium, expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { pickOption } from './lib/cbx-select.mjs'
 
 const server = await createServer({
   logLevel: 'error',
@@ -174,7 +175,10 @@ try {
   await dialog.getByRole('button', { name: /添加 \/ 更换参考图/ }).click()
   await expect(dialog.locator('.ref-group__title')).toHaveText(['角色封面', '历史配图'])
   // 历史配图新的在前：第 4 条（最新）排第一
-  const histCands = dialog.locator('.ref-group').filter({ hasText: '历史配图' }).locator('.ref-cand')
+  const histCands = dialog
+    .locator('.ref-group')
+    .filter({ hasText: '历史配图' })
+    .locator('.ref-cand')
   await expect(histCands).toHaveCount(2)
   await expect(histCands.first()).toContainText('第 4 条')
   await dialog.getByRole('button', { name: '选择 第 2 条 · 时雨的配图' }).click()
@@ -232,7 +236,7 @@ try {
   await expect(lightbox.locator('.lightbox__count')).toHaveCount(0)
   await page.keyboard.press('Escape')
 
-  // ── 群聊：多图参考 + 群聊封面入池 + ComfyUI 限量截断 ──
+  // ── 演绎：多图参考 + 演绎封面入池 + ComfyUI 限量截断 ──
   const groupId = await page.evaluate(async (ids) => {
     const { useGroupsStore } = await import('/src/stores/groups.ts')
     const groups = useGroupsStore()
@@ -246,15 +250,15 @@ try {
   await page.goto(`${origin}groups/${groupId}`)
   await hideDevtools()
   await page.getByRole('button', { name: '生成封面' }).click()
-  const cover = page.getByRole('dialog', { name: '生成群聊封面' })
+  const cover = page.getByRole('dialog', { name: '生成演绎封面' })
   await expect(cover.locator('.ref-card')).toHaveCount(3)
   assert.match(await cover.getByLabel('画面描述', { exact: true }).inputValue(), /横版合影/)
   await cover.getByRole('button', { name: '生成图片' }).click()
   await expect(cover.getByRole('button', { name: '放大查看生成结果' })).toBeVisible()
   const coverReq = requests.at(-1)
-  assert.equal(coverReq.images.length, 3, '群聊封面带全体成员封面')
-  assert.equal(coverReq.body.size, '1536x1024', '群聊封面是横版')
-  await cover.getByRole('button', { name: '设为群聊封面' }).click()
+  assert.equal(coverReq.images.length, 3, '演绎封面带全体成员封面')
+  assert.equal(coverReq.body.size, '1536x1024', '演绎封面是横版')
+  await cover.getByRole('button', { name: '设为演绎封面' }).click()
   await expect(cover).toHaveCount(0)
   await expect(page.locator('.gcover__img')).toBeVisible()
   await page.waitForTimeout(250)
@@ -263,9 +267,9 @@ try {
     const { getDb } = await import('/src/db/schema.ts')
     return (await getDb()).get('groups', id)
   }, groupId)
-  assert.ok(savedGroup.avatarBlobId, '群聊封面落库')
+  assert.ok(savedGroup.avatarBlobId, '演绎封面落库')
 
-  // 群聊列表：横幅 + 放大按钮打开预览且不跳转
+  // 演绎列表：横幅 + 放大按钮打开预览且不跳转
   await page.goto(`${origin}groups`)
   await hideDevtools()
   await expect(page.locator('.banner__img')).toBeVisible()
@@ -283,11 +287,11 @@ try {
   assert.ok(page.url().endsWith('/characters'))
   await page.keyboard.press('Escape')
 
-  // 群聊配图：候选含群聊封面；选 4 张后切到 ComfyUI → 截断到 3
+  // 演绎配图：候选含演绎封面；选 4 张后切到 ComfyUI → 截断到 3
   const gChat = await page.evaluate(async (id) => {
     const { useChatsStore } = await import('/src/stores/chats.ts')
     const chats = useChatsStore()
-    const meta = await chats.createGroup(id, '群聊配图')
+    const meta = await chats.createGroup(id, '演绎配图')
     await chats.open(meta.id)
     await chats.appendUser('望月和小红在钟楼上比剑。')
     return meta.id
@@ -299,16 +303,16 @@ try {
   // 用户的话点名了望月、小红 → 默认勾选这两位
   await expect(gd.locator('.ref-card')).toHaveCount(2)
   await gd.getByRole('button', { name: /添加 \/ 更换参考图/ }).click()
-  await expect(gd.locator('.ref-group__title')).toHaveText(['角色封面', '群聊封面'])
+  await expect(gd.locator('.ref-group__title')).toHaveText(['角色封面', '演绎封面'])
   await gd.getByRole('button', { name: '选择 时雨的封面' }).click()
-  await gd.getByRole('button', { name: '选择 群聊封面' }).click()
+  await gd.getByRole('button', { name: '选择 演绎封面' }).click()
   await expect(gd.locator('.ref-card')).toHaveCount(4)
-  await gd.getByLabel('文生图配置').selectOption({ label: '本地 ComfyUI · qwen.gguf' })
+  await pickOption(gd, '文生图配置', { label: '本地 ComfyUI · qwen.gguf' })
   await expect(gd.locator('.ref-card')).toHaveCount(3)
   await expect(gd.locator('.ref-count')).toHaveText('3 / 3')
   await expect(gd.getByText('当前配置最多使用 3 张参考图')).toBeVisible()
   // 满额时其余候选不可选
-  await expect(gd.getByRole('button', { name: '选择 群聊封面' })).toBeDisabled()
+  await expect(gd.getByRole('button', { name: '选择 演绎封面' })).toBeDisabled()
 
   // 手机：选择器与预览不溢出
   await page.setViewportSize({ width: 390, height: 844 })
@@ -348,7 +352,9 @@ try {
   // ⚠️ 必须站内路由跳转：page.goto 会整页重载，正在进行的生成随之作废
   await page.evaluate(
     (id) =>
-      document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(`/chat/${id}`),
+      document
+        .querySelector('#app')
+        .__vue_app__.config.globalProperties.$router.push(`/chat/${id}`),
     gChat,
   )
   await expect(page).toHaveURL(new RegExp(`/chat/${gChat}$`))
@@ -382,7 +388,6 @@ try {
   await expect(md).toBeVisible()
   await expect(md.getByRole('alert')).toContainText('500')
   await md.locator('footer').getByRole('button', { name: '关闭' }).click()
-
 
   // ── 手机：最小化后返回手势离开聊天页，生成不中断；点「查看」回到原会话定位到图片 ──
   const phone = await ctx.newPage()

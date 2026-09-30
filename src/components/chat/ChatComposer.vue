@@ -12,7 +12,7 @@ export interface MentionMember {
 const props = defineProps<{
   busy: boolean
   sendOnEnter: boolean
-  /** 群聊成员：传了才启用「@ 提及」选择列表 */
+  /** 演绎成员：传了才启用「@ 提及」选择列表 */
   members?: MentionMember[] | undefined
 }>()
 const emit = defineEmits<{ send: [text: string]; stop: [] }>()

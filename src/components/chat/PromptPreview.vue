@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useGenerationStore } from '@/stores/generation'
 import { formatTokens } from '@/services/tokens'
@@ -23,11 +24,19 @@ useBackClose(() => emit('close'))
 const gen = useGenerationStore()
 
 /**
- * 群聊：每位成员的提示词都不一样（角色卡、世界书、群聊约束、stop 串都按发言者组装），
- * 所以给一个成员下拉。默认选「按群聊策略下一位会发言的人」，就是点发送后真正会发出去的那份。
+ * 演绎：每位成员的提示词都不一样（角色卡、世界书、演绎约束、stop 串都按发言者组装），
+ * 所以给一个成员下拉。默认选「按演绎策略下一位会发言的人」，就是点发送后真正会发出去的那份。
  */
 const group = gen.previewSpeakers()
 const speakerId = ref(group?.defaultId ?? '')
+/** 发言者选项：挪出模板，模板里 group 的可空收窄才能保住 */
+const speakerOptions = computed(() =>
+  (group?.members ?? []).map((m) => ({
+    value: m.id,
+    label: m.name,
+    ...(m.id === group?.defaultId ? { hint: '下一位发言' } : {}),
+  })),
+)
 
 function rebuild() {
   return gen.build({ isDryRun: true, ...(speakerId.value ? { speakerId: speakerId.value } : {}) })
@@ -45,6 +54,28 @@ function refresh() {
 const sections = computed<PromptMessage[]>(() => built.value?.debug.sections ?? [])
 const wi = computed(() => built.value?.debug.worldInfo)
 
+/**
+ * 缓存诊断：与该发言者上一次真实请求比，前面有多少块一模一样（≈ 能命中前缀缓存的部分），
+ * 第一处不同在哪。本会话还没发过（或刚重启）时为 null。
+ */
+const prefix = computed(() => (built.value ? gen.prefixReport(built.value) : null))
+const prefixPct = computed(() =>
+  prefix.value && prefix.value.totalTokens
+    ? Math.round((prefix.value.sameTokens / prefix.value.totalTokens) * 100)
+    : 0,
+)
+const firstDiffIdx = computed(() => (prefix.value?.firstDiff ? prefix.value.sameBlocks : -1))
+const volatile = computed(() => built.value?.debug.volatileMacros ?? [])
+/** 在脚本里拼：模板里直接写字面的双花括号会被当成插值 */
+function macroText(name: string): string {
+  return `{{${name}}}`
+}
+function whereLabel(where: string): string {
+  const [src = '', who] = where.split(':')
+  const base = LABEL[src] ?? src
+  return who ? `${who} · ${base}` : base
+}
+
 /** source → 中文标签 */
 const LABEL: Record<string, string> = {
   main: '主提示词',
@@ -59,7 +90,7 @@ const LABEL: Record<string, string> = {
   dialogueExamples: '对话示例',
   newChat: '新对话标记',
   chatHistory: '聊天历史',
-  groupNudge: '群聊提示',
+  groupNudge: '演绎提示',
   jailbreak: '后置指令',
   memoryState: '会话记忆',
 }
@@ -107,11 +138,12 @@ function copyJson() {
           <template v-else>
             <label v-if="group && group.members.length" class="cbx-field speaker">
               <span class="cbx-field__label">预览发言者</span>
-              <select v-model="speakerId" class="cbx-input" @change="refresh">
-                <option v-for="m in group.members" :key="m.id" :value="m.id">
-                  {{ m.name }}{{ m.id === group.defaultId ? '（下一位发言）' : '' }}
-                </option>
-              </select>
+              <CbxSelect
+                v-model="speakerId"
+                :options="speakerOptions"
+                label="预览发言者"
+                @change="refresh"
+              />
             </label>
 
             <!-- 概览 -->
@@ -131,6 +163,32 @@ function copyJson() {
               <span v-if="wi?.budgetOverflowed" class="cbx-badge cbx-badge--error">
                 世界书超预算
               </span>
+              <span
+                v-if="prefix"
+                class="cbx-badge"
+                :class="prefixPct >= 70 ? 'cbx-badge--success' : 'cbx-badge--warning'"
+                title="与上一次真实请求逐块比对：前面相同的部分可以命中服务端的前缀缓存"
+              >
+                与上次相同前缀 {{ prefix.sameBlocks }}/{{ prefix.totalBlocks }} 块 · ≈{{
+                  formatTokens(prefix.sameTokens)
+                }}
+                tok（{{ prefixPct }}%）
+              </span>
+            </div>
+
+            <!-- 缓存提示 -->
+            <div v-if="prefix?.firstDiff || volatile.length" class="cache-note">
+              <p v-if="prefix?.firstDiff">
+                第 {{ firstDiffIdx }} 块（{{
+                  labelOf(prefix.firstDiff)
+                }}）起与上次不同，其后都无法命中缓存。
+              </p>
+              <p v-for="v in volatile" :key="`${v.where}.${v.macro}`">
+                {{ whereLabel(v.where) }} 用了 <code>{{ macroText(v.macro) }}</code
+                >，{{
+                  v.scope === 'turn' ? '每轮都会变' : '每天会变'
+                }}，会让缓存从这里失效；可以把它挪到约束提示词里（depth 0）。
+              </p>
             </div>
 
             <!-- 世界书激活情况 -->
@@ -161,7 +219,7 @@ function copyJson() {
               v-for="(m, i) in sections"
               :key="i"
               class="msg"
-              :class="{ 'msg--inject': isInjected(m) }"
+              :class="{ 'msg--inject': isInjected(m), 'msg--diff': i === firstDiffIdx }"
             >
               <div class="msg__head">
                 <span class="msg__idx">{{ i }}</span>
@@ -232,6 +290,26 @@ function copyJson() {
 }
 .msg--inject .msg__head {
   background: transparent;
+}
+/* 缓存断点：与上次请求第一处不同的块 */
+.msg--diff {
+  border-color: var(--cbx-warning);
+  box-shadow: 0 0 0 1px var(--cbx-warning);
+}
+.cache-note {
+  margin-bottom: var(--cbx-space-4);
+  padding: var(--cbx-space-2) var(--cbx-space-3);
+  border-radius: var(--cbx-radius-md);
+  background: var(--cbx-warning-light);
+  color: var(--cbx-text-secondary);
+  font-size: var(--cbx-fs-xs);
+  line-height: 1.6;
+}
+.cache-note p {
+  margin: 0;
+}
+.cache-note code {
+  font-family: var(--cbx-font-mono);
 }
 .msg__idx {
   min-width: 20px;

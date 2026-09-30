@@ -36,6 +36,8 @@ export interface WIScanInput {
   characterName?: string
   characterTags?: string[]
   externalActivations?: Map<string, ResolvedEntry>
+  /** 缓存友好布局：非常驻的 before/after 条目另放进 dynamicEntries，见 buckets.ts */
+  splitDynamic?: boolean
 }
 
 export type WIScanResult = WIBuckets & {
@@ -305,7 +307,7 @@ export function checkWorldInfo(input: WIScanInput): WIScanResult {
   }
 
   const activated = [...allActivatedEntries.values()]
-  const buckets = bucketActivatedEntries(activated)
+  const buckets = bucketActivatedEntries(activated, { splitDynamic: input.splitDynamic ?? false })
   timedEffects.setTimedEffects(activated)
   buffer.resetExternalEffects()
   return {

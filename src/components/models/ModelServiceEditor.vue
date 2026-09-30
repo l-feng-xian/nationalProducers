@@ -4,10 +4,17 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown, LoaderCircle, PlugZap, RefreshCw, Save } from '@/components/icons'
 import { useBackClose } from '@/composables/useBackClose'
 import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { chatOnce, listModels } from '@/services/provider/openaiCompatible'
-import type { ProviderConfig } from '@/types/provider'
+import {
+  PROVIDER_PRESETS,
+  familyOf,
+  presetForUrl,
+  supportsThinkingToggle,
+} from '@/services/provider/compat'
+import { thinkingField, type ProviderConfig } from '@/types/provider'
 import { defaultSettings, type ModelService } from '@/types/settings'
 import { toPlain } from '@/utils/plain'
 
@@ -25,7 +32,47 @@ const draft = ref<ModelService>(
         provider: { ...defaultSettings().provider, secretRef: `model-service:${id}` },
       },
 )
+// 老记录没有 thinking 字段（toPlain 拷的是原值）：补默认
+draft.value.provider.thinking ??= 'auto'
+const THINKING_OPTIONS = [
+  { value: 'auto', label: '默认（由服务商决定）' },
+  { value: 'off', label: '关闭：直接回复，更快更省' },
+  { value: 'on', label: '开启：先推理再回复' },
+]
+const presetOptions = computed(() => [
+  { value: '', label: '自定义 / 中转服务' },
+  ...PROVIDER_PRESETS.map((p) => ({ value: p.id, label: p.label })),
+])
+
 const dialog = ref<HTMLDialogElement | null>(null)
+
+/**
+ * 服务商预设。选中时填地址 / 模型 / 上下文；名称只在还没填、或还是上一个预设名时覆盖，
+ * 免得把用户自己起的名字冲掉。「自定义」= 不动任何字段。
+ */
+const presetId = ref(presetForUrl(draft.value.provider.baseUrl)?.id ?? '')
+const preset = computed(() => PROVIDER_PRESETS.find((p) => p.id === presetId.value))
+const family = computed(() => familyOf(draft.value.provider.baseUrl))
+const thinkingSupported = computed(() => supportsThinkingToggle(family.value))
+function applyPreset() {
+  const next = preset.value
+  if (!next) return
+  const p = draft.value.provider
+  const prevName = PROVIDER_PRESETS.find((x) => x.label === draft.value.name.trim())
+  if (!draft.value.name.trim() || prevName) draft.value.name = next.label
+  p.baseUrl = next.baseUrl
+  p.model = next.model
+  p.contextWindow = next.contextWindow
+  feedback.value = null
+}
+// 手改地址后，预设下拉跟着回显（改成自建中转就显示「自定义」）
+watch(
+  () => draft.value.provider.baseUrl,
+  (url) => {
+    const found = presetForUrl(url)
+    if ((found?.id ?? '') !== presetId.value) presetId.value = found?.id ?? ''
+  },
+)
 const apiKey = ref('')
 const showKey = ref(false)
 const loadingKey = ref(true)
@@ -87,6 +134,7 @@ function config(): ProviderConfig {
     ...(apiKey.value.trim() ? { apiKey: apiKey.value.trim() } : {}),
     ...(p.proxyPrefix.trim() ? { proxyPrefix: p.proxyPrefix.trim() } : {}),
     headers: p.extraHeaders,
+    ...thinkingField(p.thinking),
   }
 }
 
@@ -234,6 +282,19 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
         </header>
         <fieldset class="editor-fields cbx-page-body" :disabled="saving">
           <label class="cbx-field">
+            <span class="cbx-field__label">服务商</span>
+            <CbxSelect
+              v-model="presetId"
+              :options="presetOptions"
+              label="服务商"
+              @change="applyPreset"
+            />
+            <span v-if="preset?.note" class="cbx-field__hint">{{ preset.note }}</span>
+            <span v-if="preset?.keyUrl" class="cbx-field__hint key-url"
+              >API Key 申请地址：<span class="mono">{{ preset.keyUrl }}</span></span
+            >
+          </label>
+          <label class="cbx-field">
             <span class="cbx-field__label">服务名称</span>
             <input
               v-model="draft.name"
@@ -254,7 +315,9 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
               placeholder="https://api.deepseek.com/v1"
               required
             />
-            <span class="cbx-field__hint">填写 API 根地址，例如 https://api.yoshub.com/v1。</span>
+            <span class="cbx-field__hint"
+              >填写 API 根地址（通常以 /v1 结尾）。选了上面的服务商会自动填好。</span
+            >
           </label>
           <div class="cbx-field">
             <label class="cbx-field__label" for="service-api-key">API Key</label>
@@ -266,7 +329,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
                 :type="showKey ? 'text' : 'password'"
                 :disabled="loadingKey || !!keyError"
                 autocomplete="off"
-                placeholder="sk-..."
+                :placeholder="preset?.noKey ? '本地服务可留空' : 'sk-...'"
               />
               <button
                 type="button"
@@ -300,7 +363,7 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
                     id="service-model"
                     v-model="draft.provider.model"
                     class="cbx-input"
-                    placeholder="deepseek-chat"
+                    :placeholder="preset?.model || '点右侧按钮拉取模型列表'"
                     required
                     aria-controls="service-model-list"
                     :aria-expanded="pickerOpen"
@@ -390,6 +453,20 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
               />
             </label>
           </div>
+          <label class="cbx-field">
+            <span class="cbx-field__label">思考模式</span>
+            <CbxSelect
+              v-model="draft.provider.thinking"
+              :options="THINKING_OPTIONS"
+              label="思考模式"
+              :disabled="!thinkingSupported"
+            />
+            <span class="cbx-field__hint">{{
+              thinkingSupported
+                ? '只对支持思考开关的模型生效；不支持的模型会自动忽略。'
+                : '当前服务商没有统一的思考开关，按模型默认行为。'
+            }}</span>
+          </label>
           <label class="cbx-switch stream-switch">
             <input v-model="draft.provider.stream" type="checkbox" />
             <span class="cbx-switch__track" /><span>流式输出</span>
@@ -531,6 +608,11 @@ function dismissPicker(event: FocusEvent | PointerEvent) {
   align-items: center;
   padding: 8px;
   font-size: var(--cbx-fs-sm);
+}
+.key-url .mono {
+  font-family: var(--cbx-font-mono);
+  user-select: all;
+  overflow-wrap: anywhere;
 }
 .field-error {
   color: var(--cbx-error);

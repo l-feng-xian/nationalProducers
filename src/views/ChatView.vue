@@ -91,8 +91,8 @@ const canGenerateImage = computed(() =>
  * 打开对话配图。任务交给应用层（stores/imageJob.ts，App.vue 渲染对话框）：
  * 最小化后离开聊天页（手机上一个返回手势）生成也不会被取消。
  *
- * 参考图候选池：出场角色的封面 + 群聊封面 + 本会话此前的全部配图（新的在前）。
- * 默认只勾选角色封面 —— 群聊按 pickSceneCharacters 挑这一幕真正出场的人，
+ * 参考图候选池：出场角色的封面 + 演绎封面 + 本会话此前的全部配图（新的在前）。
+ * 默认只勾选角色封面 —— 演绎按 pickSceneCharacters 挑这一幕真正出场的人，
  * 不把全体成员都塞进去（不在场的人被画进来、面孔互相串）。用户可在对话框里再增删。
  *
  * ⚠️ 下面的回调都闭包住**打开这一刻**的会话快照（chatId / 消息列表），不读 chats.current：
@@ -130,7 +130,7 @@ function openImage(messageId?: string) {
       kind: 'group',
       name: g.name,
       blobId: g.avatarBlobId,
-      label: '群聊封面',
+      label: '演绎封面',
     })
   const history: ImageRefCandidate[] = []
   rows.forEach((m, i) => {
@@ -154,7 +154,7 @@ function openImage(messageId?: string) {
     title: '生成对话配图',
     applyLabel: '保存到对话',
     requireReferences: true,
-    // 历史配图新的在前（前面的角色 / 群聊封面顺序不动）
+    // 历史配图新的在前（前面的角色 / 演绎封面顺序不动）
     candidates: [...candidates, ...history.reverse()],
     defaultSelected: picked.map((c) => `char:${c.id}`),
     // 模板提示词：着重当前场景、表情、肢体动作与穿着
@@ -188,6 +188,23 @@ function openImage(messageId?: string) {
     },
   })
 }
+
+/**
+ * 流程控制「生成配图」动作：一轮生成结束后，最新的运行态若带配图标记，就给那条回复打开配图面板。
+ * 只打开面板、不自动调用生图 —— 参考图与提示词仍由用户确认，避免规则悄悄消耗额度。
+ * 已处理过的消息记在内存里：重开页面不会对旧消息再弹一次（只看本页生成结束的那一刻）。
+ */
+const flowImageDone = new Set<string>()
+watch(
+  () => gen.busy,
+  (busy, was) => {
+    if (busy || !was) return
+    const target = [...chats.messages].reverse().find((m) => m.extra?.flow)
+    if (!target?.extra?.flow?.image || flowImageDone.has(target.id)) return
+    flowImageDone.add(target.id)
+    void nextTick(() => openImage(target.id))
+  },
+)
 
 /**
  * 执行「定位到配图」：imageJob.reveal 由提示的「查看」发起（它负责跳到对应会话），
@@ -326,7 +343,7 @@ const groupMembers = computed(() =>
     .map((id) => chars.byId(id))
     .filter((c): c is NonNullable<typeof c> => !!c),
 )
-/** 输入框「@ 提及」候选：仅群聊 */
+/** 输入框「@ 提及」候选：仅演绎 */
 const mentionMembers = computed(() =>
   isGroup.value
     ? groupMembers.value.map((c) => ({ id: c.id, name: c.data.name, avatarBlobId: c.avatarBlobId }))
@@ -467,8 +484,21 @@ async function onBranch(id: string) {
   await router.push(`/chat/${meta.id}`)
 }
 
+/**
+ * 聊天页的「新对话」：**沿用它所在会话的角色 / 演绎**再开一段。
+ * 在某个角色的对话里点，就再开一段和同一角色的；在演绎里点，就再开一段同一个演绎的。
+ * 没有会话时（空聊天页）回落到通用助手，与这里原来的行为一致。
+ */
 async function newChat() {
-  const meta = await chats.createSolo(undefined, '新对话')
+  const cur = chats.current
+  if (cur?.kind === 'group' && cur.groupId) {
+    const g = groups.byId(cur.groupId)
+    const meta = await chats.createGroup(cur.groupId, g?.name ?? cur.title)
+    await router.push(`/chat/${meta.id}`)
+    return
+  }
+  const char = cur?.characterId ? chars.byId(cur.characterId) : undefined
+  const meta = await chats.createSolo(char?.id, char?.data.name ?? '新对话')
   await router.push(`/chat/${meta.id}`)
 }
 </script>

@@ -852,18 +852,18 @@ function toggle(on: boolean) { model.value = on ? (model.value ?? props.fallback
 
 ---
 
-## 5. 1vN 群聊创建 + 关系图谱
+## 5. 1vN 演绎创建 + 关系图谱
 
 ### 5.1 `GroupEditView.vue` 结构
 
 ```
-AppTopbar back  title="新建群聊"  actions=[保存]
+AppTopbar back  title="新建演绎"  actions=[保存]
 CbxTabs: 成员 | 关系 | 策略
 ── 成员 ──
    已选成员（可拖拽排序 = members 顺序，决定「列表顺序」发言次序）
      行：拖拽把手 · 头像 · 名字 · 静音开关(disabled_members) · 移除
    [＋ 添加成员] → CharacterPicker (CbxModal，多选，带搜索)
-   群名 input（留空自动「群聊：A、B、C」）+ 群头像（默认 2×2 成员拼贴）
+   群名 input（留空自动「演绎：A、B、C」）+ 群头像（默认 2×2 成员拼贴）
 ── 关系 ──
    CbxTabs 内嵌：图谱 | 列表      ← 移动端默认「列表」，桌面默认「图谱」
    [图谱] RelationGraph.vue  + 工具条
@@ -1268,7 +1268,7 @@ function fitView() {
 `baseURL`（占位 `https://api.openai.com/v1`）· `apiKey`（type=password + 👁 切换 + 「仅保存在本机 IndexedDB」小字）· `model`（input + `[拉取模型列表]` → GET `/models` → 下拉）· `代理地址`（说明：留空走 Vite dev proxy `/llm`；生产需自备反代）· temperature / top_p / max_tokens / presence·frequency penalty（CbxSlider）· 流式开关 · `[测试连接]` → `.cbx-badge--success/--error`。
 
 **② 提示词与深度**
-主系统提示词 · 后置指令(jailbreak) · **1v1 约束提示词** + **插入深度**（number，默认 0）· **1vN 约束提示词** + **插入深度**（默认 0）· 群聊 nudge 模板（默认 `[Write the next reply only as {{char}}.]`）· 新群聊开场模板 · 上下文消息上限 / token 预算。
+主系统提示词 · 后置指令(jailbreak) · **1v1 约束提示词** + **插入深度**（number，默认 0）· **1vN 约束提示词** + **插入深度**（默认 0）· 演绎 nudge 模板（默认 `[Write the next reply only as {{char}}.]`）· 新演绎开场模板 · 上下文消息上限 / token 预算。
 
 **深度语义可视化 `DepthPreview.vue`**（关键 UX：depth 概念极易误解）
 
@@ -1433,7 +1433,7 @@ export function useBreakpoint() {
 | L4 | 聊天页全套（1v1） | — |
 | L5 | 角色页全套 + `CbxImageCropper` | 聊天页 |
 | L6 | 世界书页 + `CbxTriState/CbxNullableNumber` | 角色页 |
-| L7 | 群聊页 + `RelationGraph` + `graphGeometry.ts` | 聊天页(1vN) |
+| L7 | 演绎页 + `RelationGraph` + `graphGeometry.ts` | 聊天页(1vN) |
 | L8 | 设置页 + `DepthPreview` | — |
 
 ## FILES
@@ -1519,7 +1519,7 @@ export function useBreakpoint() {
   reuse: new（字段与默认值来自 01-wi-model.md §1.1，位置枚举来自 02-wi-positions.md §1）
 - `components/world/WiEntryRow.vue` — 条目列表行：开关 + 标题/关键词摘要 + 触发模式徽标 + 位置徽标 + order + 拖拽把手  
   reuse: new
-- `views/GroupEditView.vue` — 群聊创建/编辑：成员(排序/静音/移除)、关系(图谱|列表)、策略(activation_strategy/generation_mode/join 前后缀/auto_mode_delay/allow_self_responses)  
+- `views/GroupEditView.vue` — 演绎创建/编辑：成员(排序/静音/移除)、关系(图谱|列表)、策略(activation_strategy/generation_mode/join 前后缀/auto_mode_delay/allow_self_responses)  
   reuse: new（枚举与语义来自 04-group.md §1-2）
 - `components/group/RelationGraph.vue` — SVG 可拖拽关系图谱：无 viewBox 的像素坐标系 + translate/scale 视图组、pointer 状态机(node/pan/link/pinch)、rAF 节流、touch-action:none、marker 箭头、二次贝塞尔双向弯边、透明粗描边命中、圆周布局与适应画布、全屏模式  
   reuse: new

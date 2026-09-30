@@ -1,5 +1,5 @@
 /**
- * 群聊「@ 优先发言」验证。
+ * 演绎「@ 优先发言」验证。
  *
  * 跑法： npm run verify:group-mentions
  *

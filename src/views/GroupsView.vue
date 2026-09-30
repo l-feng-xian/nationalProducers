@@ -26,7 +26,7 @@ onMounted(() => {
   if (!chars.loaded) void chars.load()
 })
 
-// ── 群聊封面横幅（3:2）+ 深度视差，挂载方式照抄角色列表页 ──
+// ── 演绎封面横幅（3:2）+ 深度视差，挂载方式照抄角色列表页 ──
 /** 与 GroupEditView 的封面比例一致 */
 const COVER_ASPECT = 3 / 2
 const parallax = useDepthParallax()
@@ -80,7 +80,7 @@ const imagePreview = useImagePreview()
 function previewCover(g: Group, e: MouseEvent) {
   if (!g.avatarBlobId) return
   const img = (e.currentTarget as HTMLElement).closest('.banner')?.querySelector('img')
-  void imagePreview.open([{ blobId: g.avatarBlobId, caption: `${g.name} · 群聊封面` }], 0, img)
+  void imagePreview.open([{ blobId: g.avatarBlobId, caption: `${g.name} · 演绎封面` }], 0, img)
 }
 
 /** 最多叠 4 个头像，再多用「+N」收口，否则成员一多卡片就被撑破 */
@@ -109,17 +109,17 @@ async function create() {
 
 /**
  * 就地删除。文案与 GroupEditView 里那个删除保持一致 ——
- * 删群聊会连带删掉它的全部对话，这一点必须在确认框里讲明。
+ * 删演绎会连带删掉它的全部对话，这一点必须在确认框里讲明。
  */
 async function remove(g: Group) {
-  if (!(await confirmDialog({ text: `确定删除群聊「${g.name}」？其全部对话也会一并删除。` })))
+  if (!(await confirmDialog({ text: `确定删除演绎「${g.name}」？其全部对话也会一并删除。` })))
     return
   await groups.remove(g.id)
   toast.success(`已删除「${g.name}」`)
 }
 
 /**
- * 与 GroupEditView 用同一条门槛：少于 2 个成员的群聊没有意义，
+ * 与 GroupEditView 用同一条门槛：少于 2 个成员的演绎没有意义，
  * 发言人轮转逻辑也没法工作。在这里先拦住，比进了聊天页才报错好。
  */
 async function startChat(g: Group) {
@@ -133,10 +133,10 @@ async function startChat(g: Group) {
 </script>
 
 <template>
-  <AppTopbar title="群聊">
+  <AppTopbar title="演绎">
     <template #actions>
       <button class="cbx-btn cbx-btn--primary" @click="create">
-        <AppIcon name="Plus" /> 新建群聊
+        <AppIcon name="Plus" /> 新建演绎
       </button>
     </template>
   </AppTopbar>
@@ -144,9 +144,9 @@ async function startChat(g: Group) {
   <div ref="scroller" class="cbx-scroll body">
     <div v-if="!groups.items.length" class="cbx-empty">
       <span class="cbx-empty__icon"><AppIcon name="UsersRound" tone="brand" /></span>
-      <span class="cbx-empty__title">还没有群聊</span>
+      <span class="cbx-empty__title">还没有演绎</span>
       <span class="cbx-empty__desc">
-        群聊是 1vN 的多角色对话：把两个以上角色放进同一个场景，还能配置他们之间的关系
+        演绎是 1vN 的多角色对话：把两个以上角色放进同一个场景，还能配置他们之间的关系
       </span>
     </div>
 
@@ -188,7 +188,7 @@ async function startChat(g: Group) {
             <span v-if="overflow(g)" class="faces__more">+{{ overflow(g) }}</span>
           </div>
           <span v-if="g.fav" class="fav" title="已收藏"><AppIcon name="Star" /></span>
-          <button class="cbx-icon-btn del" title="删除群聊" @click="remove(g)">
+          <button class="cbx-icon-btn del" title="删除演绎" @click="remove(g)">
             <AppIcon name="X" tone="danger" />
           </button>
         </div>

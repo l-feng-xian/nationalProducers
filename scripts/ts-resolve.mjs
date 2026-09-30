@@ -12,7 +12,7 @@
  *   2. `./x`      → 依次试 `./x.ts` / `./x.tsx` / `./x/index.ts`
  *
  * 用法：
- *   node --import ./scripts/ts-register.mjs scripts/verify-torus.ts
+ *   node --import ./scripts/ts-register.mjs scripts/verify-flow.ts
  *
  * ⚠️ 只用于本地验证脚本。生产构建走 Vite，与这里无关。
  */

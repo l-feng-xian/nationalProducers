@@ -1,5 +1,5 @@
 /**
- * 封面图 + 深度图（立绘视差）的替换与生成。角色编辑页与群聊编辑页共用。
+ * 封面图 + 深度图（立绘视差）的替换与生成。角色编辑页与演绎编辑页共用。
  *
  * 规则（原来写在角色编辑页里，两处照搬会漂移，所以抽出来）：
  *  - 换封面：先落新引用、保存；**旧图不直接删**，只作废 objectURL 缓存 ——
@@ -21,7 +21,7 @@ export interface CoverTarget {
 }
 
 export function useCoverImage(opts: {
-  /** 当前编辑的对象（角色 / 群聊的草稿），会被就地修改 */
+  /** 当前编辑的对象（角色 / 演绎的草稿），会被就地修改 */
   target: () => CoverTarget | null | undefined
   /** 落盘 */
   save: () => Promise<void>

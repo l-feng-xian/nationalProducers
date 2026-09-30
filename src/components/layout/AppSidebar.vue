@@ -89,15 +89,18 @@ async function remove(id: string, title: string) {
   if (route.params['id'] === id) await router.push(homePath())
 }
 
+/**
+ * 「新建对话」= 去角色页挑一个角色开始。
+ * 手机上抽屉盖在上面，先收抽屉再跳，否则抽屉会留在新页面上。
+ */
 function newChat() {
-  // 抽屉和新建面板叠着开，关面板后还得再关一次抽屉
   ui.closeDrawer()
-  ui.newChatOpen = true
+  void router.push('/characters')
 }
 
 const ALL_NAV = [
   { name: 'characters', to: '/characters', label: '角色', icon: CharactersIcon },
-  { name: 'groups', to: '/groups', label: '群聊', icon: GroupsIcon },
+  { name: 'groups', to: '/groups', label: '演绎', icon: GroupsIcon },
   { name: 'worlds', to: '/worlds', label: '世界书', icon: WorldsIcon },
   { name: 'models', to: '/models', label: '模型管理', icon: ModelsIcon },
   { name: 'data', to: '/data', label: '数据管理', icon: DataIcon },

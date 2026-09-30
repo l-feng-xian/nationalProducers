@@ -190,6 +190,7 @@ export const DEFAULT_WI_ENTRY: Omit<WorldInfoEntry, 'uid'> = {
  */
 export interface WorldBook {
   id: string
+  templateId?: string
   name: string
   description: string
   entries: Record<string, WorldInfoEntry>

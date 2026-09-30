@@ -27,6 +27,7 @@ function whole(name: IconName, hover: string, active = hover): Artwork {
 // native bounds so an X/check doesn't look weaker than an enclosing circle.
 const nativeGrid = new Set<IconName>([
   'Characters',
+  'Drama',
   'Menu',
   'Orbit',
   'X',
@@ -61,17 +62,21 @@ function set(name: IconName, artwork: Artwork) {
 set('Characters', {
   ambient: true,
   parts: [
-    part('Characters', [0], { hover: 'rotate(-4deg)', active: 'rotate(3deg)' }),
-    part('Characters', [1], {
-      hover: 'translateY(-0.6px) scaleY(.85)',
-      active: 'scaleY(.75)',
-      origin: '12px 10px',
+    part('Characters', [0], {
+      hover: 'translateY(-.35px) scale(1.04)',
+      active: 'translateY(.2px) scale(.94)',
+      origin: '12px 12px',
       ambient: true,
     }),
+    part('Characters', [1], {
+      hover: 'translateY(-.15px) scaleX(1.06)',
+      active: 'translateY(.1px) scaleX(.9)',
+      origin: '12px 10px',
+    }),
     part('Characters', [2], {
-      hover: 'translateY(.5px)',
-      active: 'scaleX(1.12)',
-      origin: '12px 15px',
+      hover: 'translateY(.25px) scaleX(1.08)',
+      active: 'translateY(-.1px) scaleX(.88)',
+      origin: '12px 14.3px',
     }),
   ],
 })
@@ -87,6 +92,33 @@ set('Menu', {
       hover: 'translateX(-1px)',
       active: 'translateY(-5px) rotate(-45deg)',
       origin: '12px 17px',
+    }),
+  ],
+})
+set('Drama', {
+  ambient: true,
+  parts: [
+    part('Drama', [0], {
+      hover: 'translateY(.2px) scale(1.02)',
+      active: 'translateY(.35px) scale(.98)',
+      origin: '12px 14px',
+      ambient: true,
+    }),
+    part('Drama', [1], {
+      hover: 'translate(-.35px -.7px) rotate(-3deg)',
+      active: 'translate(.1px 1px) rotate(4deg)',
+      origin: '12px 8px',
+      ambient: true,
+    }),
+    part('Drama', [2], {
+      hover: 'translate(-.35px -.7px) rotate(-3deg)',
+      active: 'translate(.1px 1px) rotate(4deg)',
+      origin: '12px 8px',
+    }),
+    part('Drama', [3], {
+      hover: 'translateY(-.15px) scaleX(1.04)',
+      active: 'translateY(.15px) scaleX(.94)',
+      origin: '12px 14px',
     }),
   ],
 })

@@ -22,13 +22,13 @@ export function characterImagePrompt(
 }
 
 /**
- * 群聊配图**默认勾选**几位出场人物。只是默认值：用户可以在对话框里再加，
+ * 演绎配图**默认勾选**几位出场人物。只是默认值：用户可以在对话框里再加，
  * 真正的上限按后端定（services/image/limits.ts）。画面人物一多，面孔与服饰也更容易互相串。
  */
 export const MAX_SCENE_REFERENCES = 3
 
 /**
- * 群聊配图：挑出**这一幕真正出场的人**，而不是把全体成员都塞进参考图。
+ * 演绎配图：挑出**这一幕真正出场的人**，而不是把全体成员都塞进参考图。
  *
  * 顺序即参考图顺序（参考图 1、2、3 …）：
  *  1. 这句话的发言者（AI 消息的 original_avatar）；
@@ -158,7 +158,7 @@ export function dialogueImagePrompt(
   ].join('\n\n')
 }
 
-/** 群聊封面（横版合影）的模板提示词 */
+/** 演绎封面（横版合影）的模板提示词 */
 export function groupCoverPrompt(input: {
   name: string
   refs: PromptRef[]
@@ -166,7 +166,7 @@ export function groupCoverPrompt(input: {
 }): string {
   const cast = castOf(input.refs)
   return [
-    `请为群聊「${input.name}」画一张横版合影封面：${cast.length} 个人物同框，每个人都完整出现、清晰可辨认，人物之间的站位与神态体现彼此的关系，背景呼应他们共同的故事氛围。`,
+    `请为演绎「${input.name}」画一张横版合影封面：${cast.length} 个人物同框，每个人都完整出现、清晰可辨认，人物之间的站位与神态体现彼此的关系，背景呼应他们共同的故事氛围。`,
     '每个人的五官、发型、发色、瞳色、服饰与体型必须与其参考图一致；不要添加其他人物，画面不要出现文字、水印或边框。',
     `参考图说明：\n${referenceLines(input.refs).join('\n')}`,
     ...(input.relations?.trim() ? [`人物关系：\n${input.relations.trim()}`] : []),

@@ -83,7 +83,7 @@ check('流式：半个开标签也藏', stripStatusForStream('你好\n<sta') ===
 check('流式：普通 < 不误伤', stripStatusForStream('a<b') === 'a<b')
 check('流式：无状态原样', stripStatusForStream('你好') === '你好')
 
-// ── 群聊防串台截断不能误伤状态 ──
+// ── 演绎防串台截断不能误伤状态 ──
 {
   const text = `艾莉笑了。\n<status>${STATUS}</status>`
   const r = extractStatus(text)
@@ -253,9 +253,9 @@ check('流式：无状态原样', stripStatusForStream('你好') === '你好')
   }
   const init = initialFor({ isGroup: true, chars: [a, b], groupConfig: g })!
   const who = (n: string) => init.people.find((p) => p.name === n)
-  check('群聊初始：群聊配置优先', JSON.stringify(who('艾莉')?.fields['背包']) === '["花"]')
-  check('群聊初始：留空成员回落到角色卡本人', JSON.stringify(who('阿蓝')?.fields['背包']) === '["琴"]')
-  check('群聊初始：角色卡的场景与别人不带进群', init.scene['地点'] === '广场' && !who('路人'))
+  check('演绎初始：演绎配置优先', JSON.stringify(who('艾莉')?.fields['背包']) === '["花"]')
+  check('演绎初始：留空成员回落到角色卡本人', JSON.stringify(who('阿蓝')?.fields['背包']) === '["琴"]')
+  check('演绎初始：角色卡的场景与别人不带进群', init.scene['地点'] === '广场' && !who('路人'))
   check(
     '1v1 初始：角色卡整份',
     initialFor({ isGroup: false, chars: [a] })?.scene['地点'] === '单人剧情的地点',
@@ -277,7 +277,7 @@ check('流式：无状态原样', stripStatusForStream('你好') === '你好')
     '内部形状初始状态：原样读回',
     solo?.scene['天气'] === '晴' && JSON.stringify(solo.people[0]?.fields) === '{"背包":["伞"]}',
   )
-  check('上下文：群聊必填 = 全员 + 用户', ctx.required.join() === '艾莉,阿蓝,我')
+  check('上下文：演绎必填 = 全员 + 用户', ctx.required.join() === '艾莉,阿蓝,我')
   check('上下文：无快照时用初始状态', ctx.fromInitial && ctx.current?.scene['地点'] === '广场')
 }
 

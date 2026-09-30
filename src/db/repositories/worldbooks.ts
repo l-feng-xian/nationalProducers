@@ -105,7 +105,7 @@ export async function removeEntry(bookId: string, uid: number): Promise<void> {
  */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
-  const tx = db.transaction(['worldbooks', 'settings', 'characters', 'chats'], 'readwrite')
+  const tx = db.transaction(['worldbooks', 'settings', 'characters', 'groups', 'chats'], 'readwrite')
 
   /**
    * ⚠️ 三段级联都是**裸读别的 store**，拿到的行没经过那个仓储的 normalize
@@ -129,10 +129,19 @@ export async function remove(id: string): Promise<void> {
   const cStore = tx.objectStore('characters')
   const chars = await cStore.getAll()
   for (const c of chars) {
-    if (!Array.isArray(c.worldBookIds) || !c.worldBookIds.includes(id)) continue
-    c.worldBookIds = c.worldBookIds.filter((x) => x !== id)
+    if (c.worldBookId !== id && (!Array.isArray(c.worldBookIds) || !c.worldBookIds.includes(id))) continue
+    if (c.worldBookId === id) delete c.worldBookId
+    c.worldBookIds = Array.isArray(c.worldBookIds) ? c.worldBookIds.filter((x) => x !== id) : []
     c.updatedAt = Date.now()
     await cStore.put(toPlain(c))
+  }
+
+  const gStore = tx.objectStore('groups')
+  for (const g of await gStore.getAll()) {
+    if (g.worldBookId !== id) continue
+    delete g.worldBookId
+    g.updatedAt = Date.now()
+    await gStore.put(toPlain(g))
   }
 
   const chStore = tx.objectStore('chats')

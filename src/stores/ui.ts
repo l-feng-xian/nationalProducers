@@ -24,7 +24,6 @@ export const useUiStore = defineStore('ui', () => {
    * 拖动期间侧栏与遮罩跟手，松手后清回 null，交给 CSS 过渡落到开 / 关。
    */
   const drawerDrag = ref<number | null>(null)
-  const newChatOpen = ref(false)
   /**
    * 状态侧栏。pinned 只在桌面有意义：固定时侧栏常驻并挤窄聊天列；
    * 不固定（以及手机上一律）是浮层，发送 / 聚焦输入框时自动收起。
@@ -88,7 +87,6 @@ export const useUiStore = defineStore('ui', () => {
     theme,
     drawerOpen,
     drawerDrag,
-    newChatOpen,
     statusOpen,
     statusPinned,
     setStatusPinned,

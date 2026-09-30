@@ -4,6 +4,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import WiEntryEditor from '@/components/world/WiEntryEditor.vue'
+import AiWorldBookDialog from '@/components/world/AiWorldBookDialog.vue'
+import { Sparkles } from '@/components/icons'
 import { useWorldsStore } from '@/stores/worlds'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
@@ -18,6 +20,14 @@ const settings = useSettingsStore()
 const toast = useToast()
 
 const fileInput = ref<HTMLInputElement | null>(null)
+const showAi = ref(false)
+
+/** AI 生成保存后：打开那本书，让用户马上看到结果 */
+async function onAiDone(id: string) {
+  showAi.value = false
+  toast.success('世界书已生成')
+  await router.push(`/worlds/${id}`)
+}
 
 const bookId = computed(() => {
   const v = route.params['bookId']
@@ -169,6 +179,9 @@ watch([bookId, uid], () => {
   <AppTopbar title="世界书">
     <template #actions>
       <button class="cbx-btn cbx-btn--ghost" @click="fileInput?.click()">导入</button>
+      <button class="cbx-btn cbx-btn--soft" @click="showAi = true">
+        <Sparkles :size="16" aria-hidden="true" /> AI 生成
+      </button>
       <button class="cbx-btn cbx-btn--primary" @click="createBook">
         <AppIcon name="Plus" /> 新建
       </button>
@@ -258,6 +271,13 @@ watch([bookId, uid], () => {
       </div>
     </div>
   </div>
+
+  <AiWorldBookDialog
+    v-if="showAi"
+    :current-book-id="book?.id"
+    @close="showAi = false"
+    @done="onAiDone"
+  />
 </template>
 
 <style scoped>

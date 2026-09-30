@@ -1,9 +1,0 @@
-Use case: background-extraction
-Asset type: four separate cottages from the exact supplied painted JRPG town.
-Primary request: faithfully extract/reconstruct the FOUR different reference cottages, keep their exact silhouettes, proportions, roof orientations, muted tile colors, pale timber walls, windows and flowerboxes. Reconstruct occluded edges. 2x2 equal cell sprite sheet on genuine transparent background. No scene or terrain, each building independently isolated.
-Top left: west cottage x345-525 y280-505, narrow tall orange-brown gabled roof whose ridge runs towards the viewer, chimney left/back, symmetrical two front windows and central wooden door, very shallow irregular stone foundation.
-Top right: east cottage x1040-1225 y350-558, same compact single-storey scale, slate blue roof with ridge pointing towards viewer, left chimney, center door, window flowers and tiny steps.
-Bottom left: southwest cottage x460-711 y565-765, broader single-storey house with long red tiled roof and a smaller projecting left-front gable, chimney near upper left, central-left door and two windows on right. Preserve this asymmetry.
-Bottom right: southeast cottage x900-1090 y574-786, warm golden terracotta roof, narrow front gable and two chimneys, central door with short stone steps, front flowerboxes.
-Style and camera: copy the exact reference's restrained gouache watercolor brushwork, thin dark painted linework, overhead axis-aligned JRPG perspective, warm upper-left light. No photorealism, no vector outlines, no pixel art. Keep shallow visible facade height relative to roof as in reference.
-Composition: 4 cells, equal 768x512, each whole building centered and as large as fits, wide empty gutters, transparent alpha around every cutout. No fences, grass rectangles, paths, ground islands, colored glow, vignette, cast shadows, text, labels or borders. Keep fine little herbs at wall foot only.

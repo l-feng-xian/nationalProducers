@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 /**
  * 会话行内展开的数据面板：四个选项卡带出该会话挂着的各张表。
  *
@@ -334,14 +335,15 @@ async function removeChat() {
       <!-- 世界书绑定 -->
       <label class="cbx-field cbx-field--md">
         <span class="cbx-field__label">会话专属世界书</span>
-        <select
-          class="cbx-input"
-          :value="meta?.worldBookId ?? ''"
-          @change="bindBook(($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">（不绑定）</option>
-          <option v-for="b in worlds.items" :key="b.id" :value="b.id">{{ b.name }}</option>
-        </select>
+        <CbxSelect
+          :model-value="meta?.worldBookId ?? ''"
+          :options="[
+            { value: '', label: '（不绑定）' },
+            ...worlds.items.map((b) => ({ value: b.id, label: b.name })),
+          ]"
+          label="会话专属世界书"
+          @change="bindBook"
+        />
         <span class="cbx-field__hint">优先级最高的一层，只对这个会话生效</span>
       </label>
 

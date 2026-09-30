@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { computed, ref } from 'vue'
 import {
   GENERATION_TYPE_TRIGGERS,
@@ -30,21 +31,32 @@ function toggle(k: string) {
 }
 
 const POSITIONS = [
-  { v: world_info_position.before, label: '角色卡之前' },
-  { v: world_info_position.after, label: '角色卡之后' },
-  { v: world_info_position.ANTop, label: '作者注释之前' },
-  { v: world_info_position.ANBottom, label: '作者注释之后' },
-  { v: world_info_position.atDepth, label: '指定深度' },
-  { v: world_info_position.EMTop, label: '示例对话之前' },
-  { v: world_info_position.EMBottom, label: '示例对话之后' },
-  { v: world_info_position.outlet, label: '出口' },
+  { value: world_info_position.before, label: '角色卡之前' },
+  { value: world_info_position.after, label: '角色卡之后' },
+  { value: world_info_position.ANTop, label: '作者注释之前' },
+  { value: world_info_position.ANBottom, label: '作者注释之后' },
+  { value: world_info_position.atDepth, label: '指定深度' },
+  { value: world_info_position.EMTop, label: '示例对话之前' },
+  { value: world_info_position.EMBottom, label: '示例对话之后' },
+  { value: world_info_position.outlet, label: '出口' },
 ]
 
 const LOGICS = [
-  { v: world_info_logic.AND_ANY, label: '并且 任一副键命中' },
-  { v: world_info_logic.AND_ALL, label: '并且 全部副键命中' },
-  { v: world_info_logic.NOT_ANY, label: '并且 任一副键都不中' },
-  { v: world_info_logic.NOT_ALL, label: '并且 副键未全中' },
+  { value: world_info_logic.AND_ANY, label: '并且 任一副键命中' },
+  { value: world_info_logic.AND_ALL, label: '并且 全部副键命中' },
+  { value: world_info_logic.NOT_ANY, label: '并且 任一副键都不中' },
+  { value: world_info_logic.NOT_ALL, label: '并且 副键未全中' },
+]
+
+const TRI_OPTIONS = [
+  { value: 'null', label: '继承全局' },
+  { value: 'true', label: '是' },
+  { value: 'false', label: '否' },
+]
+const ROLE_OPTIONS = [
+  { value: 0, label: 'system' },
+  { value: 1, label: 'user' },
+  { value: 2, label: 'assistant' },
 ]
 
 const TIMED_FIELDS = [
@@ -69,8 +81,7 @@ function setKeys(field: 'key' | 'keysecondary', ev: Event) {
 
 /** 三态字段：'null' | 'true' | 'false' → null | true | false */
 type TriField = 'caseSensitive' | 'matchWholeWords' | 'useGroupScoring'
-function setTri(field: TriField, ev: Event) {
-  const v = (ev.target as HTMLSelectElement).value
+function setTri(field: TriField, v: string) {
   props.entry[field] = v === 'null' ? null : v === 'true'
   emit('change')
 }
@@ -152,9 +163,12 @@ const modified = computed(() => {
     <div class="grid3">
       <label class="cbx-field">
         <span class="cbx-field__label">插入位置</span>
-        <select v-model.number="entry.position" class="cbx-input" @change="emit('change')">
-          <option v-for="p in POSITIONS" :key="p.v" :value="p.v">{{ p.label }}</option>
-        </select>
+        <CbxSelect
+          v-model="entry.position"
+          :options="POSITIONS"
+          label="插入位置"
+          @change="emit('change')"
+        />
       </label>
       <label v-if="isAtDepth" class="cbx-field">
         <span class="cbx-field__label">深度</span>
@@ -168,11 +182,12 @@ const modified = computed(() => {
       </label>
       <label v-if="isAtDepth" class="cbx-field">
         <span class="cbx-field__label">角色</span>
-        <select v-model.number="entry.role" class="cbx-input" @change="emit('change')">
-          <option :value="0">system</option>
-          <option :value="1">user</option>
-          <option :value="2">assistant</option>
-        </select>
+        <CbxSelect
+          v-model="entry.role"
+          :options="ROLE_OPTIONS"
+          label="角色"
+          @change="emit('change')"
+        />
       </label>
       <label v-if="isOutlet" class="cbx-field">
         <span class="cbx-field__label">出口名</span>
@@ -217,35 +232,32 @@ const modified = computed(() => {
         </label>
         <label class="cbx-field">
           <span class="cbx-field__label">副键逻辑</span>
-          <select v-model.number="entry.selectiveLogic" class="cbx-input" @change="emit('change')">
-            <option v-for="l in LOGICS" :key="l.v" :value="l.v">{{ l.label }}</option>
-          </select>
+          <CbxSelect
+            v-model="entry.selectiveLogic"
+            :options="LOGICS"
+            label="副键逻辑"
+            @change="emit('change')"
+          />
         </label>
 
         <div class="grid3">
           <label class="cbx-field">
             <span class="cbx-field__label">区分大小写</span>
-            <select
-              class="cbx-input"
-              :value="String(entry.caseSensitive)"
-              @change="setTri('caseSensitive', $event)"
-            >
-              <option value="null">继承全局</option>
-              <option value="true">是</option>
-              <option value="false">否</option>
-            </select>
+            <CbxSelect
+              :model-value="String(entry.caseSensitive)"
+              :options="TRI_OPTIONS"
+              label="区分大小写"
+              @change="(v) => setTri('caseSensitive', v)"
+            />
           </label>
           <label class="cbx-field">
             <span class="cbx-field__label">整词匹配</span>
-            <select
-              class="cbx-input"
-              :value="String(entry.matchWholeWords)"
-              @change="setTri('matchWholeWords', $event)"
-            >
-              <option value="null">继承全局</option>
-              <option value="true">是</option>
-              <option value="false">否</option>
-            </select>
+            <CbxSelect
+              :model-value="String(entry.matchWholeWords)"
+              :options="TRI_OPTIONS"
+              label="整词匹配"
+              @change="(v) => setTri('matchWholeWords', v)"
+            />
           </label>
           <label class="cbx-field">
             <span class="cbx-field__label">扫描深度</span>
@@ -400,15 +412,12 @@ const modified = computed(() => {
           </label>
           <label class="cbx-field">
             <span class="cbx-field__label">组内评分</span>
-            <select
-              class="cbx-input"
-              :value="String(entry.useGroupScoring)"
-              @change="setTri('useGroupScoring', $event)"
-            >
-              <option value="null">继承全局</option>
-              <option value="true">是</option>
-              <option value="false">否</option>
-            </select>
+            <CbxSelect
+              :model-value="String(entry.useGroupScoring)"
+              :options="TRI_OPTIONS"
+              label="包含组评分"
+              @change="(v) => setTri('useGroupScoring', v)"
+            />
           </label>
         </div>
         <label class="sw">

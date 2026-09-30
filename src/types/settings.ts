@@ -5,6 +5,7 @@
 import { world_info_insertion_strategy } from './worldinfo'
 import type { ImageModelService } from './image'
 import { defaultStatusSettings, type StatusSettings } from './status'
+import type { ThinkingMode } from './provider'
 
 export type ChatMode = 'solo' | 'group'
 
@@ -89,6 +90,8 @@ export interface ProviderSettings {
   contextWindow: number
   extraHeaders: Record<string, string>
   modelCache?: { at: number; ids: string[] }
+  /** 思考模式开关；auto = 服务商默认。见 services/provider/compat.ts */
+  thinking: ThinkingMode
 }
 
 export interface ModelService {
@@ -142,6 +145,18 @@ export interface PromptSettings {
   pinExamples: boolean
   /** 每条消息的固定 token 开销估算 */
   perMessageTokens: number
+  /**
+   * 历史超预算时一次截到「剩余预算 × 此比例」，之后前缀保持不动直到再次超出。
+   * 越小 → 缓存稳定的轮数越多、但带的历史越少。1 = 每轮只挤掉放不下的那几条（旧行为，前缀每轮都变）。
+   * 取值 0.5 ~ 1。
+   */
+  historyTrimRatio: number
+  /**
+   * 缓存友好布局：关键词触发（非常驻）的世界书 before/after 条目不放在前缀里，
+   * 改为在 `dynamicWIDepth` 深度注入。前缀因此不随激活情况变化。默认关，保持与 ST 一致。
+   */
+  cacheFriendlyWI: boolean
+  dynamicWIDepth: number
 }
 
 /**
@@ -157,6 +172,7 @@ export interface DepthSettings {
 }
 
 export interface Settings {
+  starterTemplatesVersion?: number
   id: 'app'
   schemaVersion: number
   theme: 'light' | 'dark' | 'system'
@@ -204,6 +220,7 @@ export const DEFAULT_MAIN_PROMPT =
 
 export function defaultSettings(): Settings {
   return {
+    starterTemplatesVersion: 0,
     id: 'app',
     schemaVersion: 2,
     theme: 'system',
@@ -220,6 +237,7 @@ export function defaultSettings(): Settings {
       stop: [],
       contextWindow: 16384,
       extraHeaders: {},
+      thinking: 'auto',
     },
     modelServices: [],
     activeModelServiceId: '',
@@ -258,6 +276,9 @@ export function defaultSettings(): Settings {
       wiFormat: '{0}',
       pinExamples: false,
       perMessageTokens: 16,
+      historyTrimRatio: 0.7,
+      cacheFriendlyWI: false,
+      dynamicWIDepth: 4,
     },
     memory: {
       enabled: false,

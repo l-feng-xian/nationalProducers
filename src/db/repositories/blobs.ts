@@ -63,7 +63,7 @@ export function collectBlobRefs(src: BlobRefSource): Set<string> {
     if (c.avatarBlobId) out.add(c.avatarBlobId)
     if (c.depthBlobId) out.add(c.depthBlobId)
   }
-  // 群聊封面同样是两个字段：横版封面 + 视差深度图
+  // 演绎封面同样是两个字段：横版封面 + 视差深度图
   for (const g of src.groups ?? []) {
     if (g.avatarBlobId) out.add(g.avatarBlobId)
     if (g.depthBlobId) out.add(g.depthBlobId)

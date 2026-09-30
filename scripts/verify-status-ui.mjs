@@ -4,7 +4,7 @@
  * 跑法： npm run verify:status-ui   （截图输出到 test-results/status/）
  *
  * 覆盖：流式期间气泡不闪 JSON、落库剥离、下一轮只注入最新一份、历史不带状态、
- * 手改后以手改为准、删消息回滚、坏 JSON 沿用上一份并报警、群聊两位发言者、
+ * 手改后以手改为准、删消息回滚、坏 JSON 沿用上一份并报警、演绎两位发言者、
  * 预览提示词可见、桌面固定/浮层、手机浮层（聚焦输入框收起 / 返回键关闭）。
  */
 import assert from 'node:assert/strict'
@@ -12,13 +12,17 @@ import http from 'node:http'
 import { mkdir } from 'node:fs/promises'
 import { chromium, expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { pickOption } from './lib/cbx-select.mjs'
 
 // ── mock LLM ──────────────────────────────────────────────
 const requests = []
 function replyFor(body) {
   const msgs = body.messages
   const lastUser = [...msgs].reverse().find((m) => m.role === 'user')?.content ?? ''
-  const nudge = msgs.map((m) => m.content).join('\n').match(/只以 (\S+) 的身份/)
+  const nudge = msgs
+    .map((m) => m.content)
+    .join('\n')
+    .match(/只以 (\S+) 的身份/)
   // 1v1 没有 nudge：取状态提示词里必填名单的第一个（= 本轮发言者）
   const required = msgs
     .map((m) => m.content)
@@ -26,7 +30,8 @@ function replyFor(body) {
     .match(/必须包含以下每个人各一项：([^、（\n]+)/)
   const speaker = nudge?.[1] ?? required?.[1] ?? '艾莉'
   const n = msgs.filter((m) => m.role === 'user' && !m.content.includes('【')).length
-  if (lastUser.includes('坏')) return `${speaker}皱了皱眉。\n<status>{"场景":{"时间":坏掉的</status>`
+  if (lastUser.includes('坏'))
+    return `${speaker}皱了皱眉。\n<status>{"场景":{"时间":坏掉的</status>`
   const status = {
     场景: { 时间: `第1天 第${n}刻`, 地点: '酒馆', 天气: '小雨' },
     人物: [
@@ -40,7 +45,10 @@ const mock = http.createServer(async (req, res) => {
   res.setHeader('access-control-allow-origin', '*')
   res.setHeader('access-control-allow-methods', 'POST, GET, OPTIONS')
   // Authorization 不被 * 覆盖，必须回显
-  res.setHeader('access-control-allow-headers', req.headers['access-control-request-headers'] ?? '*')
+  res.setHeader(
+    'access-control-allow-headers',
+    req.headers['access-control-request-headers'] ?? '*',
+  )
   if (req.method === 'OPTIONS') return res.end()
   let raw = ''
   for await (const c of req) raw += c
@@ -53,7 +61,9 @@ const mock = http.createServer(async (req, res) => {
   }
   res.setHeader('content-type', 'text/event-stream')
   for (let i = 0; i < text.length; i += 6) {
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text.slice(i, i + 6) } }] })}\n\n`)
+    res.write(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: text.slice(i, i + 6) } }] })}\n\n`,
+    )
     await new Promise((r) => setTimeout(r, 25))
   }
   res.end('data: [DONE]\n\n')
@@ -96,7 +106,13 @@ try {
       {
         id: 'mock',
         name: 'mock',
-        provider: { ...defaultSettings().provider, baseUrl: base, model: 'mock', secretRef: 'mock', stream: true },
+        provider: {
+          ...defaultSettings().provider,
+          baseUrl: base,
+          model: 'mock',
+          secretRef: 'mock',
+          stream: true,
+        },
       },
       'sk-test',
     )
@@ -123,7 +139,12 @@ try {
         const { useUiStore } = await import('/src/stores/ui.ts')
         const f = new Function('ctx', 'arg', `return (${src})(ctx, arg)`)
         return f(
-          { chats: useChatsStore(), status: useStatusStore(), gen: useGenerationStore(), ui: useUiStore() },
+          {
+            chats: useChatsStore(),
+            status: useStatusStore(),
+            gen: useGenerationStore(),
+            ui: useUiStore(),
+          },
           a,
         )
       },
@@ -212,10 +233,7 @@ try {
   last = await store(({ chats }) => chats.messages.at(-1))
   assert.equal(last.extra.status.source, 'user')
   await send('走吧')
-  assert.ok(
-    requests.at(-1).messages.at(-1).content.includes('城门口'),
-    '手改后的状态被注入下一轮',
-  )
+  assert.ok(requests.at(-1).messages.at(-1).content.includes('城门口'), '手改后的状态被注入下一轮')
   // 固定时发送不收起
   await expect(panel).toHaveClass(/sp--open/)
 
@@ -239,7 +257,9 @@ try {
   await page.screenshot({ path: 'test-results/status/desktop-error.png' })
 
   // ── 预览提示词能看到 STATUS 注入 ──
-  const keys = await store(({ gen }) => gen.build({ isDryRun: true }).debug.injections.map((i) => i.key))
+  const keys = await store(({ gen }) =>
+    gen.build({ isDryRun: true }).debug.injections.map((i) => i.key),
+  )
   assert.ok(keys.includes('STATUS'), `预览含 STATUS 注入：${keys}`)
 
   // ── 暗色 ──
@@ -267,7 +287,7 @@ try {
   const newRow = statusPane.locator('.sfe-row').last()
   await newRow.locator('.sfe-key').fill('任务')
   await newRow.locator('.sfe-key').press('Tab')
-  await newRow.locator('.sfe-sel').first().selectOption('user')
+  await pickOption(newRow, '范围', { value: 'user' })
   // 初始状态表单：场景 + 莉娜 + 我（名字锁定）
   const initForm = statusPane.locator('.ed')
   await expect(initForm.locator('.ed-person__fixed')).toHaveCount(2)
@@ -287,7 +307,10 @@ try {
     return (await (await getDb()).get('characters', id)).data.extensions.np.status
   }, linaId)
   assert.equal(savedCfg.initial.scene['地点'], '神殿', '初始状态落库')
-  assert.ok(savedCfg.fields.some((f) => f.key === '任务' && f.scope === 'user'), '仅用户字段落库')
+  assert.ok(
+    savedCfg.fields.some((f) => f.key === '任务' && f.scope === 'user'),
+    '仅用户字段落库',
+  )
 
   const linaChat = await page.evaluate(async (id) => {
     const { useChatsStore } = await import('/src/stores/chats.ts')
@@ -306,17 +329,21 @@ try {
   const me = linaSnap.people.find((p) => p.name === '我')
   assert.equal(me.fields['任务'], '寻找圣物', '漏写的字段沿用上一份')
   await expect(page.locator('aside.sp .snap-person--user')).toContainText('任务')
-  await expect(page.locator('aside.sp .snap-person:not(.snap-person--user)')).not.toContainText('任务')
+  await expect(page.locator('aside.sp .snap-person:not(.snap-person--user)')).not.toContainText(
+    '任务',
+  )
 
-  // ── 群聊：「状态」页签初始状态 + 每位成员都有记录（漏写沿用） ──
+  // ── 演绎：「状态」页签初始状态 + 每位成员都有记录（漏写沿用） ──
   const { groupId, groupChat } = await page.evaluate(async () => {
     const { useCharactersStore } = await import('/src/stores/characters.ts')
     const { useGroupsStore } = await import('/src/stores/groups.ts')
     const chars = useCharactersStore()
     const a = await chars.create('阿蓝')
     const b = await chars.create('小红')
-    // 小红的角色卡上有本人初始状态；群聊页不给她填，应回落到这里
-    b.data.extensions.np = { status: { initial: { scene: {}, people: [{ name: '小红', fields: { 背包: ['红绳'] } }] } } }
+    // 小红的角色卡上有本人初始状态；演绎页不给她填，应回落到这里
+    b.data.extensions.np = {
+      status: { initial: { scene: {}, people: [{ name: '小红', fields: { 背包: ['红绳'] } }] } },
+    }
     await chars.save(b)
     const groups = useGroupsStore()
     if (!groups.loaded) await groups.load()
@@ -332,7 +359,11 @@ try {
   const gForm = page.locator('.sce .ed')
   await expect(gForm.locator('.ed-person__fixed')).toHaveCount(3)
   await gForm.locator('#sc-地点').fill('广场')
-  const blueRow = gForm.locator('.ed-group').filter({ hasText: '阿蓝' }).locator('.ed-row').filter({ hasText: '背包' })
+  const blueRow = gForm
+    .locator('.ed-group')
+    .filter({ hasText: '阿蓝' })
+    .locator('.ed-row')
+    .filter({ hasText: '背包' })
   await blueRow.locator('input').fill('蓝宝石')
   await blueRow.locator('input').press('Enter')
   await page.waitForTimeout(800) // 防抖静默保存
@@ -341,47 +372,73 @@ try {
     const { getDb } = await import('/src/db/schema.ts')
     return (await (await getDb()).get('groups', id)).status
   }, groupId)
-  assert.equal(gCfg.initial.scene['地点'], '广场', '群聊初始状态防抖落库')
+  assert.equal(gCfg.initial.scene['地点'], '广场', '演绎初始状态防抖落库')
 
   const gChat = await page.evaluate(async (id) => {
     const { useChatsStore } = await import('/src/stores/chats.ts')
-    return (await useChatsStore().createGroup(id, '群聊状态')).id
+    return (await useChatsStore().createGroup(id, '演绎状态')).id
   }, groupId)
   await page.goto(`${origin}chat/${gChat}`)
   await hideDevtools()
   const before2 = requests.length
   await send('大家好')
-  // 群聊的 nudge 在状态注入之后，所以看整份请求而不是最后一条
+  // 演绎的 nudge 在状态注入之后，所以看整份请求而不是最后一条
   const firstGroupReq = requests[before2].messages.map((m) => m.content).join('\n')
-  assert.ok(firstGroupReq.includes('蓝宝石') && firstGroupReq.includes('红绳'), '群聊初始：群聊配置 + 角色卡回落')
+  assert.ok(
+    firstGroupReq.includes('蓝宝石') && firstGroupReq.includes('红绳'),
+    '演绎初始：演绎配置 + 角色卡回落',
+  )
   assert.ok(firstGroupReq.includes('阿蓝、小红、我'), '必填名单：全员 + 用户')
   const snaps = await store(({ chats }) =>
     chats.messages.filter((m) => m.extra?.status).map((m) => m.extra.status.data),
   )
-  assert.deepEqual(snaps.map((d) => d.people[0].name), ['阿蓝', '小红'], '两位发言者各写一份')
+  assert.deepEqual(
+    snaps.map((d) => d.people[0].name),
+    ['阿蓝', '小红'],
+    '两位发言者各写一份',
+  )
   for (const d of snaps) {
-    assert.deepEqual(d.people.map((p) => p.name).sort(), ['我', '小红', '阿蓝'].sort(), '每份快照三人都在')
+    assert.deepEqual(
+      d.people.map((p) => p.name).sort(),
+      ['我', '小红', '阿蓝'].sort(),
+      '每份快照三人都在',
+    )
   }
   const hong = snaps[0].people.find((p) => p.name === '小红')
   assert.ok(hong.carried && hong.fields['背包'].includes('红绳'), '阿蓝那轮漏写小红 → 沿用并标记')
   const blue = snaps[1].people.find((p) => p.name === '阿蓝')
-  assert.ok(blue.carried && blue.fields['背包'].includes('物品1'), '小红那轮漏写阿蓝 → 沿用阿蓝上一份')
+  assert.ok(
+    blue.carried && blue.fields['背包'].includes('物品1'),
+    '小红那轮漏写阿蓝 → 沿用阿蓝上一份',
+  )
   await expect(page.locator('aside.sp .snap-carried')).toHaveCount(1)
   await page.waitForTimeout(250)
   await page.screenshot({ path: 'test-results/status/group-chat-carried.png' })
-  const groupMsgs = await store(({ chats }) => chats.messages.filter((m) => !m.is_user).map((m) => m.mes))
-  assert.ok(groupMsgs.every((t) => !t.includes('<status')), '群聊正文不带状态')
+  const groupMsgs = await store(({ chats }) =>
+    chats.messages.filter((m) => !m.is_user).map((m) => m.mes),
+  )
+  assert.ok(
+    groupMsgs.every((t) => !t.includes('<status')),
+    '演绎正文不带状态',
+  )
 
-  // 手机上的群聊「状态」页签
+  // 手机上的演绎「状态」页签
   const phoneG = await ctx.newPage()
   await phoneG.setViewportSize({ width: 390, height: 844 })
   await phoneG.goto(`${origin}groups/${groupId}`)
   await phoneG.addStyleTag({ content: '#__vue-devtools-container__{display:none!important}' })
   await phoneG.getByRole('button', { name: '状态', exact: true }).click()
   await expect(phoneG.locator('.sce .ed')).toBeVisible()
-  assert.equal(await phoneG.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, '手机群聊状态页无横向溢出')
+  assert.equal(
+    await phoneG.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    true,
+    '手机演绎状态页无横向溢出',
+  )
   await phoneG.waitForTimeout(250)
-  await phoneG.screenshot({ path: 'test-results/status/mobile-group-status-tab.png', fullPage: true })
+  await phoneG.screenshot({
+    path: 'test-results/status/mobile-group-status-tab.png',
+    fullPage: true,
+  })
   await phoneG.close()
 
   // ── 手机：浮层 / 聚焦收起 / 返回键关闭 ──
@@ -417,7 +474,10 @@ try {
   // 手机上侧栏按钮都 ≥44px
   await phone.getByRole('button', { name: '角色状态' }).click()
   const closeBtn = await mPanel.getByRole('button', { name: '关闭状态栏' }).boundingBox()
-  assert.ok(closeBtn.height >= 44 && closeBtn.width >= 44, `触控区 ${closeBtn.width}×${closeBtn.height}`)
+  assert.ok(
+    closeBtn.height >= 44 && closeBtn.width >= 44,
+    `触控区 ${closeBtn.width}×${closeBtn.height}`,
+  )
   await expect(mPanel.getByRole('button', { name: '固定侧栏' })).toHaveCount(0)
 
   assert.deepEqual(errors, [], `页面报错：${errors.join('\n')}`)

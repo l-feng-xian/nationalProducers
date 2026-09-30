@@ -3,11 +3,30 @@
  * 状态字段模板编辑：设置页（全局模板）与角色编辑页（角色覆盖）共用。
  * 每次改动都整体 emit 一份新数组，调用方负责落盘。
  */
+import { computed } from 'vue'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from '@/components/icons'
-import { STATUS_SCOPE_LABEL, type StatusField, type StatusScope } from '@/types/status'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
+import {
+  STATUS_SCOPE_LABEL,
+  type StatusField,
+  type StatusFieldKind,
+  type StatusScope,
+} from '@/types/status'
 
 const props = defineProps<{ modelValue: StatusField[] }>()
 const emit = defineEmits<{ 'update:modelValue': [fields: StatusField[]] }>()
+
+const KIND_OPTIONS = [
+  { value: 'text', label: '文本' },
+  { value: 'list', label: '列表' },
+  { value: 'number', label: '数值' },
+]
+const scopeOptions = computed(() =>
+  (Object.keys(STATUS_SCOPE_LABEL) as StatusScope[]).map((k) => ({
+    value: k,
+    label: STATUS_SCOPE_LABEL[k],
+  })),
+)
 
 function commit(next: StatusField[]) {
   emit('update:modelValue', next)
@@ -44,12 +63,25 @@ function onHint(i: number, e: Event) {
   const v = (e.target as HTMLInputElement).value.trim()
   patch(i, v ? { hint: v } : { hint: '' })
 }
-function onScope(i: number, e: Event) {
-  const v = (e.target as HTMLSelectElement).value as StatusScope
-  patch(i, { scope: v in STATUS_SCOPE_LABEL ? v : 'person' })
+function setScope(i: number, v: string) {
+  patch(i, { scope: v in STATUS_SCOPE_LABEL ? (v as StatusScope) : 'person' })
 }
-function onKind(i: number, e: Event) {
-  patch(i, { kind: (e.target as HTMLSelectElement).value === 'list' ? 'list' : 'text' })
+function setKind(i: number, v: string) {
+  const kind: StatusFieldKind = v === 'list' || v === 'number' ? v : 'text'
+  // 换成非数值类型时丢掉上下限，免得残留字段混进导出
+  if (kind === 'number') patch(i, { kind })
+  else {
+    const { min: _min, max: _max, ...rest } = props.modelValue[i]!
+    commit(props.modelValue.map((f, j) => (j === i ? { ...rest, kind } : f)))
+  }
+}
+/** 上下限：留空 = 不限 */
+function onBound(i: number, which: 'min' | 'max', e: Event) {
+  const raw = (e.target as HTMLInputElement).value.trim()
+  const n = raw === '' ? undefined : Number(raw)
+  const { [which]: _old, ...rest } = props.modelValue[i]!
+  const next: StatusField = n !== undefined && Number.isFinite(n) ? { ...rest, [which]: n } : rest
+  commit(props.modelValue.map((f, j) => (j === i ? next : f)))
 }
 function onEnabled(i: number, e: Event) {
   patch(i, { enabled: (e.target as HTMLInputElement).checked })
@@ -79,23 +111,42 @@ function onEnabled(i: number, e: Event) {
         aria-label="字段名"
         @change="onKey(i, $event)"
       />
-      <select
-        class="cbx-input sfe-sel"
-        :value="f.scope"
-        aria-label="范围"
-        @change="onScope(i, $event)"
-      >
-        <option v-for="(label, v) in STATUS_SCOPE_LABEL" :key="v" :value="v">{{ label }}</option>
-      </select>
-      <select
-        class="cbx-input sfe-sel"
-        :value="f.kind"
-        aria-label="类型"
-        @change="onKind(i, $event)"
-      >
-        <option value="text">文本</option>
-        <option value="list">列表</option>
-      </select>
+      <CbxSelect
+        class="sfe-sel"
+        :model-value="f.scope"
+        :options="scopeOptions"
+        label="范围"
+        compact
+        @change="(v) => setScope(i, v)"
+      />
+      <CbxSelect
+        class="sfe-sel"
+        :model-value="f.kind"
+        :options="KIND_OPTIONS"
+        label="类型"
+        compact
+        @change="(v) => setKind(i, v)"
+      />
+      <div v-if="f.kind === 'number'" class="sfe-range">
+        <span class="sfe-range__label">取值范围</span>
+        <input
+          class="cbx-input sfe-num"
+          type="number"
+          :value="f.min ?? ''"
+          placeholder="最小"
+          aria-label="最小值"
+          @change="onBound(i, 'min', $event)"
+        />
+        <input
+          class="cbx-input sfe-num"
+          type="number"
+          :value="f.max ?? ''"
+          placeholder="最大"
+          aria-label="最大值"
+          @change="onBound(i, 'max', $event)"
+        />
+        <span class="sfe-range__label">留空 = 不限</span>
+      </div>
       <input
         class="cbx-input sfe-hint"
         :value="f.hint ?? ''"
@@ -165,6 +216,21 @@ function onEnabled(i: number, e: Event) {
   width: 36px;
   padding: 0;
 }
+.sfe-range {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--cbx-space-2);
+  flex-wrap: wrap;
+}
+.sfe-range .sfe-num {
+  width: 6.5em;
+}
+.sfe-range__label {
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+}
 .sfe-add {
   align-self: flex-start;
   gap: var(--cbx-space-1);
@@ -184,8 +250,10 @@ function onEnabled(i: number, e: Event) {
     grid-column: 1 / 3;
   }
   .sfe-hint,
-  .sfe-ops {
+  .sfe-ops,
+  .sfe-range {
     grid-column: 1 / -1;
+    grid-row: auto;
   }
   .sfe-ops {
     justify-content: flex-end;

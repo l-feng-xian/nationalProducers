@@ -5,13 +5,19 @@
  *
  * 两种用法：
  *  - 侧栏手改当前状态：带「保存 / 取消」，保存时 emit('save')；
- *  - live：角色卡 / 群聊编辑页的「初始状态」，每次改动都 emit('update')，没有底栏。
+ *  - live：角色卡 / 演绎编辑页的「初始状态」，每次改动都 emit('update')，没有底栏。
  */
 import { ref, watch } from 'vue'
 import { Plus, Trash2, X } from '@/components/icons'
 import { parseStatusJson } from '@/services/status/parse'
 import { toOutputShape } from '@/services/status/template'
-import { fieldsFor, type StatusData, type StatusField, type StatusValue } from '@/types/status'
+import {
+  fieldsFor,
+  type StatusData,
+  type StatusField,
+  type StatusFieldKind,
+  type StatusValue,
+} from '@/types/status'
 
 const props = defineProps<{
   data: StatusData | null
@@ -30,7 +36,8 @@ const emit = defineEmits<{ save: [data: StatusData]; cancel: []; update: [data: 
 
 interface Row {
   key: string
-  kind: 'text' | 'list'
+  /** number 与 text 一样是单行输入，只是换成数字键盘 */
+  kind: StatusFieldKind
   text: string
   items: string[]
   pending: string
@@ -58,7 +65,8 @@ function rowsOf(rec: Record<string, StatusValue>, name: string | null): Row[] {
   ]
   return keys.map((key) => {
     const v = rec[key]
-    const kind = tpl.find((f) => f.key === key)?.kind ?? (Array.isArray(v) ? 'list' : 'text')
+    const kind: StatusFieldKind =
+      tpl.find((f) => f.key === key)?.kind ?? (Array.isArray(v) ? 'list' : 'text')
     const items = Array.isArray(v) ? [...v] : kind === 'list' && v ? [v] : []
     const text = Array.isArray(v) ? v.join('、') : (v ?? '')
     return { key, kind, text: kind === 'list' ? '' : text, items, pending: '' }
@@ -160,10 +168,12 @@ function onCancel() {
       <div v-for="r in draft.scene" :key="r.key" class="ed-row">
         <label class="ed-row__k" :for="`sc-${r.key}`">{{ r.key }}</label>
         <input
-          v-if="r.kind === 'text'"
+          v-if="r.kind !== 'list'"
           :id="`sc-${r.key}`"
           v-model="r.text"
           class="cbx-input"
+          :type="r.kind === 'number' ? 'number' : 'text'"
+          :inputmode="r.kind === 'number' ? 'decimal' : undefined"
           autocomplete="off"
         />
         <div v-else class="ed-list">
@@ -217,10 +227,12 @@ function onCancel() {
       <div v-for="r in p.rows" :key="r.key" class="ed-row">
         <label class="ed-row__k" :for="`p${p.uid}-${r.key}`">{{ r.key }}</label>
         <input
-          v-if="r.kind === 'text'"
+          v-if="r.kind !== 'list'"
           :id="`p${p.uid}-${r.key}`"
           v-model="r.text"
           class="cbx-input"
+          :type="r.kind === 'number' ? 'number' : 'text'"
+          :inputmode="r.kind === 'number' ? 'decimal' : undefined"
           autocomplete="off"
         />
         <div v-else class="ed-list">

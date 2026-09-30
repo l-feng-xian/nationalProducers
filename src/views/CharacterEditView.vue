@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ImagePlus, Sparkles, Undo2 } from '@/components/icons'
@@ -32,12 +33,25 @@ import { useCoverImage } from '@/composables/useCoverImage'
 import { useImagePreview } from '@/composables/useImagePreview'
 import StatusConfigEditor from '@/components/settings/StatusConfigEditor.vue'
 import type { CharacterStatusConfig } from '@/types/status'
+import FlowEditor from '@/components/flow/FlowEditor.vue'
+import FlowSimulator from '@/components/flow/FlowSimulator.vue'
+import { characterBrief } from '@/services/worldinfo/generate'
+import { resolveStatusFields } from '@/services/status/template'
+import type { FlowConfig } from '@/types/flow'
 
 const route = useRoute()
 const router = useRouter()
 const chars = useCharactersStore()
 const chats = useChatsStore()
 const worlds = useWorldsStore()
+const worldBookOptions = computed(() => [
+  { value: '', label: '使用全局世界书' },
+  ...worlds.items.map((book) => ({ value: book.id, label: book.name })),
+])
+const selectedWorldBook = computed({
+  get: () => model.value?.worldBookId ?? '',
+  set: (id: string) => { if (model.value) model.value.worldBookId = id },
+})
 const toast = useToast()
 
 /** 模板里要显示字面的宏，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
@@ -47,7 +61,7 @@ const ORIGINAL_MACRO = '{{original}}'
 const settings = useSettingsStore()
 
 const model = ref<Character | null>(null)
-const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced' | 'status'>('basic')
+const tab = ref<'basic' | 'greetings' | 'examples' | 'advanced' | 'status' | 'flow'>('basic')
 const avatarInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
 /** PNG 导出要转码 + 编码，可能几百毫秒；连点会并发跑两遍、下两个文件、内存峰值翻倍 */
@@ -55,7 +69,7 @@ const exporting = ref(false)
 const aiOpen = ref(false)
 const coverOpen = ref(false)
 const coverPrompt = ref('')
-// 封面 + 深度图的替换 / 生成（与群聊编辑页共用，规则见 useCoverImage）
+// 封面 + 深度图的替换 / 生成（与演绎编辑页共用，规则见 useCoverImage）
 const {
   avatarBusy,
   depthBusy,
@@ -139,6 +153,7 @@ const TABS = [
   { key: 'examples', label: '对话示例' },
   { key: 'advanced', label: '高级' },
   { key: 'status', label: '状态' },
+  { key: 'flow', label: '流程' },
 ] as const
 
 /**
@@ -228,6 +243,13 @@ onMounted(async () => {
 })
 
 // ── 角色状态（extensions.np.status）：「状态」页签 ──
+/** 深度提示词的插入角色 */
+const ROLE_OPTIONS = [
+  { value: 'system', label: 'system' },
+  { value: 'user', label: 'user' },
+  { value: 'assistant', label: 'assistant' },
+] as const
+
 /** 初始状态里锁定的人：角色本人 + 全局用户身份 */
 const statusPeople = computed(() =>
   model.value ? [model.value.data.name.trim() || '新角色', settings.settings.persona.name] : [],
@@ -238,6 +260,20 @@ function setStatusConfig(cfg: CharacterStatusConfig | undefined) {
   const np = { ...ext.np }
   if (cfg) np.status = cfg
   else delete np.status
+  ext.np = np
+}
+
+// ── 流程控制（extensions.np.flow）：「流程」页签 ──
+/** 条件 / 动作可选的字段：与聊天时生效的是同一套（角色专属字段优先，否则全局） */
+const flowFields = computed(() =>
+  resolveStatusFields(settings.settings.status, model.value?.data.extensions.np?.status),
+)
+function setFlowConfig(cfg: FlowConfig | undefined) {
+  const ext = model.value?.data.extensions
+  if (!ext) return
+  const np = { ...ext.np }
+  if (cfg) np.flow = cfg
+  else delete np.flow
   ext.np = np
 }
 
@@ -592,18 +628,22 @@ async function remove() {
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">角色</span>
-                <select v-model="model.data.extensions.depth_prompt!.role" class="cbx-input">
-                  <option value="system">system</option>
-                  <option value="user">user</option>
-                  <option value="assistant">assistant</option>
-                </select>
+                <CbxSelect
+                  v-model="model.data.extensions.depth_prompt!.role"
+                  :options="ROLE_OPTIONS"
+                  label="角色"
+                />
               </label>
             </div>
           </div>
         </div>
 
-        <div class="cbx-field">
-          <span class="cbx-field__label">角色世界书（需求 5：与角色关联）</span>
+        <label class="cbx-field">
+          <span class="cbx-field__label">主世界书</span>
+          <CbxSelect v-model="selectedWorldBook" :options="worldBookOptions" label="主世界书" @change="save" />
+        </label>
+        <div v-if="!model.worldBookId" class="cbx-field">
+          <span class="cbx-field__label">附加角色世界书</span>
           <div v-if="!worlds.items.length" class="cbx-field__hint">
             还没有世界书，先到「世界书」页创建
           </div>
@@ -651,9 +691,38 @@ async function remove() {
           @update:config="setStatusConfig"
         >
           <template #initial-hint>
-            会话还没有任何状态时，第一轮就以它为准（例如开场时的地点、随身物品）。在群聊里，这里填的「角色本人」那一项也会被沿用（群聊页没填这个成员时）。
+            会话还没有任何状态时，第一轮就以它为准（例如开场时的地点、随身物品）。在演绎里，这里填的「角色本人」那一项也会被沿用（演绎页没填这个成员时）。
           </template>
         </StatusConfigEditor>
+      </section>
+
+      <section v-show="tab === 'flow'" class="pane">
+        <p class="note">
+          每条 AI
+          回复后按规则检查状态参数，满足条件时引导剧情、插入固定台词或修改状态。规则跟随角色卡导出；放进演绎时同样生效，{{
+            CHAR_MACRO
+          }}
+          指这个角色本人。
+        </p>
+        <p v-if="!settings.settings.status.enabled" class="note">
+          「角色状态」目前在设置里关着，基于状态的条件不会成立（回复轮数、正文、变量条件仍然可用）。
+        </p>
+        <FlowEditor
+          :config="model.data.extensions.np?.flow"
+          :fields="flowFields"
+          :people="[]"
+          :brief="characterBrief(model)"
+          @update:config="setFlowConfig"
+        />
+        <details class="flow-sim">
+          <summary>模拟器：不聊天也能试规则</summary>
+          <FlowSimulator
+            :config="model.data.extensions.np?.flow"
+            :fields="flowFields"
+            :char-name="model.data.name.trim() || '新角色'"
+            :user-name="settings.settings.persona.name"
+          />
+        </details>
       </section>
     </div>
   </div>
@@ -825,5 +894,15 @@ img.frame__img {
   .grid2 {
     grid-template-columns: 1fr;
   }
+}
+.flow-sim {
+  margin-top: var(--cbx-space-4);
+  padding-top: var(--cbx-space-3);
+  border-top: 1px solid var(--cbx-border);
+}
+.flow-sim > summary {
+  margin-bottom: var(--cbx-space-3);
+  font-size: var(--cbx-fs-sm);
+  cursor: pointer;
 }
 </style>

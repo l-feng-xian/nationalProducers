@@ -9,7 +9,6 @@ import CbxConfirmHost from '@/components/ui/CbxConfirmHost.vue'
 import ImagePreview from '@/components/ui/ImagePreview.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
 import { useImageJobStore } from '@/stores/imageJob'
-import NewChatSheet from '@/components/chat/NewChatSheet.vue'
 import { useUiStore } from '@/stores/ui'
 import { useSettingsStore } from '@/stores/settings'
 import { useBackClose } from '@/composables/useBackClose'
@@ -202,7 +201,6 @@ const KEEP_ALIVE = ['CharactersView']
       v-model:minimized="imageJob.minimized"
       @close="imageJob.finish()"
     />
-    <NewChatSheet v-if="ui.newChatOpen" />
   </div>
 </template>
 

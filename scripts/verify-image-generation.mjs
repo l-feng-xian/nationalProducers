@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { chromium, expect } from '@playwright/test'
 import { createServer } from 'vite'
+import { pickOption } from './lib/cbx-select.mjs'
 
 const server = await createServer({
   logLevel: 'error',
@@ -156,7 +157,7 @@ try {
     )
     await expect(editor.getByRole('status')).toContainText('接口地址已补全 /v1')
     await editor.getByLabel('默认尺寸', { exact: true }).fill(size)
-    await editor.getByLabel('返回格式', { exact: true }).selectOption(format)
+    await pickOption(editor, '返回格式', { value: format })
     await editor.getByRole('button', { name: '保存', exact: true }).click()
     await expect(editor).toHaveCount(0)
   }
@@ -179,9 +180,7 @@ try {
   await page.getByRole('button', { name: '生成封面', exact: true }).click()
   dialog = page.getByRole('dialog')
   await expect(dialog.getByLabel('画面描述', { exact: true })).toHaveValue(/银色长发/)
-  await dialog
-    .getByLabel('文生图配置', { exact: true })
-    .selectOption({ label: '封面插画 · portrait-image' })
+  await pickOption(dialog, '文生图配置', { label: '封面插画 · portrait-image' })
   for (const [failure, text] of [
     ['error', '鉴权失败'],
     ['empty', '没有返回图片'],
@@ -400,7 +399,7 @@ try {
   await page.goto(`${origin}models`)
   await page.getByRole('button', { name: '编辑 场景插画', exact: true }).click()
   const editorDialog = page.getByRole('dialog')
-  await editorDialog.getByLabel('参考图格式', { exact: true }).selectOption('json')
+  await pickOption(editorDialog, '参考图格式', { value: 'json' })
   await editorDialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(editorDialog).toHaveCount(0)
   await page.goto(`${origin}chat/${chatId}`)
@@ -585,7 +584,7 @@ try {
     size: '',
   })
 
-  // 群聊配图只带这一幕出场的人：发言者（参考图 1）+ 这句话点名的成员；未出场的成员不带。
+  // 演绎配图只带这一幕出场的人：发言者（参考图 1）+ 这句话点名的成员；未出场的成员不带。
   // 参考图按这个顺序上传，编号与人物一一对应。
   const groupData = await page.evaluate(async (id) => {
     const { useCharactersStore } = await import('/src/stores/characters.ts')

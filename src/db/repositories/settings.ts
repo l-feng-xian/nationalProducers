@@ -14,7 +14,7 @@ import { newImageModelService } from '@/types/image'
  * 后果**持久且致命**，三条都验证过：
  *  - `provider.extraHeaders: null` → `providerConfig()` 里 `Object.keys(null)` 抛，
  *    **每一次发送都失败**；
- *  - `provider.stop: null` → 拼停止词时 `p.stop.length` 抛，单聊与群聊两条路都断；
+ *  - `provider.stop: null` → 拼停止词时 `p.stop.length` 抛，单聊与演绎两条路都断；
  *  - `worldInfo.globalBookIds: null` → 世界书页渲染时 `.includes()` 抛（白屏），
  *    删世界书也一起失败。
  *
@@ -73,6 +73,10 @@ export async function load(): Promise<Settings> {
       const rawProvider = (raw as { provider?: { secretRef?: unknown } }).provider
       if (typeof rawProvider?.secretRef !== 'string' || !rawProvider.secretRef) {
         service.provider.secretRef = `model-service:${service.id}`
+      }
+      // coalesce 只校验类型：字符串枚举还得收敛到合法值
+      if (!['auto', 'on', 'off'].includes(service.provider.thinking)) {
+        service.provider.thinking = 'auto'
       }
       const cache = service.provider.modelCache
       if (cache) {

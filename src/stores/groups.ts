@@ -17,7 +17,7 @@ export const useGroupsStore = defineStore('groups', () => {
     return items.value.find((g) => g.id === id)
   }
 
-  async function create(name = '新群聊'): Promise<Group> {
+  async function create(name = '新演绎'): Promise<Group> {
     const g = await groupsRepo.create(name)
     items.value = [g, ...items.value]
     return g

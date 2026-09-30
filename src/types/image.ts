@@ -89,9 +89,9 @@ export interface GeneratedImage {
  * 提示词里的编号说明（prompts.ts referenceLines）与发送顺序一一对应。
  */
 export interface ImageRefCandidate {
-  /** 全局唯一：`char:<角色id>` / `group:<群聊id>` / `img:<blobId>` */
+  /** 全局唯一：`char:<角色id>` / `group:<演绎id>` / `img:<blobId>` */
   id: string
-  /** character = 角色封面；group = 群聊封面；history = 本会话此前的配图 */
+  /** character = 角色封面；group = 演绎封面；history = 本会话此前的配图 */
   kind: 'character' | 'group' | 'history'
   /** 人物名 / 群名 / 配图所在消息的发言者 */
   name: string

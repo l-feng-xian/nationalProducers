@@ -17,11 +17,20 @@ export interface StatusField {
    * char = 只有角色有（如「对用户的关系」）；user = 只有用户有（如「任务进度」）
    */
   scope: StatusScope
-  kind: 'text' | 'list'
+  /**
+   * number：数值字段（如好感度）。快照里仍存成字符串（StatusValue 不变，旧数据无需迁移），
+   * 解析时取第一个数字并按 min/max 夹住；流程控制按数值比较。
+   */
+  kind: StatusFieldKind
   /** 给模型的填写提示，支持 {{user}} {{char}} */
   hint?: string
   enabled: boolean
+  /** 仅 number：取值下限 / 上限 */
+  min?: number
+  max?: number
 }
+
+export type StatusFieldKind = 'text' | 'list' | 'number'
 
 export interface StatusPerson {
   name: string
@@ -51,7 +60,7 @@ export interface StatusSettings {
 
 /**
  * 角色卡上的覆盖（extensions.np.status）。fields 只在 1v1 生效；
- * initial 在 1v1 整份生效，群聊里只取「角色本人」那一条作为兜底。
+ * initial 在 1v1 整份生效，演绎里只取「角色本人」那一条作为兜底。
  */
 export interface CharacterStatusConfig {
   /** 非空时整体替换全局字段模板 */
@@ -94,7 +103,7 @@ export function emptyStatusData(): StatusData {
   return { scene: {}, people: [] }
 }
 
-/** 群聊上的覆盖（Group.status）：与角色卡同形 */
+/** 演绎上的覆盖（Group.status）：与角色卡同形 */
 export type GroupStatusConfig = CharacterStatusConfig
 
 /** 某个人适用的人物字段：所有人 + (用户 ? 仅用户 : 仅角色) */

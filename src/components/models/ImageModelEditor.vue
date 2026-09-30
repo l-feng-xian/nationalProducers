@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useBackClose } from '@/composables/useBackClose'
 import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
@@ -10,6 +11,21 @@ import { validateImageService } from '@/services/image/generate'
 import { validateComfyService, listComfyModels } from '@/services/image/comfyui'
 import { listModels } from '@/services/provider/openaiCompatible'
 import { toPlain } from '@/utils/plain'
+
+const BACKEND_OPTIONS = [
+  { value: 'openai', label: 'OpenAI Images 兼容（云端）' },
+  { value: 'comfyui', label: '本地 ComfyUI（Qwen-Image-2.1）' },
+]
+const RESPONSE_FORMAT_OPTIONS = [
+  { value: '', label: '模型默认' },
+  { value: 'b64_json', label: 'Base64' },
+  { value: 'url', label: '图片链接' },
+]
+const REFERENCE_MODE_OPTIONS = [
+  { value: '', label: '自动（首次探测后记住）' },
+  { value: 'multipart', label: 'multipart · OpenAI 标准' },
+  { value: 'json', label: 'JSON image_urls · xAI / grok-imagine' },
+]
 
 const props = defineProps<{ service: ImageModelService | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -210,10 +226,7 @@ async function save() {
             </label>
             <label class="cbx-field">
               <span class="cbx-field__label">后端类型</span>
-              <select v-model="draft.backend" class="cbx-input" aria-label="后端类型">
-                <option value="openai">OpenAI Images 兼容（云端）</option>
-                <option value="comfyui">本地 ComfyUI（Qwen-Image-2.1）</option>
-              </select>
+              <CbxSelect v-model="draft.backend" :options="BACKEND_OPTIONS" label="后端类型" />
               <span class="cbx-field__hint">
                 可调用本机或局域网里另一台电脑上的 ComfyUI。App（电脑 /
                 安卓）直连；网页开发版经开发服务器中转， 手机上的网页版也能用。
@@ -327,22 +340,22 @@ async function save() {
               </div>
               <label class="cbx-field">
                 <span class="cbx-field__label">返回格式</span>
-                <select v-model="draft.responseFormat" class="cbx-input" aria-label="返回格式">
-                  <option value="">模型默认</option>
-                  <option value="b64_json">Base64</option>
-                  <option value="url">图片链接</option>
-                </select>
+                <CbxSelect
+                  v-model="draft.responseFormat"
+                  :options="RESPONSE_FORMAT_OPTIONS"
+                  label="返回格式"
+                />
                 <span class="cbx-field__hint"
                   >尺寸、画质和返回格式需由所选模型支持。图片链接需允许跨域下载。</span
                 >
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">参考图格式</span>
-                <select v-model="draft.referenceMode" class="cbx-input" aria-label="参考图格式">
-                  <option value="">自动（首次探测后记住）</option>
-                  <option value="multipart">multipart · OpenAI 标准</option>
-                  <option value="json">JSON image_urls · xAI / grok-imagine</option>
-                </select>
+                <CbxSelect
+                  v-model="draft.referenceMode"
+                  :options="REFERENCE_MODE_OPTIONS"
+                  label="参考图格式"
+                />
                 <span class="cbx-field__hint"
                   >对话参考图生成的请求格式。自动会先按 multipart 发送、被拒后改用 JSON
                   并记住可用格式；已知服务格式时固定它，避免多余的探测请求。</span

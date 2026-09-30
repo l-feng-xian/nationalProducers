@@ -40,7 +40,7 @@ const secure = typeof isSecureContext === 'boolean' ? isSecureContext : true
 const SCOPE_ITEMS = [
   { key: 'characters', label: '角色', hint: '含头像与视差深度图' },
   { key: 'worldbooks', label: '世界书', hint: '' },
-  { key: 'groups', label: '群聊', hint: '含成员关系与用户身份' },
+  { key: 'groups', label: '演绎', hint: '含成员关系与用户身份' },
   { key: 'chats', label: '会话与消息', hint: '向量索引不传，对方会自动重建' },
   { key: 'settings', label: '设置', hint: '会整包覆盖对方的接口地址、模型与人设' },
 ] as const

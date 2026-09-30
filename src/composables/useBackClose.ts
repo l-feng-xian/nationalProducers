@@ -100,7 +100,7 @@ function onPopState(e: PopStateEvent) {
  * window 上的监听按注册顺序触发（实测 Chrome 下捕获阶段也不会插队），
  * 而 vue-router 在 createWebHistory() 时就挂好了自己的 popstate 监听。
  * 晚于它注册的话，路由会先对浮层自己的 back() 跑一次同址导航，
- * 把正在等待的 router.replace 取消掉（NavigationFailure cancelled，实测抽屉里「角色→群聊」点了不跳）。
+ * 把正在等待的 router.replace 取消掉（NavigationFailure cancelled，实测抽屉里「角色→演绎」点了不跳）。
  * router/index.ts 在 createRouter 之前 import 本模块，保证这里先注册。
  */
 if (typeof window !== 'undefined') window.addEventListener('popstate', onPopState, true)

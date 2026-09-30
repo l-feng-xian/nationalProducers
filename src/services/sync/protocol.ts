@@ -72,7 +72,7 @@ export function emptyCounts(): SyncCounts {
 const SCOPE_LABEL: Record<keyof SyncScope, string> = {
   characters: '角色',
   worldbooks: '世界书',
-  groups: '群聊',
+  groups: '演绎',
   chats: '会话与消息',
   settings: '设置',
 }
@@ -89,7 +89,7 @@ export function describeCounts(c: SyncCounts & { skipped?: number }): string {
   const parts: string[] = []
   if (c.characters) parts.push(`角色 ${c.characters}`)
   if (c.worldbooks) parts.push(`世界书 ${c.worldbooks}`)
-  if (c.groups) parts.push(`群聊 ${c.groups}`)
+  if (c.groups) parts.push(`演绎 ${c.groups}`)
   if (c.chats) parts.push(`会话 ${c.chats}`)
   if (c.messages) parts.push(`消息 ${c.messages}`)
   if (c.blobs) parts.push(`图片 ${c.blobs}`)

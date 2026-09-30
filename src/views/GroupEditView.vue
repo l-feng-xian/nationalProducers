@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppIcon from '@/components/icons/AppIcon.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
@@ -16,8 +17,13 @@ import { groupCoverPromptViaLLM } from '@/services/image/promptFromLLM'
 import { renderRelations } from '@/services/prompt/relations'
 import type { GeneratedImage, ImageRefCandidate } from '@/types/image'
 import type { CharacterStatusConfig } from '@/types/status'
+import FlowEditor from '@/components/flow/FlowEditor.vue'
+import FlowSimulator from '@/components/flow/FlowSimulator.vue'
+import { resolveStatusFields } from '@/services/status/template'
+import type { FlowConfig } from '@/types/flow'
 import { useGroupsStore } from '@/stores/groups'
 import { useCharactersStore } from '@/stores/characters'
+import { useWorldsStore } from '@/stores/worlds'
 import { useChatsStore } from '@/stores/chats'
 import { useToast } from '@/composables/useToast'
 import { toPlain } from '@/utils/plain'
@@ -37,11 +43,20 @@ const route = useRoute()
 const router = useRouter()
 const groups = useGroupsStore()
 const chars = useCharactersStore()
+const worlds = useWorldsStore()
+const worldBookOptions = computed(() => [
+  { value: '', label: '使用全局世界书' },
+  ...worlds.items.map((book) => ({ value: book.id, label: book.name })),
+])
+const selectedWorldBook = computed({
+  get: () => model.value?.worldBookId ?? '',
+  set: (id: string) => { if (model.value) model.value.worldBookId = id },
+})
 const chats = useChatsStore()
 const toast = useToast()
 
 const model = ref<Group | null>(null)
-const tab = ref<'members' | 'relations' | 'strategy' | 'status'>('members')
+const tab = ref<'members' | 'relations' | 'strategy' | 'status' | 'flow'>('members')
 const relView = ref<'list' | 'graph'>('list')
 
 const STRATEGIES = [
@@ -76,7 +91,7 @@ const settings = useSettingsStore()
 /** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const USER_MACRO = '{{user}}'
 
-/** 本群聊实际生效的「我」—— 群聊留空就显示全局人设的值，让用户看得见回落结果 */
+/** 本演绎实际生效的「我」—— 演绎留空就显示全局人设的值，让用户看得见回落结果 */
 const effectivePersona = computed(() =>
   resolvePersona(model.value ?? undefined, settings.settings.persona),
 )
@@ -87,6 +102,12 @@ const effectivePersona = computed(() =>
  * 用户排在最前：他是玩家视角的锚点，画布初始布局按顺序排圆周，放第一个
  * 位置最稳定。列表视图的下拉也跟着这个顺序，「我」永远是第一项。
  */
+const relationOptions = computed(() =>
+  relationNodes.value.map((n) => ({
+    value: n.id,
+    label: n.isUser ? `${n.name}（我）` : n.name,
+  })),
+)
 const relationNodes = computed(() => [
   { id: USER_NODE_ID, name: effectivePersona.value.name, isUser: true },
   ...memberChars.value.map((c) => ({ id: c.id, name: c.data.name, isUser: false })),
@@ -97,6 +118,7 @@ const candidates = computed(() =>
 
 onMounted(async () => {
   if (!chars.loaded) await chars.load()
+  if (!worlds.loaded) await worlds.load()
   if (!groups.loaded) await groups.load()
   const id = route.params['id']
   const gid = Array.isArray(id) ? id[0] : id
@@ -109,8 +131,8 @@ onMounted(async () => {
   }
   const found = gid ? groups.byId(gid) : undefined
   if (!found) {
-    toast.error('群聊不存在')
-    // 群聊已经有独立的 tab 页了，找不到时回群聊列表，别再甩到角色页
+    toast.error('演绎不存在')
+    // 演绎已经有独立的 tab 页了，找不到时回演绎列表，别再甩到角色页
     await router.push('/groups')
     return
   }
@@ -124,7 +146,7 @@ async function save() {
 }
 
 // ── 角色状态（group.status）：「状态」页签 ──
-/** 初始状态里锁定的人：全体成员 + 本群聊的用户身份 */
+/** 初始状态里锁定的人：全体成员 + 本演绎的用户身份 */
 const statusPeople = computed(() => [
   ...memberChars.value.map((c) => c.data.name),
   effectivePersona.value.name,
@@ -151,8 +173,23 @@ onBeforeUnmount(() => {
   if (statusTimer) flushStatus()
 })
 
-// ── 群聊封面（横版 3:2）+ 深度视差 ──────────────────────────
-/** 群聊封面是横版合影；视差画布也按这个比例渲染 */
+// ── 流程控制（Group.flow）：与状态共用同一个防抖静默保存 ──
+/** 模板里直接写字面的双花括号会被当成插值，只能从脚本里给 */
+const CHAR_MACRO = '{{char}}'
+const flowFields = computed(() =>
+  model.value ? resolveStatusFields(settings.settings.status, model.value.status) : [],
+)
+function setFlowConfig(cfg: FlowConfig | undefined) {
+  const m = model.value
+  if (!m) return
+  if (cfg) m.flow = cfg
+  else delete m.flow
+  if (statusTimer) clearTimeout(statusTimer)
+  statusTimer = setTimeout(flushStatus, 500)
+}
+
+// ── 演绎封面（横版 3:2）+ 深度视差 ──────────────────────────
+/** 演绎封面是横版合影；视差画布也按这个比例渲染 */
 const COVER_ASPECT = 3 / 2
 /** OpenAI 兼容接口出横版图；ComfyUI 只出方图，靠 object-fit: cover 裁 */
 const COVER_SIZE = '1536x1024'
@@ -215,7 +252,7 @@ async function onCoverFile(e: Event) {
   if (!f) return
   try {
     await replaceCover(f)
-    toast.success('群聊封面已更换')
+    toast.success('演绎封面已更换')
   } catch (error) {
     toast.error(error instanceof Error ? error.message : String(error))
   } finally {
@@ -228,7 +265,7 @@ function previewCover() {
   const m = model.value
   if (!m?.avatarBlobId) return
   void imagePreview.open(
-    [{ blobId: m.avatarBlobId, caption: `${m.name} · 群聊封面` }],
+    [{ blobId: m.avatarBlobId, caption: `${m.name} · 演绎封面` }],
     0,
     coverFrame.value?.querySelector('img'),
   )
@@ -250,7 +287,7 @@ const coverCandidates = computed<ImageRefCandidate[]>(() =>
 const coverDefault = computed(() => coverCandidates.value.filter((c) => c.blobId).map((c) => c.id))
 function openCover() {
   if (!memberChars.value.length) {
-    toast.info('请先在「成员」里添加角色，再生成群聊封面')
+    toast.info('请先在「成员」里添加角色，再生成演绎封面')
     return
   }
   coverOpen.value = true
@@ -284,7 +321,7 @@ async function coverPromptGen(signal: AbortSignal, refs: ImageRefCandidate[]) {
 }
 async function applyCover(image: GeneratedImage) {
   await replaceCover(image.blob)
-  toast.success('群聊封面已更换')
+  toast.success('演绎封面已更换')
 }
 
 function addMember(id: string) {
@@ -329,7 +366,7 @@ function addRelation(from?: string, to?: string) {
   const m = model.value
   // 节点集合含「我」，所以 1 个成员就够凑出一条边
   if (!m || relationNodes.value.length < 2) return
-  // 默认取「我 → 第一个成员」：沉浸式群聊里用户最想先定的就是自己跟谁什么关系
+  // 默认取「我 → 第一个成员」：沉浸式演绎里用户最想先定的就是自己跟谁什么关系
   const f = from ?? relationNodes.value[0]?.id
   const t = to ?? relationNodes.value[1]?.id
   if (!f || !t) return
@@ -376,7 +413,7 @@ async function startChat() {
 async function removeGroup() {
   const m = model.value
   if (!m) return
-  if (!(await confirmDialog({ text: `确定删除群聊「${m.name}」？其全部对话也会一并删除。` })))
+  if (!(await confirmDialog({ text: `确定删除演绎「${m.name}」？其全部对话也会一并删除。` })))
     return
   await groups.remove(m.id)
   toast.success('已删除')
@@ -385,10 +422,10 @@ async function removeGroup() {
 </script>
 
 <template>
-  <AppTopbar :title="model?.name || '群聊'">
+  <AppTopbar :title="model?.name || '演绎'">
     <template #actions>
       <button class="cbx-btn cbx-btn--ghost" @click="router.push('/groups')">返回</button>
-      <button class="cbx-btn cbx-btn--soft" @click="startChat">开始群聊</button>
+      <button class="cbx-btn cbx-btn--soft" @click="startChat">开始演绎</button>
       <button class="cbx-btn cbx-btn--primary" @click="save">保存</button>
     </template>
   </AppTopbar>
@@ -396,19 +433,19 @@ async function removeGroup() {
   <div v-if="model" class="cbx-scroll body">
     <div class="cbx-form-col">
       <label class="cbx-field cbx-field--md">
-        <span class="cbx-field__label">群聊名</span>
+        <span class="cbx-field__label">演绎名</span>
         <input v-model="model.name" class="cbx-input" @change="save" />
       </label>
 
-      <!-- 群聊封面：横版 3:2，可上传 / 用成员封面作参考图生成，支持深度视差 -->
-      <section class="gcover" aria-label="群聊封面">
+      <!-- 演绎封面：横版 3:2，可上传 / 用成员封面作参考图生成，支持深度视差 -->
+      <section class="gcover" aria-label="演绎封面">
         <div
           ref="coverFrame"
           class="gcover__frame"
           :class="{ 'gcover__frame--zoomable': !!model.avatarBlobId }"
           :role="model.avatarBlobId ? 'button' : undefined"
           :tabindex="model.avatarBlobId ? 0 : undefined"
-          :aria-label="model.avatarBlobId ? '预览群聊封面' : undefined"
+          :aria-label="model.avatarBlobId ? '预览演绎封面' : undefined"
           @pointerenter="onCoverEnter"
           @pointermove="onCoverMove"
           @pointerleave="onCoverLeave"
@@ -431,7 +468,7 @@ async function removeGroup() {
                 size="lg"
               />
             </div>
-            <span>还没有群聊封面</span>
+            <span>还没有演绎封面</span>
           </div>
           <button
             v-if="tiltNeedsGrant && parallax.eligible(model.avatarBlobId, model.depthBlobId)"
@@ -519,12 +556,19 @@ async function removeGroup() {
         >
           状态
         </button>
+        <button
+          class="cbx-tab"
+          :class="{ 'cbx-tab--active': tab === 'flow' }"
+          @click="tab = 'flow'"
+        >
+          流程
+        </button>
       </div>
 
       <!-- 成员 -->
       <section v-show="tab === 'members'" class="pane">
         <!-- 「我」也是这场戏里的一个参与者，所以放在成员列表最上面而不是塞进设置页：
-             全局人设是跨所有对话的默认值，这里配的是**只在这个群聊里**的身份 -->
+             全局人设是跨所有对话的默认值，这里配的是**只在这个演绎里**的身份 -->
         <div class="me">
           <div class="me__head">
             <span class="me__icon"><AppIcon name="UserRound" /></span>
@@ -534,7 +578,7 @@ async function removeGroup() {
             </span>
           </div>
           <p class="cbx-field__hint">
-            只作用于本群聊。留空则沿用设置里的全局人设（当前为「{{
+            只作用于本演绎。留空则沿用设置里的全局人设（当前为「{{
               settings.settings.persona.name
             }}」）。这里填的名字就是提示词里的
             {{ USER_MACRO }}，也会作为关系图谱里「我」这个节点的名字。
@@ -680,19 +724,23 @@ async function removeGroup() {
               <span class="cbx-empty__desc">还没有关系</span>
             </div>
             <div v-for="r in model.relations" :key="r.id" class="rel">
-              <select v-model="r.from" class="cbx-input rel__who" @change="save">
-                <option v-for="n in relationNodes" :key="n.id" :value="n.id">
-                  {{ n.isUser ? `${n.name}（我）` : n.name }}
-                </option>
-              </select>
+              <CbxSelect
+                v-model="r.from"
+                :options="relationOptions"
+                label="关系起点"
+                compact
+                @change="save"
+              />
               <button class="cbx-icon-btn tiny" title="交换方向" @click="swapDirection(r)">
                 <AppIcon name="ArrowLeftRight" />
               </button>
-              <select v-model="r.to" class="cbx-input rel__who" @change="save">
-                <option v-for="n in relationNodes" :key="n.id" :value="n.id">
-                  {{ n.isUser ? `${n.name}（我）` : n.name }}
-                </option>
-              </select>
+              <CbxSelect
+                v-model="r.to"
+                :options="relationOptions"
+                label="关系终点"
+                compact
+                @change="save"
+              />
               <input
                 v-model="r.label"
                 class="cbx-input rel__label"
@@ -739,23 +787,27 @@ async function removeGroup() {
           <span><strong>允许连续发言</strong><em>同一角色可以连着说两次</em></span>
         </label>
         <label class="opt">
-          <input v-model="model.mergeMemberBooks" type="checkbox" @change="save" />
+          <input v-model="model.mergeMemberBooks" type="checkbox" :disabled="!!model.worldBookId" @change="save" />
           <span>
             <strong>合并成员世界书</strong>
             <em>默认只用当前发言者的世界书（同 SillyTavern）；勾选后取全体并集</em>
           </span>
         </label>
 
+        <label class="cbx-field">
+          <span class="cbx-field__label">主世界书</span>
+          <CbxSelect v-model="selectedWorldBook" :options="worldBookOptions" label="主世界书" @change="save" />
+        </label>
         <div class="danger">
-          <button class="cbx-btn cbx-btn--ghost del" @click="removeGroup">删除群聊</button>
+          <button class="cbx-btn cbx-btn--ghost del" @click="removeGroup">删除演绎</button>
         </div>
       </section>
 
       <!-- 角色状态 -->
       <section v-show="tab === 'status'" class="pane">
         <p class="note">
-          群聊里 AI
-          每轮会输出一份状态：场景一份，每个成员和你各一份（漏写的人沿用上一份），在聊天页右上角「状态」里查看。这里设置本群聊的专属字段与开场时的初始状态。
+          演绎里 AI
+          每轮会输出一份状态：场景一份，每个成员和你各一份（漏写的人沿用上一份），在聊天页右上角「状态」里查看。这里设置本演绎的专属字段与开场时的初始状态。
         </p>
         <p v-if="!memberChars.length" class="note">先在「成员」里添加角色。</p>
         <StatusConfigEditor
@@ -763,7 +815,7 @@ async function removeGroup() {
           :config="model.status"
           :people="statusPeople"
           :user-name="effectivePersona.name"
-          own-label="使用本群聊专属的状态字段"
+          own-label="使用本演绎专属的状态字段"
           @update:config="setStatusConfig"
         >
           <template #initial-hint>
@@ -771,19 +823,45 @@ async function removeGroup() {
           </template>
         </StatusConfigEditor>
       </section>
+
+      <section v-show="tab === 'flow'" class="pane">
+        <p class="note">
+          每条 AI 回复后检查。这里的规则里
+          {{ CHAR_MACRO }} 指本轮发言者；成员角色卡「流程」页签里的规则也会一起运行（{{
+            CHAR_MACRO
+          }}
+          指那位成员本人）。
+        </p>
+        <FlowEditor
+          :config="model.flow"
+          :fields="flowFields"
+          :people="memberChars.map((c) => c.data.name)"
+          is-group
+          @update:config="setFlowConfig"
+        />
+        <details v-if="memberChars.length" class="flow-sim">
+          <summary>模拟器：不聊天也能试规则（以第一位成员为本轮发言者，只跑本演绎的规则）</summary>
+          <FlowSimulator
+            :config="model.flow"
+            :fields="flowFields"
+            :char-name="memberChars[0]!.data.name"
+            :user-name="effectivePersona.name"
+          />
+        </details>
+      </section>
     </div>
   </div>
 
   <ImageGenerationDialog
     v-if="model && coverOpen"
-    title="生成群聊封面"
+    title="生成演绎封面"
     :candidates="coverCandidates"
     :default-selected="coverDefault"
     require-references
     :build-prompt="coverPrompt"
     :generate-prompt="coverPromptGen"
     :size="COVER_SIZE"
-    apply-label="设为群聊封面"
+    apply-label="设为演绎封面"
     :apply="applyCover"
     @close="coverOpen = false"
   />
@@ -795,7 +873,7 @@ async function removeGroup() {
   padding: var(--cbx-space-5);
 }
 /* 与设置页统一：模板里 class="wrap" → class="cbx-form-col"，本规则整条删除。
-   「群聊名」原本是全项目最宽的短字段（满 820px），标 --md 后收到 400px。 */
+   「演绎名」原本是全项目最宽的短字段（满 820px），标 --md 后收到 400px。 */
 .gcover {
   display: flex;
   gap: var(--cbx-space-4);
@@ -1051,5 +1129,15 @@ async function removeGroup() {
     width: var(--cbx-tap-min);
     height: var(--cbx-tap-min);
   }
+}
+.flow-sim {
+  margin-top: var(--cbx-space-4);
+  padding-top: var(--cbx-space-3);
+  border-top: 1px solid var(--cbx-border);
+}
+.flow-sim > summary {
+  margin-bottom: var(--cbx-space-3);
+  font-size: var(--cbx-fs-sm);
+  cursor: pointer;
 }
 </style>

@@ -1,10 +1,12 @@
 /**
- * OpenAI 兼容客户端。可对接 OpenAI / DeepSeek / 硅基流动 / OneAPI / Ollama 等
- * 一切实现了 `/chat/completions` 的服务。
+ * OpenAI 兼容客户端。可对接 OpenAI / DeepSeek / Kimi / Gemini / 通义 / 智谱 / 豆包 /
+ * 硅基流动 / OpenRouter / OneAPI / Ollama 等一切实现了 `/chat/completions` 的服务。
+ * 各家的参数差异由 compat.ts 处理。
  */
 
 import { buildHeaders, resolveUrl, send } from './http'
-import { parseSSE, toProviderError } from './stream'
+import { normalizeUsage, parseSSE, toProviderError } from './stream'
+import { applyCompat, normalizeModelId, paramsToHeal } from './compat'
 import { armStall, type StallGuard } from './timeout'
 import {
   ProviderError,
@@ -12,21 +14,120 @@ import {
   type ModelInfo,
   type ProviderConfig,
   type StreamChunk,
+  type Usage,
 } from '@/types/provider'
 
-function bodyOf(req: ChatCompletionRequest): string {
+/**
+ * 自愈学到的「这个服务 × 这个模型不认的参数」（进程内有效，重启重新学）。
+ *
+ * 流程见 postChat：400/422 且错误信息点名了某个参数 → 去掉它重试（最多 3 次）。
+ * 点名的直接记住；没点名、只是把 stream_options 当嫌疑人去掉的，重试**成功**才记，
+ * 重试也失败说明问题不在它（比如模型名错了），不冤枉它。
+ */
+const learned = new Map<string, Set<string>>()
+const learnKey = (url: string, model: string) => `${originOf(url)}${model}`
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url
+  }
+}
+
+/** `prompt_cache_key` 只发给官方 OpenAI：别家未必认，严格网关还会因未知参数 400 */
+function acceptsCacheKey(url: string): boolean {
+  try {
+    return new URL(url).hostname === 'api.openai.com'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 组请求体：先按 OpenAI 格式放全，再交给 compat 按服务商删改。
+ * `cfg.baseUrl` 用来识别服务商（不用代理后的 url：代理地址看不出是哪家）。
+ */
+function bodyOf(
+  cfg: ProviderConfig,
+  req: ChatCompletionRequest,
+  drop: ReadonlySet<string>,
+): Record<string, unknown> {
   const b: Record<string, unknown> = {
     model: req.model,
     messages: req.messages,
     stream: req.stream,
   }
+  if (req.stream) b['stream_options'] = { include_usage: true }
+  if (acceptsCacheKey(cfg.baseUrl) && req.cacheKey) b['prompt_cache_key'] = req.cacheKey
   if (req.maxTokens != null) b['max_tokens'] = req.maxTokens
   if (req.temperature != null) b['temperature'] = req.temperature
   if (req.topP != null) b['top_p'] = req.topP
   if (req.frequencyPenalty != null) b['frequency_penalty'] = req.frequencyPenalty
   if (req.presencePenalty != null) b['presence_penalty'] = req.presencePenalty
   if (req.stop?.length) b['stop'] = req.stop
-  return JSON.stringify(b)
+  return applyCompat(
+    b,
+    {
+      baseUrl: cfg.baseUrl,
+      model: req.model,
+      stream: req.stream,
+      ...(cfg.thinking ? { thinking: cfg.thinking } : {}),
+    },
+    drop,
+  )
+}
+
+/**
+ * 发一次聊天请求，带参数自愈。返回最后一次的 Response（成功或最终失败）。
+ * 失败的中间响应体会被读掉（取错误信息），不会泄漏连接。
+ */
+async function postChat(
+  cfg: ProviderConfig,
+  req: ChatCompletionRequest,
+  url: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const key = learnKey(url, req.model)
+  const known = learned.get(key) ?? new Set<string>()
+  const drop = new Set(known)
+  let pending: string[] = []
+  for (let attempt = 0; ; attempt++) {
+    const body = bodyOf(cfg, req, drop)
+    const res = await send({
+      url,
+      method: 'POST',
+      headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
+      body: JSON.stringify(body),
+      signal,
+    })
+    if (res.ok) {
+      if (pending.length) {
+        pending.forEach((k) => known.add(k))
+        learned.set(key, known)
+      }
+      return res
+    }
+    if ((res.status !== 400 && res.status !== 422) || attempt >= 3) return res
+    // 读错误信息判断要去掉什么；用 clone，原响应留给调用方 toProviderError
+    let detail = ''
+    try {
+      detail = await res.clone().text()
+    } catch {
+      /* 读不到就按没点名处理 */
+    }
+    const heal = paramsToHeal(detail, body).filter((k) => !drop.has(k))
+    if (!heal.length) return res
+    void res.body?.cancel().catch(() => {})
+    // 点名的参数立刻记住；stream_options 这种「猜的」等成功了再记
+    const named = heal.filter(
+      (k) => k !== 'stream_options' || /stream_options|include_usage/i.test(detail),
+    )
+    named.forEach((k) => known.add(k))
+    if (named.length) learned.set(key, known)
+    pending = heal.filter((k) => !named.includes(k))
+    heal.forEach((k) => drop.add(k))
+  }
 }
 
 /** 流式：相邻两个字节之间的最长空窗。沿用 depth/generate.ts 的 STALL_MS 量级 */
@@ -87,13 +188,7 @@ export async function* streamChat(
   try {
     let res: Response
     try {
-      res = await send({
-        url,
-        method: 'POST',
-        headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
-        body: bodyOf({ ...req, stream: true }),
-        signal: guard.signal,
-      })
+      res = await postChat(cfg, { ...req, stream: true }, url, guard.signal)
     } catch (e) {
       throw wrapAbortable(e, guard, STREAM_FIRST_MS)
     }
@@ -129,19 +224,15 @@ export async function chatOnce(
   req: ChatCompletionRequest,
   signal?: AbortSignal,
   timeoutMs = ONCE_TIMEOUT_MS,
+  /** 非流式的用量直接在响应体里，有就回调一次 */
+  onUsage?: (usage: Usage) => void,
 ): Promise<string> {
   const url = resolveUrl(cfg.baseUrl, '/chat/completions', cfg.proxyPrefix)
   const guard = armStall({ idleMs: timeoutMs, ...(signal ? { signal } : {}) })
   try {
     let res: Response
     try {
-      res = await send({
-        url,
-        method: 'POST',
-        headers: buildHeaders(cfg.apiKey ?? '', cfg.headers),
-        body: bodyOf({ ...req, stream: false }),
-        signal: guard.signal,
-      })
+      res = await postChat(cfg, { ...req, stream: false }, url, guard.signal)
     } catch (e) {
       throw wrapAbortable(e, guard, timeoutMs)
     }
@@ -149,12 +240,14 @@ export async function chatOnce(
     // 同 streamChat：读 body 期间中断，抛的也是裸 DOMException。
     // 这里**刻意不 kick**：拿到响应头就续期的话最坏情况翻倍成 10 分钟，
     // 而我们要消灭的正是「有界但极长」的假死
-    let j: { choices?: { message?: { content?: string } }[] }
+    let j: { choices?: { message?: { content?: string } }[]; usage?: unknown }
     try {
       j = (await res.json()) as typeof j
     } catch (e) {
       throw wrapAbortable(e, guard, timeoutMs)
     }
+    const usage = normalizeUsage(j.usage)
+    if (usage) onUsage?.(usage)
     return j.choices?.[0]?.message?.content ?? ''
   } finally {
     guard.dispose()
@@ -238,5 +331,6 @@ async function fetchModels(
   const ids = j.data
     .map((m: unknown) => (m && typeof m === 'object' && 'id' in m ? m.id : undefined))
     .filter((id): id is string => typeof id === 'string' && !!id.trim())
+    .map((id) => normalizeModelId(cfg.baseUrl, id))
   return [...new Set(ids)].sort().map((id) => ({ id }))
 }

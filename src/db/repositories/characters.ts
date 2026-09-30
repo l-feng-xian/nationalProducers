@@ -76,7 +76,7 @@ export async function count(): Promise<number> {
 
 /**
  * 删除角色。必须在一个跨 store 事务里，否则中途失败会留下孤儿数据：
- * 头像 blob、该角色的全部会话与消息、群聊中的成员引用与关系边。
+ * 头像 blob、该角色的全部会话与消息、演绎中的成员引用与关系边。
  */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()

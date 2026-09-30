@@ -6,10 +6,10 @@ import type { GroupNodeLayout, GroupRelation } from '@/types/group'
 import { confirmDialog } from '@/composables/useConfirm'
 
 /**
- * 群聊关系图谱：`RelationCanvas` 的适配层。
+ * 演绎关系图谱：`RelationCanvas` 的适配层。
  *
  * 画布本身已经泛化成通用受控组件（`@/components/relation/RelationCanvas.vue`），
- * 这里只做两件事：类型适配，以及**把群聊那套不纯的数据流收口在一处**。
+ * 这里只做两件事：类型适配，以及**把演绎那套不纯的数据流收口在一处**。
  *
  * props / emits 与重构前逐字相同 —— `GroupEditView.vue` 不需要任何改动。
  */
@@ -36,7 +36,7 @@ const nodes = computed<GraphNode[]>(() =>
   props.members.map((m) => ({ id: m.id, name: m.name, isUser: !!m.isUser })),
 )
 
-/** GroupRelation 没有 score/trust，所以不产生 badge —— 群聊画面与重构前完全一致 */
+/** GroupRelation 没有 score/trust，所以不产生 badge —— 演绎画面与重构前完全一致 */
 const edges = computed<GraphEdge[]>(() =>
   props.relations.map((r) => ({
     id: r.id,
@@ -57,7 +57,7 @@ const edges = computed<GraphEdge[]>(() =>
  *
  * 所以：不纯性收口在这个适配层的这两个函数里，世界侧走纯受控。
  * 下一个人看到这里想「顺手修正一下」之前，请先确认 GroupEditView 也一起改了，
- * 否则群聊的关系编辑会静默丢改动。
+ * 否则演绎的关系编辑会静默丢改动。
  */
 function onPatchEdge(id: string, patch: GraphEdgePatch) {
   const r = props.relations.find((x) => x.id === id)
@@ -78,7 +78,7 @@ function onSwapEdge(id: string) {
 /**
  * 删除确认留在适配层。
  *
- * 重构前确认框在画布里，但那句「删除这条角色关系？」是群聊语境的措辞；
+ * 重构前确认框在画布里，但那句「删除这条角色关系？」是演绎语境的措辞；
  * 画布现在是通用组件，不该替调用方决定问什么。`GroupEditView` 收到
  * `remove-relation` 后是直接删的，所以确认必须在这一层做完。
  */

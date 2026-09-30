@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { DOWNLOAD_HOST_PRESETS, normalizeHost } from '@/services/ml/downloadHost'
 import { formatBytes, storageEstimate } from '@/services/io/backup'
 import { confirmDialog } from '@/composables/useConfirm'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 
 const models = useModelsStore()
 const settings = useSettingsStore()
@@ -21,8 +22,8 @@ const downloadHost = computed(() => normalizeHost(settings.settings.modelDownloa
  * 切换下载源。transformers.js 的缓存键含 host，换源后要重新核对已下载状态
  * （旧源下的模型会按新键判定为「未下载」）。所以改完立刻 refresh。
  */
-async function onHostChange(e: Event) {
-  const host = normalizeHost((e.target as HTMLSelectElement).value)
+async function onHostChange(value: string) {
+  const host = normalizeHost(value)
   if (host === downloadHost.value) return
   settings.patch({ modelDownloadHost: host })
   await models.refresh()
@@ -95,23 +96,23 @@ async function remove(id: string) {
           <h3>本地模型下载源</h3>
           <p class="note">
             下面的<strong>嵌入模型</strong>与<strong>深度模型</strong>都从这里下载。国内直连
-            HuggingFace 基本下不动，默认走 <strong>hf-mirror 镜像</strong>；能直连官方、或镜像出问题时可切回
-            huggingface.co。
+            HuggingFace 基本下不动，默认走
+            <strong>hf-mirror 镜像</strong>；能直连官方、或镜像出问题时可切回 huggingface.co。
           </p>
           <label class="src">
             <span class="src__label">下载源</span>
-            <select
-              class="cbx-input src__sel"
-              :value="downloadHost"
-              aria-label="模型下载源"
+            <CbxSelect
+              class="src__sel"
+              :model-value="downloadHost"
+              :options="hostPresets.map((o) => ({ value: o.host, label: o.label }))"
+              label="模型下载源"
               @change="onHostChange"
-            >
-              <option v-for="o in hostPresets" :key="o.host" :value="o.host">{{ o.label }}</option>
-            </select>
+            />
           </label>
           <p class="note note--warn">
             <AppIcon name="TriangleAlert" tone="warning" />
-            切换下载源后，用另一个源下过的模型会显示为「未下载」、需重新下载 —— 浏览器缓存按下载地址区分，属正常现象。
+            切换下载源后，用另一个源下过的模型会显示为「未下载」、需重新下载 ——
+            浏览器缓存按下载地址区分，属正常现象。
           </p>
         </section>
 
@@ -120,7 +121,8 @@ async function remove(id: string) {
           <p class="note">
             会话记忆的「向量召回」需要一个嵌入模型。模型不随应用发布，要在这里
             <strong>手动下载一次</strong>，下载完再勾选启用才会真正生效 ——
-            没有勾选的模型不会产生任何流量。 下载走上面选择的<strong>下载源</strong>；<strong>下载之后推理全程离线</strong>，
+            没有勾选的模型不会产生任何流量。
+            下载走上面选择的<strong>下载源</strong>；<strong>下载之后推理全程离线</strong>，
             对话内容不会离开这台设备。
           </p>
           <p class="note">
@@ -133,7 +135,9 @@ async function remove(id: string) {
             届时需要重新下载。多用几次本站通常就会自动授予。
           </p>
           <p v-if="models.errors['__check']" class="note note--warn">
-            <AppIcon name="TriangleAlert" tone="warning" /> 检查下载状态失败：{{ models.errors['__check'] }}
+            <AppIcon name="TriangleAlert" tone="warning" /> 检查下载状态失败：{{
+              models.errors['__check']
+            }}
           </p>
         </section>
 

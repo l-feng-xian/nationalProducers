@@ -1,8 +1,0 @@
-Use case: background-extraction
-Asset type: foliage and wooden bridge components matching the provided painted town.
-Primary request: output a precise 2x2 sheet of independent transparent cutouts, copy the input's exact painterly contours, desaturated olive/sage/blue-green colors and overhead camera. All objects fit inside their cells with wide gutters.
-Top left: the large olive broadleaf tree from near x450 y120 of the reference, thick irregular layered leaf masses, visible trunk and a few low branches; no lollipop shape, no fine photographic stippling.
-Top right: the large blue-green spreading tree from lower right corner of the reference, asymmetrical layered canopy masses with a few muted highlights, visible forked trunk, natural silhouette.
-Bottom left: a long low irregular hedge of three joined leafy bushes from a cottage side yard, muted foliage with a few small flowers, no ground island.
-Bottom right: ONE horizontal wooden bridge railing matching the lower-left reference bridge. Long weathered oak handrail with 4 vertical posts, two horizontal rails, transparent spaces between. Front-on with the same slightly overhead camera, width about four times its height. No bridge deck or water: the game will place this at front/back of a separate walkable deck.
-Constraints: true transparent background, no floor, no backdrop glow, no baked cast shadow, no label or border. Preserve the painted detail density and lighting of the input town. Fine branch spaces and spaces between railing posts must be transparent.

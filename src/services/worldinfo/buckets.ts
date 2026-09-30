@@ -35,11 +35,34 @@ export interface WIBuckets {
   anBottom: string[]
   depthEntries: WIDepthBucket[]
   outletEntries: Record<string, string[]>
+  /**
+   * 缓存友好布局下，从 before/after 挪出来的**非常驻**条目（before 组在前、after 组在后，
+   * 组内顺序与原桶一致）。由提示词组装按 `dynamicWIDepth` 注入。未开启时缺省。
+   */
+  dynamicEntries?: string[]
 }
 
-export function bucketActivatedEntries(activated: ResolvedEntry[]): WIBuckets {
+export interface BucketOptions {
+  /** true = 非常驻的 before/after 条目改进 dynamicEntries，前缀只留常驻条目 */
+  splitDynamic?: boolean
+}
+
+/**
+ * 条目是否「每轮稳定出现」。只有无概率门槛的常驻条目算；关键词触发、sticky、
+ * 带概率的常驻都可能下一轮就不在了，放进前缀会让缓存整段失效。
+ */
+function isStable(e: ResolvedEntry): boolean {
+  return e.constant && (!e.useProbability || e.probability >= 100)
+}
+
+export function bucketActivatedEntries(
+  activated: ResolvedEntry[],
+  opts: BucketOptions = {},
+): WIBuckets {
   const before: string[] = []
   const after: string[] = []
+  const dynBefore: string[] = []
+  const dynAfter: string[] = []
   const em: WIExampleEntry[] = []
   const anTop: string[] = []
   const anBottom: string[] = []
@@ -55,10 +78,10 @@ export function bucketActivatedEntries(activated: ResolvedEntry[]): WIBuckets {
 
     switch (entry.position) {
       case world_info_position.before:
-        before.unshift(content)
+        ;(opts.splitDynamic && !isStable(entry) ? dynBefore : before).unshift(content)
         break
       case world_info_position.after:
-        after.unshift(content)
+        ;(opts.splitDynamic && !isStable(entry) ? dynAfter : after).unshift(content)
         break
       case world_info_position.ANTop:
         anTop.unshift(content)
@@ -98,5 +121,6 @@ export function bucketActivatedEntries(activated: ResolvedEntry[]): WIBuckets {
     anBottom,
     depthEntries: depth,
     outletEntries: outlet,
+    ...(opts.splitDynamic ? { dynamicEntries: [...dynBefore, ...dynAfter] } : {}),
   }
 }

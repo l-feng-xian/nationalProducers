@@ -26,6 +26,7 @@ export interface BackupFile {
   chats: unknown[]
   messages: unknown[]
   blobs: { id: string; mime: string; dataUrl: string }[]
+  starterTemplateImages?: { id: string; mime: string; dataUrl: string }[]
 }
 
 function blobToDataUrl(b: Blob): Promise<string> {
@@ -112,6 +113,16 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     if (!wanted.has(b.id)) continue
     blobs.push({ id: b.id, mime: b.mime, dataUrl: await blobToDataUrl(b.data) })
   }
+  const starterTemplateImages: NonNullable<BackupFile['starterTemplateImages']> = []
+  if (s.characters || s.groups) {
+    const ids = new Set([
+      ...(s.characters ? characters.map((c) => c.templateId).filter((id): id is string => !!id) : []),
+      ...(s.groups ? groups.map((g) => g.templateId).filter((id): id is string => !!id) : []),
+    ])
+    for (const image of await db.getAll('starter_template_images')) {
+      if (ids.has(image.id)) starterTemplateImages.push({ id: image.id, mime: image.mime, dataUrl: await blobToDataUrl(image.data) })
+    }
+  }
 
   return {
     format: 'nationalproducers-backup',
@@ -124,6 +135,7 @@ export async function buildBackup(scope: Partial<SyncScope> = {}): Promise<Backu
     chats: s.chats ? await db.getAll('chats') : [],
     messages,
     blobs,
+    starterTemplateImages,
     // 注意：secrets（API Key）不导出
   }
 }
@@ -165,6 +177,7 @@ type BackupStore =
   | 'chats'
   | 'messages'
   | 'blobs'
+  | 'starter_template_images'
   | 'settings'
 
 /** 列表读的是 by_updatedAt 索引的那几个 store */
@@ -276,6 +289,22 @@ export async function applyBackup(
       out.blobs++
     } catch (e) {
       skip('blobs', e)
+    }
+  }
+
+  if (allow.characters || allow.groups) {
+    const allowedIds = new Set([
+      ...(allow.characters ? (file.characters ?? []).map((row) => (row as { templateId?: string }).templateId) : []),
+      ...(allow.groups ? (file.groups ?? []).map((row) => (row as { templateId?: string }).templateId) : []),
+    ])
+    for (const image of file.starterTemplateImages ?? []) {
+      if (!allowedIds.has(image.id)) continue
+      try {
+        const data = await dataUrlToBlob(image.dataUrl)
+        await db.put('starter_template_images', { id: image.id, mime: image.mime, data, createdAt: Date.now() })
+      } catch (e) {
+        skip('starter_template_images', e)
+      }
     }
   }
 

@@ -24,6 +24,7 @@ import { baseChatReplace, evaluateMacros } from '../macro/engine'
 import { emptyCardFields, makeVarsApi, type MacroEnv } from '../macro/env'
 import { injectAtDepths, materializeInjections } from './depth'
 import { fitWithinBudget } from './budget'
+import { cleanHistoryText, findVolatileMacros, type VolatileMacroHit } from './cache'
 import { exampleBlockToMessages, parseMesExamples, type ExampleNames } from './examples'
 import { renderRelations } from './relations'
 import { joinGroupCards } from '../group/cards'
@@ -144,9 +145,15 @@ export interface BuildPromptInput {
     fields: StatusField[]
     current: StatusData | null
     depth: number
-    /** 快照里必须各有一项的角色（群聊 = 全体成员，含静音）；用户由 persona 补上 */
+    /** 快照里必须各有一项的角色（演绎 = 全体成员，含静音）；用户由 persona 补上 */
     charNames: string[]
   }
+  /** 上一轮的历史截断起点（ChatMetadata.historyStartSeq），见 budget.ts */
+  historyStartSeq?: number
+  /** 流程控制 · 剧情引导（services/flow/engine.ts guideBlock）。空则不注入 */
+  flowGuide?: string
+  /** 流程控制强制激活的世界书条目键 `${书 id}.${uid}`（services/flow/engine.ts loreKeys） */
+  flowLore?: string[]
 }
 
 export interface BuiltPrompt {
@@ -159,6 +166,12 @@ export interface BuiltPrompt {
     droppedHistory: number
     droppedExamples: number
     worldInfo: WIScanResult
+    /** 本轮历史起点的 seq；调用方（非 dryRun）存回 ChatMetadata.historyStartSeq */
+    historyStartSeq?: number
+    /** 前缀里用到的易变宏：它们会让缓存每轮 / 每天失效 */
+    volatileMacros: VolatileMacroHit[]
+    /** 本轮发言者 id（缓存诊断按「会话 × 发言者」对照） */
+    speakerId: string
   }
 }
 
@@ -185,7 +198,7 @@ function roleByName(r: string): 0 | 1 | 2 {
   return r === 'user' ? EXT_ROLE.USER : r === 'assistant' ? EXT_ROLE.ASSISTANT : EXT_ROLE.SYSTEM
 }
 
-/** 本轮用户身份：群聊身份优先，未设置时使用全局人设。 */
+/** 本轮用户身份：演绎身份优先，未设置时使用全局人设。 */
 function effectivePersona(input: BuildPromptInput): { name: string; description: string } {
   return resolvePersona(input.isGroup ? input.group : undefined, input.settings.persona)
 }
@@ -193,8 +206,8 @@ function effectivePersona(input: BuildPromptInput): { name: string; description:
 /** 构建宏求值环境 */
 export function buildMacroEnv(input: BuildPromptInput, relationsText: string): MacroEnv {
   const s = input.settings
-  // 群聊可以覆盖用户身份（{{user}} 与 {{persona}} 都跟着走）。
-  // 只有 isGroup 时才看 group，否则 1v1 会被某个群聊的设定污染
+  // 演绎可以覆盖用户身份（{{user}} 与 {{persona}} 都跟着走）。
+  // 只有 isGroup 时才看 group，否则 1v1 会被某个演绎的设定污染
   const p = effectivePersona(input)
   return {
     user: p.name,
@@ -280,6 +293,10 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   // outlet 桶回填进宏环境，{{outlet::key}} 此时才可用
   for (const [k, v] of Object.entries(wi.outletEntries)) env.outlets[k] = v.join('\n')
 
+  // 块标签与世界书包裹格式：固定块和 4c 的尾部世界书都要用，所以提到注入之前
+  const labels = sectionLabels(s.prompt.wiFormat)
+  const fmtWI = (t: string) => (t && s.prompt.wiFormat ? s.prompt.wiFormat.replace('{0}', t) : t)
+
   // ── 4. 注入注册表（每次生成重建，杜绝陈旧注入） ──
   const injections: Injection[] = []
 
@@ -301,6 +318,22 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   if (anText) {
     injections.push(
       makeInjection({ key: '2_authors_note', value: anText, depth: 4, order: DEFAULT_ORDER }),
+    )
+  }
+
+  // 4c. 缓存友好布局：关键词触发的 before/after 条目挪到尾部。
+  // 它们原本在系统块中间，这一轮激活、下一轮不激活，就会让从角色设定起的整段前缀失效。
+  const dynamicWI = (wi.dynamicEntries ?? []).filter((t) => t.trim())
+  if (dynamicWI.length) {
+    injections.push(
+      makeInjection({
+        key: 'DYNAMIC_WI',
+        value: `${labels.worldInfoBefore ?? ''}${labels.worldInfoBefore ? '\n' : ''}${fmtWI(dynamicWI.join('\n'))}`,
+        depth: Math.max(0, Math.round(s.prompt.dynamicWIDepth)),
+        role: EXT_ROLE.SYSTEM,
+        order: DEFAULT_ORDER,
+        scan: false,
+      }),
     )
   }
 
@@ -356,6 +389,22 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     )
   }
 
+  // 3c'. 流程控制 · 剧情引导。depth 0、order 220：紧贴末尾（不破坏前缀缓存），
+  // 在约束提示词(200)之后、状态格式要求(250)之前。
+  const flowGuide = input.flowGuide?.trim()
+  if (flowGuide) {
+    injections.push(
+      makeInjection({
+        key: 'FLOW_GUIDE',
+        value: sub(flowGuide),
+        depth: 0,
+        role: EXT_ROLE.SYSTEM,
+        order: 220,
+        scan: false,
+      }),
+    )
+  }
+
   // 3d. 角色状态：只注入**最新一份**快照 + 输出格式要求。
   // 历史消息里不会有旧快照 —— 状态块在落库前就从正文剥掉了（services/status/parse.ts）。
   // order 250 > 约束 200：格式要求离回复最近，模型最不容易忘记输出。
@@ -387,15 +436,12 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   }
 
   // ── 4. 固定块（顺序即最终输出顺序） ──
-  const labels = sectionLabels(s.prompt.wiFormat)
   const S = (content: string, source: string): PromptMessage[] => {
     const t = content.trim()
     if (!t) return []
     const label = labels[source]
     return [{ role: 'system', content: label ? `${label}\n${t}` : t, source }]
   }
-
-  const fmtWI = (t: string) => (t && s.prompt.wiFormat ? s.prompt.wiFormat.replace('{0}', t) : t)
 
   // ── 主提示词槽：角色卡 system_prompt **整块替换**全局主提示词（对齐 ST） ──
   //
@@ -461,14 +507,25 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
   for (const em of wi.emEntries) if (em.position !== WI_ANCHOR_BEFORE) pushBlocks(em.content)
 
   // ── 6. 真实历史 ──
-  const history: PromptMessage[] = input.history
-    .filter((m) => !m.is_system && !m.exclude)
-    .map((m) => ({
+  const historyRows = input.history.filter((m) => !m.is_system && !m.exclude)
+  const history: PromptMessage[] = historyRows.map((m) => {
+    // AI 消息去掉已闭合的思维链：只是发送副本，库里原文不动
+    const mes = m.is_user ? m.mes : cleanHistoryText(m.mes)
+    return {
       role: m.is_user ? ('user' as const) : ('assistant' as const),
       // 1vN 里 AI 消息前缀发言者名，模型才知道是谁说的
-      content: input.isGroup && !m.is_user ? `${m.name}: ${m.mes}` : m.mes,
+      content: input.isGroup && !m.is_user ? `${m.name}: ${mes}` : mes,
       source: 'chatHistory',
-    }))
+    }
+  })
+  // 上一轮的截断起点 seq → 本轮 history 下标（该条被删了就落到它之后的第一条）
+  const anchorIdx =
+    input.historyStartSeq != null
+      ? Math.max(
+          0,
+          historyRows.findIndex((m) => m.seq >= (input.historyStartSeq ?? 0)),
+        )
+      : 0
 
   // ── 7. 预算：注入先预留，再填历史 ──
   const injectedPreview = materializeInjections(injections, { isContinue: input.isContinue })
@@ -497,7 +554,10 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
     count,
     pinExamples: s.prompt.pinExamples,
     perMessage: s.prompt.perMessageTokens,
+    anchor: anchorIdx,
+    trimRatio: s.prompt.historyTrimRatio,
   })
+  const historyStartSeq = historyRows[fit.historyStart]?.seq
 
   // ── 8. 装配：注入在**裁剪后**的历史上做 splice ──
   const withInjections = injectAtDepths(fit.history, injections, {
@@ -527,8 +587,36 @@ export function buildChatPrompt(input: BuildPromptInput): BuiltPrompt {
       droppedHistory: fit.droppedHistory,
       droppedExamples: fit.droppedExamples,
       worldInfo: wi,
+      ...(historyStartSeq != null ? { historyStartSeq } : {}),
+      volatileMacros: prefixVolatileMacros(input),
+      speakerId: input.speaker.id,
     },
   }
+}
+
+/**
+ * 会进前缀的模板原文里的易变宏。查**原文**而不是展开结果：展开后 {{time}} 已经是
+ * 「14:05」，看不出它每轮都会变。演绎把每位成员的卡都查一遍。
+ */
+function prefixVolatileMacros(input: BuildPromptInput): VolatileMacroHit[] {
+  const s = input.settings
+  const p = effectivePersona(input)
+  const sources: Record<string, string> = {
+    main: s.prompt.mainPrompt,
+    personaDescription: p.description,
+    newChat: input.isGroup ? s.prompt.newGroupChatPrompt : s.prompt.newChatPrompt,
+    dialogueExamples: s.prompt.exampleChatMarker,
+  }
+  const chars = input.isGroup ? input.members.map((m) => m.char) : [input.speaker.char]
+  for (const c of chars) {
+    const tag = input.isGroup ? `:${c.data.name}` : ''
+    sources[`charSystem${tag}`] = c.data.system_prompt
+    sources[`charDescription${tag}`] = c.data.description
+    sources[`charPersonality${tag}`] = c.data.personality
+    sources[`scenario${tag}`] = c.data.scenario
+    sources[`dialogueExamples${tag}`] = c.data.mes_example
+  }
+  return findVolatileMacros(sources)
 }
 
 /** 跑世界书扫描；未提供来源时返回空结果 */
@@ -591,6 +679,17 @@ function runWorldInfo(
     substitute: sub,
     characterName: input.speaker.name,
     characterTags: input.speaker.char.data.tags,
+    splitDynamic: s.prompt.cacheFriendlyWI,
+    // 流程控制激活的条目：只认已在本轮来源里的（书没关联上就不生效）
+    ...(input.flowLore?.length
+      ? {
+          externalActivations: new Map(
+            sorted
+              .filter((e) => input.flowLore!.includes(`${e.world}.${e.uid}`))
+              .map((e) => [`${e.world}.${e.uid}`, e] as const),
+          ),
+        }
+      : {}),
   })
 }
 

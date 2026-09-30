@@ -8,7 +8,7 @@ import {
   ImagePlus,
   Pencil,
   RotateCcw,
-  Trash2
+  Trash2,
 } from '@/components/icons'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useLongPress } from '@/composables/useLongPress'
@@ -16,6 +16,7 @@ import { useBackClose } from '@/composables/useBackClose'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import MessageImage from './MessageImage.vue'
 import type { ChatMessage } from '@/types/chat'
+import { formatTokens } from '@/services/tokens'
 
 const props = defineProps<{
   msg: ChatMessage
@@ -54,9 +55,22 @@ const isUser = computed(() => props.msg.is_user)
 const timeLabel = computed(() =>
   new Date(props.msg.send_date).toLocaleTimeString([], {
     hour: '2-digit',
-    minute: '2-digit'
-  })
+    minute: '2-digit',
+  }),
 )
+/**
+ * 服务端报告的用量：「输入 9.8k · 缓存 91%」。没报 cached 的服务只显示输入量。
+ * 这是判断缓存优化有没有生效的唯一真实数据（本地估算只能算上限）。
+ */
+const usage = computed(() => {
+  const u = props.msg.extra?.usage
+  if (!u || props.msg.is_user) return null
+  const pct = u.cached != null && u.prompt > 0 ? Math.round((u.cached / u.prompt) * 100) : null
+  return {
+    label: `输入 ${formatTokens(u.prompt)}${pct != null ? ` · 缓存 ${pct}%` : ''}`,
+    title: `输入 ${u.prompt} tok${u.cached != null ? `（命中缓存 ${u.cached}）` : '（服务端未报告缓存命中）'} · 输出 ${u.completion} tok`,
+  }
+})
 const hasSwipes = computed(() => (props.msg.swipes?.length ?? 0) > 1)
 const swipeLabel = computed(() => {
   const n = props.msg.swipes?.length ?? 0
@@ -85,10 +99,12 @@ function cancelEdit() {
 // 统一在状态本身上报，省得 start/commit/cancel 三处各喊一次、将来加第四条路径又漏掉。
 // ⚠️ 刻意不在 onUnmounted 里补一次 false：卸载恰恰是我们要避免的事，
 // 真被卸载了还去取消钉住，就成了自己把自己解钉的回环。
-watch(editing, v => emit('editingChange', v))
+watch(editing, (v) => emit('editingChange', v))
 
 // ── 移动端长按动作面板 ──
 const sheetOpen = ref(false)
+/** 流程触发明细（点「流程 · N」展开） */
+const flowOpen = ref(false)
 const { handlers, pressing } = useLongPress(() => (sheetOpen.value = true))
 // 手机上关菜单的第一反应是按返回，不接住就会把整个聊天页退掉
 useBackClose(() => (sheetOpen.value = false), sheetOpen)
@@ -119,13 +135,7 @@ function act(fn: () => void) {
 
 <template>
   <div class="row" :class="{ 'row--user': isUser }" :data-msg-id="msg.id">
-    <CbxAvatar
-      v-if="!isUser"
-      :blob-id="avatarBlobId"
-      :name="msg.name"
-      size="sm"
-      previewable
-    />
+    <CbxAvatar v-if="!isUser" :blob-id="avatarBlobId" :name="msg.name" size="sm" previewable />
 
     <div class="col">
       <div class="message-meta">
@@ -140,28 +150,15 @@ function act(fn: () => void) {
           isUser ? 'cbx-bubble--user' : 'cbx-bubble--ai',
           { 'cbx-bubble--pressing': pressing, 'cbx-bubble--held': sheetOpen },
         ]"
-        :style="
-          accent
-            ? { borderLeft: `3px solid var(--cbx-char-${accent})` }
-            : undefined
-        "
+        :style="accent ? { borderLeft: `3px solid var(--cbx-char-${accent})` } : undefined"
         v-bind="handlers"
         @contextmenu="onContextMenu"
       >
         <template v-if="editing">
-          <textarea
-            ref="ta"
-            v-model="draft"
-            class="cbx-textarea edit"
-            rows="4"
-          />
+          <textarea ref="ta" v-model="draft" class="cbx-textarea edit" rows="4" />
           <div class="edit__ops">
-            <button class="cbx-btn cbx-btn--ghost xs" @click="cancelEdit">
-              取消
-            </button>
-            <button class="cbx-btn cbx-btn--primary xs" @click="commitEdit">
-              保存
-            </button>
+            <button class="cbx-btn cbx-btn--ghost xs" @click="cancelEdit">取消</button>
+            <button class="cbx-btn cbx-btn--primary xs" @click="commitEdit">保存</button>
           </div>
         </template>
         <template v-else>
@@ -192,20 +189,10 @@ function act(fn: () => void) {
         >
           <ImagePlus :size="16" aria-hidden="true" />
         </button>
-        <button
-          class="cbx-icon-btn tool"
-          title="复制"
-          aria-label="复制"
-          @click="copy"
-        >
+        <button class="cbx-icon-btn tool" title="复制" aria-label="复制" @click="copy">
           <Copy :size="16" aria-hidden="true" />
         </button>
-        <button
-          class="cbx-icon-btn tool"
-          title="编辑"
-          aria-label="编辑"
-          @click="startEdit"
-        >
+        <button class="cbx-icon-btn tool" title="编辑" aria-label="编辑" @click="startEdit">
           <Pencil :size="16" aria-hidden="true" />
         </button>
         <template v-if="!isUser">
@@ -253,75 +240,67 @@ function act(fn: () => void) {
         >
           <Trash2 tone="danger" :size="16" aria-hidden="true" />
         </button>
-        <span v-if="msg.extra?.stopped" class="cbx-badge cbx-badge--warning"
-          >已中断</span
+        <span v-if="msg.extra?.stopped" class="cbx-badge cbx-badge--warning">已中断</span>
+        <!-- 流程控制：本条回复触发的规则 / 阶段切换；固定台词消息单独标出 -->
+        <!-- 做成按钮而不是只靠 title：手机上没有悬停，点一下展开明细 -->
+        <button
+          v-if="msg.extra?.flow?.log?.length"
+          type="button"
+          class="cbx-badge cbx-badge--brand flow-log"
+          :title="msg.extra.flow.log.join('\n')"
+          :aria-expanded="flowOpen"
+          :aria-label="`流程触发 ${msg.extra.flow.log.length} 项，点击${flowOpen ? '收起' : '查看'}`"
+          @click="flowOpen = !flowOpen"
         >
+          流程 · {{ msg.extra.flow.log.length }}
+        </button>
+        <span v-if="msg.extra?.flowSay" class="cbx-badge cbx-badge--success">固定台词</span>
+        <span v-if="usage" class="usage" :title="usage.title">{{ usage.label }}</span>
       </div>
+      <ul v-if="flowOpen && msg.extra?.flow?.log?.length" class="flow-detail">
+        <li v-for="(line, i) in msg.extra.flow.log" :key="i">{{ line }}</li>
+      </ul>
     </div>
 
     <!-- 移动端长按面板 -->
     <Teleport to="body">
       <Transition name="sheet">
-      <div
-        v-if="sheetOpen"
-        class="cbx-modal__scrim sheet-scrim"
-        @click.self="sheetOpen = false"
-      >
-        <div class="sheet cbx-safe-b" role="menu" aria-label="消息操作">
-          <span class="sheet__grip" aria-hidden="true" />
-          <div v-if="!isUser && hasSwipes" class="sheet__swipes">
+        <div v-if="sheetOpen" class="cbx-modal__scrim sheet-scrim" @click.self="sheetOpen = false">
+          <div class="sheet cbx-safe-b" role="menu" aria-label="消息操作">
+            <span class="sheet__grip" aria-hidden="true" />
+            <div v-if="!isUser && hasSwipes" class="sheet__swipes">
+              <button class="cbx-icon-btn" aria-label="上一个回复版本" @click="swipeFromSheet(-1)">
+                <ChevronLeft :size="20" aria-hidden="true" />
+              </button>
+              <span class="sheet__swipe-n">回复版本 {{ swipeLabel }}</span>
+              <button class="cbx-icon-btn" aria-label="下一个回复版本" @click="swipeFromSheet(1)">
+                <ChevronRight :size="20" aria-hidden="true" />
+              </button>
+            </div>
+            <button class="sheet__item" @click="copy">复制</button>
+            <button class="sheet__item" @click="startEdit">编辑</button>
             <button
-              class="cbx-icon-btn"
-              aria-label="上一个回复版本"
-              @click="swipeFromSheet(-1)"
+              v-if="canGenerateImage"
+              class="sheet__item"
+              @click="act(() => emit('generateImage'))"
             >
-              <ChevronLeft :size="20" aria-hidden="true" />
+              根据此处对话生成配图
             </button>
-            <span class="sheet__swipe-n">回复版本 {{ swipeLabel }}</span>
-            <button
-              class="cbx-icon-btn"
-              aria-label="下一个回复版本"
-              @click="swipeFromSheet(1)"
-            >
-              <ChevronRight :size="20" aria-hidden="true" />
+            <button v-if="!isUser" class="sheet__item" @click="act(() => emit('regenerate'))">
+              重新生成
             </button>
+            <button class="sheet__item" @click="act(() => emit('branch'))">
+              从这里分支出新对话
+            </button>
+            <button class="sheet__item sheet__item--danger" @click="act(() => emit('remove'))">
+              删除本条
+            </button>
+            <button class="sheet__item sheet__item--danger" @click="act(() => emit('removeFrom'))">
+              删除本条及之后
+            </button>
+            <button class="sheet__item sheet__cancel" @click="sheetOpen = false">取消</button>
           </div>
-          <button class="sheet__item" @click="copy">复制</button>
-          <button class="sheet__item" @click="startEdit">编辑</button>
-          <button
-            v-if="canGenerateImage"
-            class="sheet__item"
-            @click="act(() => emit('generateImage'))"
-          >
-            根据此处对话生成配图
-          </button>
-          <button
-            v-if="!isUser"
-            class="sheet__item"
-            @click="act(() => emit('regenerate'))"
-          >
-            重新生成
-          </button>
-          <button class="sheet__item" @click="act(() => emit('branch'))">
-            从这里分支出新对话
-          </button>
-          <button
-            class="sheet__item sheet__item--danger"
-            @click="act(() => emit('remove'))"
-          >
-            删除本条
-          </button>
-          <button
-            class="sheet__item sheet__item--danger"
-            @click="act(() => emit('removeFrom'))"
-          >
-            删除本条及之后
-          </button>
-          <button class="sheet__item sheet__cancel" @click="sheetOpen = false">
-            取消
-          </button>
         </div>
-      </div>
       </Transition>
     </Teleport>
   </div>
@@ -520,6 +499,28 @@ function act(fn: () => void) {
   color: var(--cbx-text-tertiary);
   min-width: 28px;
   text-align: center;
+}
+.flow-log {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--cbx-fs-xs);
+}
+.flow-detail {
+  margin: var(--cbx-space-1) 0 0;
+  padding: var(--cbx-space-2) var(--cbx-space-3) var(--cbx-space-2) calc(var(--cbx-space-3) + 1em);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-secondary);
+  background: var(--cbx-bg-hover);
+  border-radius: var(--cbx-radius-md);
+  overflow-wrap: anywhere;
+}
+.usage {
+  margin-left: var(--cbx-space-1);
+  font-size: var(--cbx-fs-xs);
+  color: var(--cbx-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 底部动作面板 */

@@ -1,7 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { chatsRepo, memchunksRepo, messagesRepo } from '@/db/repositories'
-import { newAiMessage, newUserMessage, type ChatMessage, type ChatMeta } from '@/types/chat'
+import {
+  newAiMessage,
+  newUserMessage,
+  type ChatMessage,
+  type ChatMeta,
+  type MessageExtra,
+} from '@/types/chat'
 import { fnv1a } from '@/services/hash'
 import { buildMacroEnv, pickGreeting } from '@/services/prompt/builder'
 import { useCharactersStore, defaultAssistantCharacter } from './characters'
@@ -71,8 +77,8 @@ export const useChatsStore = defineStore('chats', () => {
   }
 
   /**
-   * 新建 1vN 群聊会话。
-   * 开场白播种：**每个成员各随机一条**（对齐 ST 群聊；不生成 swipes）。
+   * 新建 1vN 演绎会话。
+   * 开场白播种：**每个成员各随机一条**（对齐 ST 演绎；不生成 swipes）。
    */
   async function createGroup(groupId: string, title: string): Promise<ChatMeta> {
     const groups = useGroupsStore()
@@ -211,6 +217,27 @@ export const useChatsStore = defineStore('chats', () => {
     msg.original_avatar = characterId
     const row = await messagesRepo.append(meta.id, msg)
     messages.value = [...messages.value, row]
+    return row
+  }
+
+  /**
+   * 往**指定会话**追加一条已写好的 AI 消息（流程控制的固定台词用）。
+   * 与 writeRow 同理：用户切走了也要写进原会话，只有仍在看这段时才刷新内存列表。
+   */
+  async function appendAiTo(
+    chatId: string,
+    name: string,
+    characterId: string,
+    mes: string,
+    extra: MessageExtra = {},
+  ): Promise<ChatMessage> {
+    const msg = newAiMessage(chatId, name, mes, { characterId, ...extra })
+    msg.original_avatar = characterId
+    const row = await messagesRepo.append(chatId, msg)
+    if (current.value?.id === chatId) {
+      messages.value = [...messages.value, row]
+      await refreshMeta(chatId)
+    }
     return row
   }
 
@@ -411,6 +438,7 @@ export const useChatsStore = defineStore('chats', () => {
     appendUser,
     attachImage,
     appendAi,
+    appendAiTo,
     patchLocal,
     persist,
     writeRow,

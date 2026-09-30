@@ -2,6 +2,8 @@
  * 会话与消息类型。消息字段沿用 SillyTavern 原生命名，便于对照与将来导入 ST 聊天记录。
  */
 
+import type { FlowState } from './flow'
+
 import type { GroupRelation, GroupNodeLayout } from './group'
 import type { MessageImage } from './image'
 import type { MessageStatus } from './status'
@@ -21,6 +23,11 @@ export interface MessageExtra {
   status?: MessageStatus
   /** 本轮应输出状态但没解析出来的原因；此时「当前状态」沿用上一份 */
   statusError?: string
+  /** 服务端报告的用量；cached = 命中前缀缓存的输入 token（服务端没报则缺省） */
+  usage?: { prompt: number; completion: number; cached?: number }
+  /** 流程控制运行态（见 types/flow.ts）；固定台词消息上标 flowSay */
+  flow?: FlowState
+  flowSay?: boolean
   [k: string]: unknown
 }
 
@@ -99,6 +106,12 @@ export interface ChatMetadata {
   stateCard?: StateCard
   /** 会话记忆 · 向量索引水位线（二期） */
   memIndex?: MemIndexState
+  /**
+   * 历史截断起点：提示词里的聊天历史从 seq >= 此值的第一条开始。
+   * 超预算时一次性前移一大段，之后保持不动，让连续多轮的前缀完全一致、命中缓存。
+   * 见 services/prompt/budget.ts 的 `fitWithinBudget`。缺省 = 从头开始。
+   */
+  historyStartSeq?: number
 }
 
 /** 向量索引的进度。换模型时整会话作废重建 */

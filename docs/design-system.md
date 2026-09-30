@@ -53,7 +53,7 @@
 | 令牌 | 值 | 管什么 | 消费点 |
 |---|---|---|---|
 | `--cbx-read-w` | 820px | **长文本的行长**：聊天气泡 / 消息流 / 输入条，以及表单里的 `textarea` 与说明段落 | `ChatView .stream` · `ChatComposer .inner` · `.cbx-form-col .cbx-textarea` · `.note` |
-| `--cbx-form-w` | `100%` | **表单内容列**宽，跟随视口自适应、不设固定上限 | `.cbx-form-col`（设置 / 角色编辑 / 群聊编辑） |
+| `--cbx-form-w` | `100%` | **表单内容列**宽，跟随视口自适应、不设固定上限 | `.cbx-form-col`（设置 / 角色编辑 / 演绎编辑） |
 
 `ChatView .stream` 与 `ChatComposer .inner` 必须始终同值，否则聊天页输入框与消息流左右错位
 ——所以**永远不要为了修表单去调 `--cbx-read-w` 的值**。

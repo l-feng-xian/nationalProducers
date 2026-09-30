@@ -8,12 +8,12 @@ import { emptyGroup, type Group, type GroupRelation, type GroupNodeLayout } from
  *
  * 库里是历史记录，不会因为类型加了字段就自动长出来。persona 是个对象，
  * 老记录里它是 undefined —— 模板里读 `g.persona.name` 会直接抛错，
- * 表现是「老群聊一打开就白屏」。这个坑在 settings.memory.vector 上踩过一次。
+ * 表现是「老演绎一打开就白屏」。这个坑在 settings.memory.vector 上踩过一次。
  * 这里只补不写回：下次 save 时自然落盘，不为读操作制造一次写事务。
  */
 function normalize(g: Group): Group {
   if (!g.persona) g.persona = { name: '', description: '' }
-  // persona 之外的这四个同样是裸取的：members/disabled_members/relations 在群聊页、
+  // persona 之外的这四个同样是裸取的：members/disabled_members/relations 在演绎页、
   // 提示词组装、关系图谱里一共被解引用近十处，layout 还会被 `delete layout[id]`。
   // 导入的备份可能缺任意一个（applyBackup 是零校验原样回写）
   if (!Array.isArray(g.members)) g.members = []
@@ -35,7 +35,7 @@ export async function get(id: string): Promise<Group | undefined> {
   return g ? normalize(g) : undefined
 }
 
-export async function create(name = '新群聊'): Promise<Group> {
+export async function create(name = '新演绎'): Promise<Group> {
   const g = emptyGroup(crypto.randomUUID(), name)
   const db = await getDb()
   await db.put('groups', toPlain(g))
@@ -113,7 +113,7 @@ export async function saveLayout(
   })
 }
 
-/** 删群聊同时删其全部会话与消息 */
+/** 删演绎同时删其全部会话与消息 */
 export async function remove(id: string): Promise<void> {
   const db = await getDb()
   const tx = db.transaction(['groups', 'chats', 'messages', 'blobs'], 'readwrite')

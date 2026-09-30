@@ -5,7 +5,7 @@
  * 切成两次 read，不缓冲就会 JSON.parse 失败并丢字。
  */
 
-import { ProviderError, type StreamChunk } from '@/types/provider'
+import { ProviderError, type StreamChunk, type Usage } from '@/types/provider'
 
 interface DeltaShape {
   choices?: {
@@ -13,7 +13,34 @@ interface DeltaShape {
     message?: { content?: string | null }
     finish_reason?: string | null
   }[]
+  usage?: unknown
   error?: { message?: string; type?: string }
+}
+
+const num = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined
+
+/**
+ * 把各家的 usage 字段统一成 `Usage`。不是对象或连 prompt_tokens 都没有时返回 undefined。
+ * 字段对照见 types/provider.ts 的 `Usage` 注释。
+ */
+export function normalizeUsage(raw: unknown): Usage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const prompt = num(u['prompt_tokens'])
+  if (prompt === undefined) return undefined
+  const details = u['prompt_tokens_details']
+  const cached =
+    num(u['prompt_cache_hit_tokens']) ??
+    (details && typeof details === 'object'
+      ? num((details as Record<string, unknown>)['cached_tokens'])
+      : undefined) ??
+    num(u['cached_tokens'])
+  return {
+    prompt,
+    completion: num(u['completion_tokens']) ?? 0,
+    ...(cached !== undefined ? { cached } : {}),
+  }
 }
 
 /**
@@ -57,6 +84,10 @@ export async function* parseSSE(res: Response, onBytes?: () => void): AsyncGener
         if (json.error) {
           throw new ProviderError('server', json.error.message ?? '服务端返回错误')
         }
+        // 用量块：OpenAI 在 choices 为空的最后一帧里给；有的实现夹在最后一个内容帧里。
+        // 两种都单独 yield 一个空 delta 的 chunk，消费方只需看 chunk.usage
+        const usage = normalizeUsage(json.usage)
+        if (usage) yield { delta: '', usage }
         const choice = json.choices?.[0]
         if (!choice) continue
         const delta = choice.delta?.content ?? choice.message?.content ?? ''

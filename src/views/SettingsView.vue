@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { findPreset } from '@/services/vector/presets'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import DepthPreview from '@/components/settings/DepthPreview.vue'
 import StatusFieldsEditor from '@/components/settings/StatusFieldsEditor.vue'
 import { defaultStatusFields, type StatusField } from '@/types/status'
@@ -14,8 +15,28 @@ const settings = useSettingsStore()
 /** 模板里要显示字面的 {{user}}，不能直接写 —— Vue 会在内层 }} 提前闭合插值 */
 const USER_MACRO = '{{user}}'
 
+/** 插入深度可选的三种角色 */
+const ROLE_OPTIONS = [
+  { value: 0, label: 'system' },
+  { value: 1, label: 'user' },
+  { value: 2, label: 'assistant' },
+]
+const WI_STRATEGY_OPTIONS = [
+  { value: 0, label: '均匀混排' },
+  { value: 1, label: '角色书优先' },
+  { value: 2, label: '全局书优先' },
+]
+
 const wi = computed(() => settings.settings.worldInfo)
 const mem = computed(() => settings.settings.memory)
+/** 存的是 0.5~1 的比例，界面上用百分比更直观 */
+const historyTrimPct = computed({
+  get: () => Math.round(settings.settings.prompt.historyTrimRatio * 100),
+  set: (v: number) => {
+    const n = Number.isFinite(v) ? v : 70
+    settings.settings.prompt.historyTrimRatio = Math.min(100, Math.max(50, n)) / 100
+  },
+})
 const st = computed(() => settings.settings.status)
 function setStatusFields(fields: StatusField[]) {
   st.value.fields = fields
@@ -95,21 +116,69 @@ onMounted(async () => {
               </label>
               <label class="cbx-field">
                 <span class="cbx-field__label">角色</span>
-                <select
-                  v-model.number="settings.settings.constraint[mode].role"
-                  class="cbx-input"
+                <CbxSelect
+                  v-model="settings.settings.constraint[mode].role"
+                  :options="ROLE_OPTIONS"
+                  label="角色"
                   @change="settings.touch()"
-                >
-                  <option :value="0">system</option>
-                  <option :value="1">user</option>
-                  <option :value="2">assistant</option>
-                </select>
+                />
               </label>
             </div>
             <!-- 深度可视化是「图示」不是控件：移出 <label> 后不再误触发聚焦，
                  也不再把左格撑高、让右格下半空一片 -->
             <DepthPreview class="depth-preview" :depth="settings.settings.constraint[mode].depth" />
           </div>
+        </div>
+      </section>
+
+      <!-- ②b 上下文与缓存 -->
+      <section class="cbx-card sec">
+        <h3>上下文与缓存</h3>
+        <p class="note">
+          DeepSeek、OpenAI
+          等服务会缓存提示词的<strong>前缀</strong>：和上一轮开头完全相同的部分按低价计费、响应也更快。
+          下面两项让长对话每轮的开头尽量不变。效果可以在消息下方的「缓存 %」和「预览提示词」里看到。
+        </p>
+        <div class="grid2">
+          <label class="cbx-field">
+            <span class="cbx-field__label">历史超长时截到（%）</span>
+            <input
+              v-model.number="historyTrimPct"
+              class="cbx-input"
+              type="number"
+              min="50"
+              max="100"
+              step="5"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint"
+              >超出上下文时一次截掉一大段，之后多轮开头不变、可命中缓存；100 =
+              每轮只挤掉放不下的几条（开头每轮都变）</span
+            >
+          </label>
+          <label class="cbx-field">
+            <span class="cbx-field__label">关键词世界书的插入深度</span>
+            <input
+              v-model.number="settings.settings.prompt.dynamicWIDepth"
+              class="cbx-input"
+              type="number"
+              min="0"
+              :disabled="!settings.settings.prompt.cacheFriendlyWI"
+              @change="settings.touch()"
+            />
+            <span class="cbx-field__hint">仅在开启下方开关时生效</span>
+          </label>
+        </div>
+        <div class="switchrow">
+          <label class="cbx-switch swopt">
+            <input
+              v-model="settings.settings.prompt.cacheFriendlyWI"
+              type="checkbox"
+              @change="settings.touch()"
+            />
+            <span class="cbx-switch__track" />
+            <span>缓存友好布局：关键词触发的世界书放到靠后位置（常驻条目不动）</span>
+          </label>
         </div>
       </section>
 
@@ -177,15 +246,12 @@ onMounted(async () => {
           </label>
           <label class="cbx-field">
             <span class="cbx-field__label">插入策略</span>
-            <select
-              v-model.number="wi.world_info_character_strategy"
-              class="cbx-input"
+            <CbxSelect
+              v-model="wi.world_info_character_strategy"
+              :options="WI_STRATEGY_OPTIONS"
+              label="插入策略"
               @change="settings.touch()"
-            >
-              <option :value="0">均匀混排</option>
-              <option :value="1">角色书优先</option>
-              <option :value="2">全局书优先</option>
-            </select>
+            />
           </label>
           <label class="cbx-field">
             <span class="cbx-field__label">最少激活条数（0 = 不强制）</span>
@@ -431,7 +497,7 @@ onMounted(async () => {
               {{ USER_MACRO }}
               和每个角色各一份；「仅角色」「仅用户」只给对应的一方。每份快照里用户和每个角色都必定有记录，
               AI 漏写的人会沿用上一份。列表字段输出为字符串数组，提示里可用
-              {{ USER_MACRO }}。角色卡与群聊的「状态」页签可以单独覆盖这里的字段。
+              {{ USER_MACRO }}。角色卡与演绎的「状态」页签可以单独覆盖这里的字段。
             </p>
             <StatusFieldsEditor :model-value="st.fields" @update:model-value="setStatusFields" />
           </div>

@@ -186,7 +186,7 @@ try {
   assert.ok(clearedGone, '清空消息应连带回收该会话的配图 blob，实测仍在库中')
   console.log('✓ 清空消息连带回收 3 张配图 blob')
 
-  // 多行同时展开：再开一个群聊会话，两块面板互不影响
+  // 多行同时展开：再开一个演绎会话，两块面板互不影响
   await page.evaluate(async ({ charId }) => {
     const { useGroupsStore } = await import('/src/stores/groups.ts')
     const { useChatsStore } = await import('/src/stores/chats.ts')
@@ -196,7 +196,7 @@ try {
     const group = groups.items[0]
     const meta = await chats.createGroup(group.id, group.name)
     await chats.open(meta.id)
-    await chats.appendUser('群聊消息')
+    await chats.appendUser('演绎消息')
   }, { charId: setup.charId })
   await page.goto(`${origin}data`)
   await page.locator('.tbl__row', { hasText: '雨夜书店' }).click()
@@ -311,14 +311,14 @@ try {
   assert.equal(orphanGone, false)
   console.log('✓ 图片表：引用标注、清理未引用（孤儿已删）')
 
-  // 删除角色 → 级联删它的单聊会话；群聊属于群组，只移除成员不删会话
+  // 删除角色 → 级联删它的单聊会话；演绎属于群组，只移除成员不删会话
   await sb.getByRole('tab', { name: '角色', exact: true }).click()
   await sb.locator('tr', { hasText: '时雨' }).getByRole('button', { name: '删除', exact: true }).click()
   await page.getByRole('contentinfo').getByRole('button', { name: '删除', exact: true }).click()
   await expect(sb.locator('tbody tr', { hasText: '时雨' })).toHaveCount(0)
   await expect(page.locator('.tbl__row', { hasText: '雨夜书店' })).toHaveCount(0)
   await expect(page.locator('.tbl__row', { hasText: '双人书店' })).toHaveCount(1)
-  console.log('✓ 删除角色级联删除其单聊会话（群聊会话保留，会话区同步刷新）')
+  console.log('✓ 删除角色级联删除其单聊会话（演绎会话保留，会话区同步刷新）')
 
   // 窄屏：展开面板与表格不横向溢出
   await page.setViewportSize({ width: 375, height: 812 })

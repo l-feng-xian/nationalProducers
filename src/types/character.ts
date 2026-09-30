@@ -6,6 +6,7 @@
  */
 
 import type { CharacterStatusConfig } from './status'
+import type { FlowConfig } from './flow'
 
 export interface DepthPrompt {
   prompt: string
@@ -29,6 +30,8 @@ export interface CharacterExtensions {
     worldBookNames?: string[]
     /** 角色状态的字段覆盖与初始状态，见 types/status.ts */
     status?: CharacterStatusConfig
+    /** 流程控制规则，见 types/flow.ts */
+    flow?: FlowConfig
   }
   [k: string]: unknown
 }
@@ -100,6 +103,10 @@ export interface Character extends CharacterV1Mirror {
   depthBlobId?: string
   /** 角色世界书。ST 只有单本 world，这里扩展成多本 */
   worldBookIds: string[]
+  /** Optional primary world book; when set it replaces global lore for this character. */
+  worldBookId?: string
+  /** Stable identifier for bundled starter content. */
+  templateId?: string
   fav: boolean
   /** IndexedDB 不索引 boolean，故冗余成 0|1 供 by_fav 索引使用 */
   favIdx: 0 | 1
@@ -150,7 +157,7 @@ export function emptyCharacter(id: string, name = '新角色'): Character {
 }
 
 /**
- * 开场白池。对齐 ST 群聊规则：空串过滤后均匀随机。
+ * 开场白池。对齐 ST 演绎规则：空串过滤后均匀随机。
  * 需求 2 的「多条开场白，新对话随机选取插入」即取自此池。
  */
 export function greetingPool(c: Character): string[] {

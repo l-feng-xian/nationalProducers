@@ -1,5 +1,5 @@
 /**
- * 群聊的角色卡注入。对齐 SillyTavern group-chats.js getGroupCharacterCardsLazy。
+ * 演绎的角色卡注入。对齐 SillyTavern group-chats.js getGroupCharacterCardsLazy。
  *
  * SWAP(0)             只用当前发言者的卡（默认，最省 token）
  * APPEND(1)           拼接所有**未静音**成员的卡

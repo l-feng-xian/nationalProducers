@@ -1,5 +1,5 @@
 /**
- * 群聊发言者选择。对齐 SillyTavern group-chats.js 的四种策略。
+ * 演绎发言者选择。对齐 SillyTavern group-chats.js 的四种策略。
  *
  * 纯函数：把 members / chat / characters 都作为参数传入，
  * 不像 ST 那样读全局 this_chid（那正是「生成之外 {{char}} 为空」那类坑的来源）。

@@ -98,7 +98,7 @@ function openBackup() {
 const STORE_LABEL: Record<string, string> = {
   characters: '角色',
   worldbooks: '世界书',
-  groups: '群聊',
+  groups: '演绎',
   chats: '会话',
   messages: '消息',
   blobs: '图片',
@@ -261,7 +261,7 @@ async function doImport(e: Event) {
         <section class="cbx-card sec">
           <h3>其他数据</h3>
           <p class="note">
-            角色、群聊、世界书、图片与密钥的逐行浏览。删除会走各表的级联清理
+            角色、演绎、世界书、图片与密钥的逐行浏览。删除会走各表的级联清理
             （删角色会连同它的会话与消息），只浏览与删除，不提供行内编辑。
           </p>
           <StoreBrowser @changed="refresh" />

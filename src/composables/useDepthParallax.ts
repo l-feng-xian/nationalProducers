@@ -60,7 +60,7 @@ export function useDepthParallax() {
   }
 
   /** 挂到画框上。失败静默返回 false（视差是纯装饰），画框里仍是静态 <img> */
-  /** aspect = 画框宽高比：角色卡 2:3（默认），群聊封面横版 3:2 */
+  /** aspect = 画框宽高比：角色卡 2:3（默认），演绎封面横版 3:2 */
   async function activate(
     el: HTMLElement,
     avatarBlobId?: string,

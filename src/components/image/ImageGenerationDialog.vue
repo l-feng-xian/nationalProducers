@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, ImagePlus, Minus, X, ZoomIn } from '@/compon
 import AppIcon from '@/components/icons/AppIcon.vue'
 import { useBackClose } from '@/composables/useBackClose'
 import CbxDialogClose from '@/components/ui/CbxDialogClose.vue'
+import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import { blobsRepo } from '@/db/repositories'
@@ -20,7 +21,7 @@ const props = defineProps<{
   initialPrompt?: string
   applyLabel: string
   apply: (image: GeneratedImage) => Promise<void>
-  /** 可选参考图池：角色 / 成员封面、群聊封面、本会话历史配图 */
+  /** 可选参考图池：角色 / 成员封面、演绎封面、本会话历史配图 */
   candidates?: ImageRefCandidate[]
   /** 默认选中的候选 id，顺序即参考图顺序 */
   defaultSelected?: string[]
@@ -33,7 +34,7 @@ const props = defineProps<{
   buildPrompt?: (refs: ImageRefCandidate[]) => string
   /** 提供时：用已配置的 LLM 生成画面提示词。打开即自动跑一次，也可点按钮重生成。 */
   generatePrompt?: (signal: AbortSignal, refs: ImageRefCandidate[]) => Promise<string>
-  /** 覆盖服务默认尺寸（群聊封面要横版）；ComfyUI 忽略 */
+  /** 覆盖服务默认尺寸（演绎封面要横版）；ComfyUI 忽略 */
   size?: string
   /**
    * 允许最小化：生成期间收成一个小进度条，不挡着继续聊天。
@@ -47,6 +48,12 @@ const props = defineProps<{
 const emit = defineEmits<{ close: []; 'update:minimized': [value: boolean] }>()
 const settings = useSettingsStore()
 const dialog = ref<HTMLDialogElement | null>(null)
+const serviceOptions = computed(() =>
+  settings.settings.imageModelServices.map((item) => ({
+    value: item.id,
+    label: `${item.name} · ${item.model}`,
+  })),
+)
 const serviceId = ref(
   settings.activeImageService?.id ?? settings.settings.imageModelServices[0]?.id ?? '',
 )
@@ -79,7 +86,7 @@ const groups = computed(() =>
   (
     [
       ['character', '角色封面'],
-      ['group', '群聊封面'],
+      ['group', '演绎封面'],
       ['history', '历史配图'],
     ] as const
   )
@@ -95,6 +102,10 @@ function toggleRef(c: ImageRefCandidate) {
   if (isSelected(c)) selectedIds.value = selectedIds.value.filter((id) => id !== c.id)
   else if (selectedIds.value.length < maxRefs.value)
     selectedIds.value = [...selectedIds.value, c.id]
+}
+function clearRefs() {
+  selectedIds.value = []
+  refNotice.value = ''
 }
 function moveRef(index: number, delta: -1 | 1) {
   const j = index + delta
@@ -366,20 +377,12 @@ async function apply() {
           </p>
           <label v-else class="cbx-field">
             <span class="cbx-field__label">文生图配置</span>
-            <select
+            <CbxSelect
               v-model="serviceId"
-              class="cbx-input"
-              aria-label="文生图配置"
+              :options="serviceOptions"
+              label="文生图配置"
               :disabled="busy || saving"
-            >
-              <option
-                v-for="item in settings.settings.imageModelServices"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ item.name }} · {{ item.model }}
-              </option>
-            </select>
+            />
             <span class="cbx-field__hint"
               >{{ service?.size || '模型默认尺寸' }} ·
               {{ service?.quality || '模型默认画质' }}</span
@@ -390,9 +393,29 @@ async function apply() {
             class="reference-section"
             aria-label="参考图"
           >
-            <span class="cbx-field__label"
-              >参考图 <span class="ref-count">{{ selected.length }} / {{ maxRefs }}</span></span
-            >
+            <div class="reference-head">
+              <span class="cbx-field__label"
+                >参考图 <span class="ref-count">{{ selected.length }} / {{ maxRefs }}</span></span
+              >
+              <div class="reference-head__tools">
+                <span class="reference-head__hint">
+                  {{
+                    selected.length
+                      ? '点击图片可预览，使用箭头调整顺序'
+                      : '先选择一张图片锁定人物或场景'
+                  }}
+                </span>
+                <button
+                  v-if="selected.length"
+                  type="button"
+                  class="ref-clear"
+                  :disabled="busy"
+                  @click="clearRefs"
+                >
+                  清空
+                </button>
+              </div>
+            </div>
             <ol v-if="selected.length" class="ref-list">
               <li v-for="(c, index) in selected" :key="c.id" class="ref-card">
                 <button
@@ -448,7 +471,7 @@ async function apply() {
                 :aria-expanded="pickerOpen"
                 @click="togglePicker"
               >
-                添加 / 更换参考图<span class="ref-hint">封面、群聊封面与本会话的历史配图</span>
+                添加 / 更换参考图<span class="ref-hint">封面、演绎封面与本会话的历史配图</span>
               </button>
               <div v-if="pickerOpen" class="cbx-collapse__body">
                 <div v-for="g in groups" :key="g.kind" class="ref-group">
@@ -472,8 +495,8 @@ async function apply() {
                         <span class="ref-cand__badge" aria-hidden="true">{{
                           isSelected(c) ? selectedIds.indexOf(c.id) + 1 : '+'
                         }}</span>
+                        <span class="ref-cand__cap">{{ c.label }}</span>
                       </button>
-                      <span class="ref-cand__cap">{{ c.label }}</span>
                       <button
                         v-if="c.blobId"
                         type="button"
@@ -692,6 +715,44 @@ async function apply() {
 .reference-section {
   margin-bottom: 20px;
 }
+.reference-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+.reference-head__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.reference-head__hint {
+  color: var(--cbx-text-tertiary);
+  font-size: var(--cbx-fs-xs);
+  text-align: right;
+}
+.ref-clear {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 2px 10px;
+  border: 1px solid var(--cbx-border);
+  border-radius: var(--cbx-radius-pill);
+  background: var(--cbx-bg);
+  color: var(--cbx-text-secondary);
+  font: inherit;
+  font-size: var(--cbx-fs-xs);
+  cursor: pointer;
+}
+.ref-clear:hover {
+  border-color: var(--cbx-brand);
+  color: var(--cbx-brand);
+}
+.ref-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .ref-count {
   margin-left: 4px;
   font-weight: var(--cbx-fw-normal);
@@ -700,16 +761,20 @@ async function apply() {
 .ref-list {
   display: flex;
   gap: 12px;
-  margin: 8px 0;
-  padding: 0 0 4px;
+  margin: 8px 0 12px;
+  padding: 0 2px 6px;
   list-style: none;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
 }
 .ref-card {
-  flex: 0 0 96px;
+  flex: 0 0 108px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  scroll-snap-align: start;
 }
 .ref-thumb {
   padding: 0;
@@ -718,6 +783,15 @@ async function apply() {
   background: var(--cbx-bg-secondary);
   cursor: zoom-in;
   overflow: hidden;
+  transition:
+    border-color var(--cbx-transition),
+    box-shadow var(--cbx-transition);
+}
+.ref-thumb:hover,
+.ref-thumb:focus-visible {
+  border-color: var(--cbx-brand);
+  box-shadow: 0 0 0 3px var(--cbx-brand-subtle);
+  outline: none;
 }
 .ref-thumb:disabled {
   cursor: default;
@@ -745,8 +819,8 @@ async function apply() {
   justify-content: space-between;
 }
 .ref-op {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border: 1px solid var(--cbx-border);
@@ -760,7 +834,10 @@ async function apply() {
   cursor: default;
 }
 .ref-picker {
-  margin: 8px 0;
+  margin: 10px 0 12px;
+}
+.ref-picker .cbx-collapse__head {
+  min-height: 48px;
 }
 .ref-hint {
   margin-left: auto;
@@ -779,7 +856,7 @@ async function apply() {
 }
 .ref-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
   gap: 10px;
 }
 .ref-cand {
@@ -788,18 +865,43 @@ async function apply() {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--cbx-radius-md);
+  transition:
+    background var(--cbx-transition),
+    border-color var(--cbx-transition);
+}
+.ref-cand:hover {
+  background: var(--cbx-bg-hover);
+}
+.ref-cand--on {
+  border-color: var(--cbx-brand-light-hover);
+  background: var(--cbx-brand-subtle);
 }
 .ref-cand__pick {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   padding: 0;
   border: 2px solid transparent;
   border-radius: var(--cbx-radius-md);
   background: none;
   cursor: pointer;
   overflow: hidden;
+  transition:
+    box-shadow var(--cbx-transition),
+    border-color var(--cbx-transition);
 }
 .ref-cand--on .ref-cand__pick {
   border-color: var(--cbx-brand);
+  box-shadow: 0 0 0 2px var(--cbx-brand-subtle);
+}
+.ref-cand__pick:hover,
+.ref-cand__pick:focus-visible {
+  border-color: var(--cbx-brand);
+  outline: none;
 }
 .ref-cand__pick:disabled {
   opacity: 0.45;
@@ -825,6 +927,9 @@ async function apply() {
   color: var(--cbx-text-on-brand);
 }
 .ref-cand__cap {
+  display: block;
+  min-height: 2.8em;
+  padding: 0 2px;
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-secondary);
   overflow-wrap: anywhere;
@@ -853,9 +958,14 @@ async function apply() {
   cursor: zoom-in;
 }
 @media (max-width: 767px) {
-  /* 三个 36px 操作钮要放得下：卡片放宽到 3×36 + 间隙 */
+  .reference-head {
+    align-items: flex-start;
+  }
+  .reference-head__hint {
+    display: none;
+  }
   .ref-card {
-    flex-basis: 116px;
+    flex-basis: 112px;
   }
   .ref-op,
   .ref-cand__zoom {
@@ -863,7 +973,11 @@ async function apply() {
     height: 36px;
   }
   .ref-grid {
-    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .ref-cand {
+    padding: 3px;
   }
 }
 .preview {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 角色卡 / 群聊的「状态」页签：专属字段模板 + 初始状态。两处共用。
+ * 角色卡 / 演绎的「状态」页签：专属字段模板 + 初始状态。两处共用。
  * 整份配置通过 update:config 交回调用方，由调用方挂到 extensions.np.status / group.status 上并落盘。
  */
 import { computed } from 'vue'

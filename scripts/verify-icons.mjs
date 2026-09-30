@@ -19,18 +19,10 @@ try {
   page.on('pageerror', (e) => errors.push(e.message))
   await mkdir('test-results/icons', { recursive: true })
 
-  for (const route of [
-    'chat',
-    'characters',
-    'groups',
-    'worlds',
-    'game-worlds',
-    'models',
-    'data',
-    'settings',
-  ]) {
+  for (const route of ['chat', 'characters', 'groups', 'worlds', 'models', 'data', 'settings']) {
     await page.goto(`${origin}${route}`)
-    await expect(page.locator('.foot .cbx-icon')).toHaveCount(7)
+    // 侧栏导航 6 项：角色 / 演绎 / 世界书 / 模型管理 / 数据管理 / 设置
+    await expect(page.locator('.foot .cbx-icon')).toHaveCount(6)
     assert.equal(
       await page.locator('.foot .cbx-icon').evaluateAll((icons) =>
         icons.every((icon) => {
@@ -50,7 +42,9 @@ try {
     )
   }
   await page.goto(`${origin}characters`)
-  await expect(page.locator('.cbx-empty__icon [data-icon="Characters"]')).toBeVisible()
+  // Starter templates populate the first run, so the empty state is optional.
+  // The navigation icon is always present and still exercises the Characters SVG.
+  await expect(page.locator('[data-icon="Characters"]').first()).toBeVisible()
   await page.waitForTimeout(500)
   await page.screenshot({ path: 'test-results/icons/characters-light.png' })
 
@@ -235,6 +229,8 @@ try {
   })
   mobile.on('pageerror', (e) => errors.push(e.message))
   await mobile.goto(`${origin}characters`)
+  // Vue DevTools 悬浮按钮压在左下角，会挡住抽屉里的「设置」
+  await mobile.addStyleTag({ content: '#__vue-devtools-container__{display:none!important}' })
   const menu = mobile.getByRole('button', { name: '菜单', exact: true })
   await expect(menu).toBeVisible()
   await menu.tap()
@@ -242,8 +238,12 @@ try {
   await expect(mobile.locator('.sidebar')).toHaveClass(/sidebar--open/)
   await mobile.waitForTimeout(500)
   await mobile.screenshot({ path: 'test-results/icons/mobile-drawer.png' })
-  await mobile.locator('.foot a[href$="/models"]').tap()
-  await expect(menu).toHaveAttribute('aria-expanded', 'false')
+  // 手机上角色 / 演绎 / 世界书 / 模型 / 数据都在底部标签栏，抽屉里只剩「设置」
+  await expect(mobile.locator('.foot .cbx-nav-item')).toHaveCount(1)
+  await expect(mobile.locator('.tabbar .tab')).toHaveCount(5)
+  await mobile.locator('.foot a[href$="/settings"]').tap()
+  await expect(mobile).toHaveURL(/\/settings$/)
+  await expect(mobile.locator('.sidebar')).not.toHaveClass(/sidebar--open/)
   assert.equal(
     await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     true,

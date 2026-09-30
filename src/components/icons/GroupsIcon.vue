@@ -3,5 +3,6 @@ import AppIcon from './AppIcon.vue'
 </script>
 
 <template>
-  <AppIcon name="UsersRound" tone="brand" />
+  <!-- Performance uses a film clapperboard silhouette. -->
+  <AppIcon name="Drama" tone="brand" />
 </template>

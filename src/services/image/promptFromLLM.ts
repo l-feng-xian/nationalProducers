@@ -6,7 +6,7 @@
  */
 import type { CharacterDataV2 } from '@/types/character'
 import type { ChatMessage } from '@/types/chat'
-import type { ProviderConfig } from '@/types/provider'
+import { thinkingField, type ProviderConfig } from '@/types/provider'
 import type { ProviderSettings } from '@/types/settings'
 import { chatOnce } from '@/services/provider/openaiCompatible'
 import { stripThink } from '@/services/memory/stateCard'
@@ -20,6 +20,8 @@ import {
   type PromptRef,
 } from './prompts'
 
+const IMAGE_PROMPT_CONTEXT_ROUNDS = 10
+
 const CHARACTER_SYSTEM = `你是文生图提示词专家。根据下面的角色资料，写一段用于「文生图」的画面提示词。
 要求：聚焦人物外貌、发型、五官、体态、服饰与整体气质，并补上呼应设定的场景与光线；具体、可视化、可直接绘制。
 只输出提示词本身，不要解释、标题、引号或 Markdown；画面里不要出现文字、水印、边框或聊天气泡。中文或英文均可，控制在 150 字以内。`
@@ -32,7 +34,7 @@ const DIALOGUE_SYSTEM = `你是图生图提示词专家。给你参考图说明�
 硬性要求：每个人的五官、发型、发色、瞳色、脸型与体型必须与参考图一致、保持不变；画面中只出现给定的人物，不要添加其他角色。「此前的画面」类参考图只用来延续场景、服装与画风，不要照抄其构图与动作。
 只输出提示词本身，不要解释、标题、引号或 Markdown；画面里不要出现文字、聊天气泡或水印。控制在 250 字以内。`
 
-const GROUP_COVER_SYSTEM = `你是文生图提示词专家。给你一个群聊的名字、成员参考图说明（按「参考图 1、参考图 2……」编号，与输入参考图的顺序一一对应）与成员之间的关系，写一段「横版合影封面」的画面提示词。
+const GROUP_COVER_SYSTEM = `你是文生图提示词专家。给你一个演绎的名字、成员参考图说明（按「参考图 1、参考图 2……」编号，与输入参考图的顺序一一对应）与成员之间的关系，写一段「横版合影封面」的画面提示词。
 要求：用「参考图 N 中的人物」逐一指代每位成员，所有成员同框、完整出现且清晰可辨认；五官、发型、发色、瞳色、服饰与体型必须与参考图一致；用站位、朝向、神态和互动体现他们的关系；补上呼应共同故事氛围的背景与光线，横版构图。
 只输出提示词本身，不要解释、标题、引号或 Markdown；画面里不要出现文字、水印或边框。控制在 200 字以内。`
 
@@ -42,6 +44,7 @@ function providerConfig(p: ProviderSettings, apiKey: string): ProviderConfig {
     ...(apiKey ? { apiKey } : {}),
     ...(p.proxyPrefix ? { proxyPrefix: p.proxyPrefix } : {}),
     headers: p.extraHeaders,
+    ...thinkingField(p.thinking),
   }
 }
 
@@ -118,8 +121,8 @@ export async function dialogueImagePromptViaLLM(input: {
   if (!input.provider.baseUrl || !input.provider.model) return fallback()
   // 取目标消息之前（含）的最近若干条真实对话作为上下文
   const recent = input.history
-    .filter((m) => !m.is_system && !m.exclude && m.mes.trim())
-    .slice(-8)
+    .filter((m) => m.id !== input.message.id && !m.is_system && !m.exclude && m.mes.trim())
+    .slice(-(IMAGE_PROMPT_CONTEXT_ROUNDS * 2))
     .map((m) => `${m.name}：${m.mes.trim().slice(0, 400)}`)
     .join('\n')
   // 编号与参考图发送顺序一一对应（与模板同一套 referenceLines），多人时 LLM 才能写出「参考图 2 中的……」；
@@ -144,7 +147,7 @@ export async function dialogueImagePromptViaLLM(input: {
   }
 }
 
-/** 群聊封面（横版合影）提示词。失败回退 `groupCoverPrompt` 模板。 */
+/** 演绎封面（横版合影）提示词。失败回退 `groupCoverPrompt` 模板。 */
 export async function groupCoverPromptViaLLM(input: {
   name: string
   refs: PromptRef[]
@@ -161,7 +164,7 @@ export async function groupCoverPromptViaLLM(input: {
     })
   if (!input.provider.baseUrl || !input.provider.model) return fallback()
   const user = [
-    `群聊名：${input.name}`,
+    `演绎名：${input.name}`,
     `参考图说明：\n${referenceLines(input.refs).join('\n')}`,
     input.relations?.trim() ? `人物关系：\n${input.relations.trim().slice(0, 1500)}` : '',
   ]

@@ -13,7 +13,7 @@ import type { ChatMeta, ChatMessage } from '@/types/chat'
 import type { Settings } from '@/types/settings'
 
 export const DB_NAME = 'np-chat'
-export const DB_VERSION = 7
+export const DB_VERSION = 8
 
 export interface BlobRecord {
   id: string
@@ -21,6 +21,15 @@ export interface BlobRecord {
   size: number
   data: Blob
   createdAt: number
+}
+
+export interface StarterTemplateImage {
+  id: string
+  data: Blob
+  mime: string
+  createdAt: number
+  source?: 'bundled' | 'generated'
+  bundledVersion?: number
 }
 
 export interface SecretRecord {
@@ -57,6 +66,7 @@ export interface NpDB extends DBSchema {
     indexes: { by_msgId: [string, string] }
   }
   blobs: { key: string; value: BlobRecord }
+  starter_template_images: { key: string; value: StarterTemplateImage }
   /**
    * 会话记忆的向量块。
    *
@@ -157,6 +167,9 @@ export function getDb(): Promise<IDBPDatabase<NpDB>> {
         ]) {
           if (legacyDb.objectStoreNames.contains(name)) legacyDb.deleteObjectStore(name)
         }
+      }
+      if (!db.objectStoreNames.contains('starter_template_images')) {
+        db.createObjectStore('starter_template_images', { keyPath: 'id' })
       }
     },
     blocked() {

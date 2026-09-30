@@ -37,7 +37,7 @@ const props = withDefaults(
     selectedEdgeId?: string | null
     selectedNodeId?: string | null
     /**
-     * `popover` = 画布自带就地编辑气泡（群聊沿用）；
+     * `popover` = 画布自带就地编辑气泡（演绎沿用）；
      * `none` = 只发选中事件，父级自管侧面板（无限世界用）。
      */
     editorMode?: 'popover' | 'none'

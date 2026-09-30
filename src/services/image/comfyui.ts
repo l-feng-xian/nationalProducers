@@ -225,7 +225,7 @@ function buildGraph(
   prompt: string,
   uploadedNames: string[],
   seed: number,
-  /** 期望比例 'WxH'：群聊封面给的横版，或压了参考图分辨率时第一张参考图的原比例 */
+  /** 期望比例 'WxH'：演绎封面给的横版，或压了参考图分辨率时第一张参考图的原比例 */
   size?: string,
 ): ComfyGraph {
   const resolution = Number(service.resolution) || 1024
@@ -301,7 +301,7 @@ function buildGraph(
       },
     }
   }
-  // 指定了比例（群聊封面横版）：编码器给的空 latent 是「第一张参考图的比例」（文生图时是方图），
+  // 指定了比例（演绎封面横版）：编码器给的空 latent 是「第一张参考图的比例」（文生图时是方图），
   // 用 LatentUpscale 把这块全零 latent 改到目标尺寸。它对任意通道数都适用（Qwen 2.1 是 64 通道），
   // 不会重蹈 EmptyLatentImage 4 通道不匹配、每步慢 10 倍的覆辙。
   // ⚠️ LatentUpscale 的 width/height 以「像素 / 8」换算 latent，而 Qwen 的 latent 是像素 / 16 → 传一半。
@@ -389,7 +389,7 @@ export async function generateViaComfyUI(args: {
   service: ImageModelService
   prompt: string
   references?: ImageReferenceInput[]
-  /** 期望的宽高比（如群聊封面 '1536x1024'）；只取比例，面积仍按 service.resolution */
+  /** 期望的宽高比（如演绎封面 '1536x1024'）；只取比例，面积仍按 service.resolution */
   size?: string
   signal: AbortSignal
 }): Promise<GeneratedImage> {

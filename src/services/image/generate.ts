@@ -68,7 +68,7 @@ export async function generateImage(args: {
   apiKey: string
   prompt: string
   references?: ImageReferenceInput[]
-  /** 覆盖服务的默认尺寸（群聊封面要横版）。ComfyUI 只出方图，忽略 */
+  /** 覆盖服务的默认尺寸（演绎封面要横版）。ComfyUI 只出方图，忽略 */
   size?: string
   signal: AbortSignal
 }): Promise<GeneratedImage> {

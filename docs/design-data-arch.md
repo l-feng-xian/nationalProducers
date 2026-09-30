@@ -351,7 +351,7 @@ export interface Character extends CharacterV1Mirror {
 
 export function emptyCharacter(id: string, name = '新角色'): Character { /* 见文中默认值 */ }
 
-/** 开场白池：ST 群聊规则——空串过滤后均匀随机 */
+/** 开场白池：ST 演绎规则——空串过滤后均匀随机 */
 export function greetingPool(c: Character): string[] {
   return [c.data.first_mes, ...c.data.alternate_greetings].filter((x) => !!x && x.trim())
 }
@@ -539,7 +539,7 @@ export interface PromptSettings {
   trimKeep: number
   squashSystemMessages: boolean
   newChatPrompt: string
-  newGroupChatPrompt: string      // '[开始新的群聊。成员：{{group}}]'
+  newGroupChatPrompt: string      // '[开始新的演绎。成员：{{group}}]'
   groupNudge: string              // '[只以 {{char}} 的身份写下一条回复。]'
   perMessageTokens: number        // 16
 }
@@ -1250,7 +1250,7 @@ src/
 产出：`services/worldinfo/*` 全套、`useWorldsStore`、`WorldBooksView` + `WorldBookEditView`、设置页世界书 Tab（全局设置 + `globalBookIds`）、`io/{importWorld,exportWorld}`、角色书绑定 UI。
 验收（逐项过一本自造验收书）：关键词/正则键/全词/大小写三态；4 种 `selectiveLogic`；`constant`；`probability=50` 随机性；`sticky=3` 后转 `cooldown`；`delay=5`；包含组权重分布与 `groupOverride` 必胜；递归激活 + `preventRecursion` + `excludeRecursion`；预算调至 1% 时只有高 `order` 进入而 `ignoreBudget` 仍进入；8 个 position 各一条在"查看提示词"里落点正确；定时状态刷新后剩余轮数正确；**dry-run 不推进 sticky/cooldown**；导入真实社区世界书字段一致、往返无损。
 
-### 阶段 4 — 1vN 群聊 + 关系图谱（需求 1 另一半 + 需求 3）｜ 与阶段 3 可并行
+### 阶段 4 — 1vN 演绎 + 关系图谱（需求 1 另一半 + 需求 3）｜ 与阶段 3 可并行
 产出：`useGroupsStore`、`GroupsView`、`GroupEditView`、`components/group/RelationGraph.vue`（SVG 画布、Pointer 拖拽、有向箭头、A→B 与 B→A 双边）、`services/group/{activation,cards,greeting}`、`services/prompt/relations.ts`、发言人队列编排、group nudge。
 验收：3 人群，LIST → 每轮 3 人依次发言且 `original_avatar` 正确；NATURAL → 提到名字的必出场；POOLED → 每轮 1 人轮换；MANUAL → 用户发言无自动回复，点「让 TA 说」才生成。新群首次打开每人各随机一条开场白。关系图谱：拖动位置持久化；建 A→B「妹妹」与 B→A「哥哥」两条不同边；"查看提示词"能看到渲染出的关系文本。手机能拖节点、能点边编辑。
 

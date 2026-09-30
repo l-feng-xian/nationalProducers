@@ -3,6 +3,9 @@ import { ref } from 'vue'
 import { worldbooksRepo } from '@/db/repositories'
 import type { WorldBook, WorldInfoEntry } from '@/types/worldinfo'
 import type { LoreSources } from '@/services/worldinfo/sources'
+import { useCharactersStore } from './characters'
+import { useGroupsStore } from './groups'
+import { useSettingsStore } from './settings'
 
 export const useWorldsStore = defineStore('worlds', () => {
   const items = ref<WorldBook[]>([])
@@ -58,6 +61,15 @@ export const useWorldsStore = defineStore('worlds', () => {
   async function remove(id: string): Promise<void> {
     await worldbooksRepo.remove(id)
     items.value = items.value.filter((b) => b.id !== id)
+    const settings = useSettingsStore().settings
+    settings.worldInfo.globalBookIds = settings.worldInfo.globalBookIds.filter((bookId) => bookId !== id)
+    const chars = useCharactersStore()
+    for (const char of chars.items) {
+      char.worldBookIds = char.worldBookIds.filter((bookId) => bookId !== id)
+      if (char.worldBookId === id) delete char.worldBookId
+    }
+    const groups = useGroupsStore()
+    for (const group of groups.items) if (group.worldBookId === id) delete group.worldBookId
   }
 
   /**
