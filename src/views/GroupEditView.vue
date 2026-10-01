@@ -8,7 +8,7 @@ import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import RelationGraph from '@/components/group/RelationGraph.vue'
 import StatusConfigEditor from '@/components/settings/StatusConfigEditor.vue'
 import ImageGenerationDialog from '@/components/image/ImageGenerationDialog.vue'
-import { ImagePlus } from '@/components/icons'
+import { ImagePlus, Trash2 } from '@/components/icons'
 import { useCoverImage } from '@/composables/useCoverImage'
 import { useImagePreview } from '@/composables/useImagePreview'
 import { parallaxMode, useDepthParallax } from '@/composables/useDepthParallax'
@@ -424,6 +424,10 @@ async function removeGroup() {
 <template>
   <AppTopbar :title="model?.name || '演绎'">
     <template #actions>
+      <button class="cbx-btn cbx-btn--ghost del" @click="removeGroup">
+        <Trash2 :size="16" />
+        删除演绎
+      </button>
       <button class="cbx-btn cbx-btn--ghost" @click="router.push('/groups')">返回</button>
       <button class="cbx-btn cbx-btn--soft" @click="startChat">开始演绎</button>
       <button class="cbx-btn cbx-btn--primary" @click="save">保存</button>
@@ -798,9 +802,6 @@ async function removeGroup() {
           <span class="cbx-field__label">主世界书</span>
           <CbxSelect v-model="selectedWorldBook" :options="worldBookOptions" label="主世界书" @change="save" />
         </label>
-        <div class="danger">
-          <button class="cbx-btn cbx-btn--ghost del" @click="removeGroup">删除演绎</button>
-        </div>
       </section>
 
       <!-- 角色状态 -->
@@ -1101,11 +1102,6 @@ async function removeGroup() {
   font-size: var(--cbx-fs-xs);
   color: var(--cbx-text-tertiary);
   font-style: normal;
-}
-.danger {
-  margin-top: var(--cbx-space-6);
-  padding-top: var(--cbx-space-4);
-  border-top: 1px solid var(--cbx-border);
 }
 .del {
   color: var(--cbx-error);

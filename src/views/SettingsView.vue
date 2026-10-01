@@ -17,14 +17,14 @@ const settings = useSettingsStore()
 const androidQr = ref<HTMLCanvasElement | null>(null)
 const windowsQr = ref<HTMLCanvasElement | null>(null)
 const appDownloads = computed(() => {
-  const origin = typeof window === 'undefined' ? '' : window.location.origin
+  const githubReleaseBase = 'https://github.com/l-feng-xian/nationalProducers/releases/download/v1.0.0'
   return [
     {
       key: 'android',
       name: 'Android 应用',
       description: '适用于 Android 手机和平板',
       file: 'app-nationalProducers.apk',
-      url: `${origin}/app/app-nationalProducers.apk`,
+      url: `${githubReleaseBase}/app-nationalProducers.apk`,
       qr: androidQr,
     },
     {
@@ -32,7 +32,7 @@ const appDownloads = computed(() => {
       name: 'Windows 应用',
       description: 'Windows 安装程序（EXE）',
       file: 'exe-nationalproducers.exe',
-      url: `${origin}/app/exe-nationalproducers.exe`,
+      url: `${githubReleaseBase}/exe-nationalproducers.exe`,
       qr: windowsQr,
     },
   ] as const

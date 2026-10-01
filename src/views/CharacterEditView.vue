@@ -3,7 +3,7 @@ import AppIcon from '@/components/icons/AppIcon.vue'
 import CbxSelect from '@/components/ui/CbxSelect.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ImagePlus, Sparkles, Undo2 } from '@/components/icons'
+import { ImagePlus, Sparkles, Trash2, Undo2 } from '@/components/icons'
 import AppTopbar from '@/components/layout/AppTopbar.vue'
 import CbxAvatar from '@/components/ui/CbxAvatar.vue'
 import GreetingsEditor from '@/components/character/GreetingsEditor.vue'
@@ -403,6 +403,10 @@ async function remove() {
 <template>
   <AppTopbar :title="title">
     <template #actions>
+      <button class="cbx-btn cbx-btn--ghost del" @click="remove">
+        <Trash2 :size="16" />
+        删除角色
+      </button>
       <button class="cbx-btn cbx-btn--ghost" @click="back">返回</button>
       <button class="cbx-btn cbx-btn--soft" @click="startChat">开始聊天</button>
       <button class="cbx-btn cbx-btn--primary" :disabled="saving" @click="save">
@@ -674,7 +678,6 @@ async function remove() {
           <button class="cbx-btn cbx-btn--ghost" :disabled="exporting" @click="exportJson">
             导出 JSON
           </button>
-          <button class="cbx-btn cbx-btn--ghost del" @click="remove">删除角色</button>
         </div>
       </section>
 
@@ -887,9 +890,6 @@ img.frame__img {
   /* 三个按钮在 375px 下并排会被压成两三个字，各占一整行更好点 */
   .ops .cbx-btn {
     width: 100%;
-  }
-  .ops .del {
-    margin-left: 0;
   }
   .grid2 {
     grid-template-columns: 1fr;

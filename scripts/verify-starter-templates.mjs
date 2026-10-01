@@ -36,7 +36,7 @@ try {
     const req = tx.objectStore('settings').get('app')
     const settings = await new Promise((resolve) => { req.onsuccess = () => resolve(req.result) })
     db.close()
-    return settings?.starterTemplatesVersion === 1
+    return settings?.starterTemplatesVersion === 4
   })
   await expect.poll(async () => (await inspect()).starterTemplateImageCount, { timeout: 60000 }).toBe(12)
   let data = await inspect()
@@ -62,7 +62,46 @@ try {
   await expect.poll(async () => (await inspect()).groups.find((group) => group.id === groupId)?.worldBookId).toBe(otherBook)
 
   assert.equal(data.books.length, 3)
-  assert.equal(data.settings[0].starterTemplatesVersion, 1)
+  assert.equal(data.settings[0].starterTemplatesVersion, 4)
+  for (const character of data.characters) {
+    const blocks = character.data.mes_example.split(/<START>/i).slice(1).filter((block) => block.trim())
+    assert.ok(blocks.length >= 2, `${character.data.name} should have at least two example blocks`)
+    for (const block of blocks) {
+      const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      assert.ok(lines.every((line) => /^\{\{(?:user|char)\}\}:\s*/.test(line)), `${character.data.name} has a non-canonical example line`)
+    }
+  }
+  const migrationTargetId = data.characters.find((character) => character.id === 'starter-character-xianxia-outer-0').id
+  await page.evaluate(async (id) => {
+    const open = indexedDB.open('np-chat')
+    const db = await new Promise((resolve) => { open.onsuccess = () => resolve(open.result) })
+    const tx = db.transaction(['characters', 'settings'], 'readwrite')
+    const characterStore = tx.objectStore('characters')
+    const character = await new Promise((resolve) => { const req = characterStore.get(id); req.onsuccess = () => resolve(req.result) })
+    character.data.mes_example = '<START>\\n{{user}}：你还会回来吗？\\n顾临川：看退路。'
+    character.updatedAt = Date.now()
+    characterStore.put(character)
+    const settingsStore = tx.objectStore('settings')
+    const settings = await new Promise((resolve) => { const req = settingsStore.get('app'); req.onsuccess = () => resolve(req.result) })
+    settings.starterTemplatesVersion = 3
+    settingsStore.put(settings)
+    await new Promise((resolve) => { tx.oncomplete = resolve })
+    db.close()
+  }, migrationTargetId)
+  await page.reload()
+  await page.waitForFunction(async () => {
+    const open = indexedDB.open('np-chat')
+    const db = await new Promise((resolve) => { open.onsuccess = () => resolve(open.result) })
+    const tx = db.transaction('settings')
+    const req = tx.objectStore('settings').get('app')
+    const settings = await new Promise((resolve) => { req.onsuccess = () => resolve(req.result) })
+    db.close()
+    return settings?.starterTemplatesVersion === 4
+  })
+  data = await inspect()
+  const migrated = data.characters.find((character) => character.id === migrationTargetId)
+  assert.ok(migrated.data.mes_example.includes('{{char}}:'))
+  assert.ok(!migrated.data.mes_example.includes('：'))
   for (const group of data.groups) {
     assert.equal(group.members.length, 3)
     assert.ok(group.relations.length >= 6)
